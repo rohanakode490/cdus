@@ -1,0 +1,21 @@
+[package]
+name = "cdus-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cdus-common = { path = "../cdus-common" }
+flume = "0.11"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+interprocess = "1.2"
+clap = { version = "4.4", features = ["derive"] }
+directories = "5.0"
+rusqlite = { version = "0.31", features = ["bundled"] }
+blake3 = "1.5"
+arboard = "3.4"
+
+[dev-dependencies]
+tempfile = "3.10"
