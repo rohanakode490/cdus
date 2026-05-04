@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CDUS - Cross-Device Unified System</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <div class="sidebar-header">
+          <h1>CDUS</h1>
+        </div>
+        <nav>
+          <button class="nav-item active" data-view="devices">Devices</button>
+          <button class="nav-item" data-view="clipboard">Clipboard</button>
+          <button class="nav-item" data-view="files">Files</button>
+          <button class="nav-item" data-view="settings">Settings</button>
+        </nav>
+      </aside>
+
+      <main id="content">
+        <div id="view-devices" class="view active">
+          <h2>Devices</h2>
+          <div class="empty-state-container">
+            <p class="empty-state">No devices found. Add your first device to get started.</p>
+            <button id="add-device-btn" class="primary-btn">Add Device</button>
+          </div>
+        </div>
+        <div id="view-clipboard" class="view">
+          <h2>Clipboard</h2>
+          <div id="clipboard-list"></div>
+          <p class="empty-state hidden" id="clipboard-empty">Clipboard history is empty.</p>
+        </div>
+        <div id="view-files" class="view">
+          <h2>Files</h2>
+          <div class="empty-state-container">
+            <p class="empty-state">No recent file transfers. Start by sending a file to another device.</p>
+            <button id="send-file-btn" class="primary-btn">Send File</button>
+          </div>
+        </div>
+        <div id="view-settings" class="view">
+          <h2>Settings</h2>
+          <div class="settings-container">
+            <div class="settings-group">
+              <label for="device-name">Device Name</label>
+              <input type="text" id="device-name" placeholder="Rahul's Laptop" value="Rahul's Laptop" />
+              <p class="setting-hint">How this device appears to others.</p>
+            </div>
+            
+            <div class="settings-group">
+              <div class="setting-row">
+                <label for="sync-enabled">Enable Sync</label>
+                <input type="checkbox" id="sync-enabled" checked />
+              </div>
+              <p class="setting-hint">Automatically sync clipboard and files.</p>
+            </div>
+
+            <div class="settings-group">
+              <label for="clipboard-limit">Clipboard History Limit</label>
+              <div class="slider-container">
+                <input type="range" id="clipboard-limit" min="10" max="200" value="50" />
+                <span id="limit-value">50 items</span>
+              </div>
+              <p class="setting-hint">Number of items to keep in history.</p>
+            </div>
+
+            <div class="settings-group">
+              <button id="ping-agent-btn" class="secondary-btn">Ping Agent Daemon</button>
+              <p id="ping-status" class="setting-hint"></p>
+            </div>
+
+            <button id="save-settings-btn" class="primary-btn">Save Settings</button>
+          </div>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

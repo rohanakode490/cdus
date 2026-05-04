@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "src-tauri",
+    "crates/cdus-agent",
+    "crates/cdus-common"
+]
+resolver = "2"
