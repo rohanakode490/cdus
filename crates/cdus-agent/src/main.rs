@@ -113,6 +113,30 @@ fn main() {
                                     }
                                 }
                             }
+                            IpcMessage::GetState { key } => {
+                                match store.get_state(&key) {
+                                    Ok(val) => {
+                                        let resp_bytes = serde_json::to_vec(&IpcMessage::StateResponse(val)).unwrap();
+                                        let _ = stream.write_all(&resp_bytes);
+                                    }
+                                    Err(e) => {
+                                        let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Error fetching state: {}", e))).unwrap();
+                                        let _ = stream.write_all(&resp_bytes);
+                                    }
+                                }
+                            }
+                            IpcMessage::SetState { key, value } => {
+                                match store.set_state(&key, &value) {
+                                    Ok(_) => {
+                                        let resp_bytes = serde_json::to_vec(&IpcMessage::Log("State set successfully".to_string())).unwrap();
+                                        let _ = stream.write_all(&resp_bytes);
+                                    }
+                                    Err(e) => {
+                                        let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Error setting state: {}", e))).unwrap();
+                                        let _ = stream.write_all(&resp_bytes);
+                                    }
+                                }
+                            }
                             _ => {
                                 let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Message received".to_string())).unwrap();
                                 let _ = stream.write_all(&resp_bytes);

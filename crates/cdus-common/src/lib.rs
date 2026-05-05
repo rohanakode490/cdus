@@ -16,6 +16,9 @@ pub enum IpcMessage {
     SetClipboard(String),
     GetHistory { limit: u32 },
     HistoryResponse(Vec<ClipboardEvent>),
+    GetState { key: String },
+    SetState { key: String, value: String },
+    StateResponse(Option<String>),
 }
 
 #[cfg(test)]

@@ -97,6 +97,24 @@ impl Store {
         }
         Ok(events)
     }
+
+    pub fn set_state(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.state_conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO state (key, value) VALUES (?1, ?2)",
+            (key, value),
+        )?;
+        Ok(())
+    }
+
+    pub fn get_state(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.state_conn.lock().unwrap();
+        conn.query_row(
+            "SELECT value FROM state WHERE key = ?",
+            [key],
+            |row| row.get(0),
+        ).optional()
+    }
 }
 
 #[cfg(test)]

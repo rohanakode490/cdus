@@ -44,7 +44,30 @@ async function renderClipboard() {
   }
 }
 
+async function loadSettings() {
+  const deviceNameInput = document.querySelector("#device-name") as HTMLInputElement;
+  const syncEnabledInput = document.querySelector("#sync-enabled") as HTMLInputElement;
+  const limitSlider = document.querySelector("#clipboard-limit") as HTMLInputElement;
+  const limitValue = document.querySelector("#limit-value");
+
+  try {
+    const deviceName: string | null = await invoke("get_state", { key: "device_name" });
+    const syncEnabled: string | null = await invoke("get_state", { key: "sync_enabled" });
+    const limit: string | null = await invoke("get_state", { key: "clipboard_limit" });
+
+    if (deviceName && deviceNameInput) deviceNameInput.value = deviceName;
+    if (syncEnabled && syncEnabledInput) syncEnabledInput.checked = syncEnabled === "true";
+    if (limit && limitSlider) {
+      limitSlider.value = limit;
+      if (limitValue) limitValue.textContent = `${limit} items`;
+    }
+  } catch (err) {
+    console.error("Failed to load settings:", err);
+  }
+}
+
 window.addEventListener("DOMContentLoaded", () => {
+  loadSettings();
   const navItems = document.querySelectorAll(".nav-item");
   const views = document.querySelectorAll(".view");
 
@@ -85,13 +108,20 @@ window.addEventListener("DOMContentLoaded", () => {
     if (limitValue) limitValue.textContent = `${val} items`;
   });
 
-  document.querySelector("#save-settings-btn")?.addEventListener("click", () => {
+  document.querySelector("#save-settings-btn")?.addEventListener("click", async () => {
     const deviceName = (document.querySelector("#device-name") as HTMLInputElement).value;
     const syncEnabled = (document.querySelector("#sync-enabled") as HTMLInputElement).checked;
     const limit = limitSlider.value;
     
-    console.log("Saving settings:", { deviceName, syncEnabled, limit });
-    alert("Settings saved locally!");
+    try {
+      await invoke("set_state", { key: "device_name", value: deviceName });
+      await invoke("set_state", { key: "sync_enabled", value: syncEnabled.toString() });
+      await invoke("set_state", { key: "clipboard_limit", value: limit });
+      alert("Settings saved successfully!");
+    } catch (err) {
+      console.error("Failed to save settings:", err);
+      alert("Failed to save settings.");
+    }
   });
 
   document.querySelector("#send-file-btn")?.addEventListener("click", () => {

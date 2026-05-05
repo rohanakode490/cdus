@@ -6,6 +6,8 @@ use tauri::{
 use cdus_common::{IpcMessage, ClipboardEvent};
 use interprocess::local_socket::LocalSocketStream;
 use std::io::{Read, Write};
+use std::time::Duration;
+use std::thread;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -13,21 +15,34 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+fn check_agent_online() -> bool {
+    let socket_name = "/tmp/cdus-agent.sock";
+    match LocalSocketStream::connect(socket_name) {
+        Ok(mut stream) => {
+            let msg = IpcMessage::Ping;
+            if let Ok(bytes) = serde_json::to_vec(&msg) {
+                if stream.write_all(&bytes).is_ok() {
+                    let mut buffer = [0u8; 1024];
+                    if let Ok(n) = stream.read(&mut buffer) {
+                        if let Ok(response) = serde_json::from_slice::<IpcMessage>(&buffer[..n]) {
+                            return response == IpcMessage::Pong;
+                        }
+                    }
+                }
+            }
+            false
+        }
+        Err(_) => false,
+    }
+}
+
 #[tauri::command]
 fn ping_agent() -> Result<String, String> {
-    let socket_name = "/tmp/cdus-agent.sock";
-    let mut stream = LocalSocketStream::connect(socket_name)
-        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
-
-    let msg = IpcMessage::Ping;
-    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-
-    let mut buffer = [0u8; 1024];
-    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
-
-    Ok(format!("{:?}", response))
+    if check_agent_online() {
+        Ok("Pong".to_string())
+    } else {
+        Err("Failed to connect to agent".to_string())
+    }
 }
 
 #[tauri::command]
@@ -68,13 +83,54 @@ fn get_clipboard_history(limit: u32) -> Result<Vec<ClipboardEvent>, String> {
     }
 }
 
+#[tauri::command]
+fn get_state(key: String) -> Result<Option<String>, String> {
+    let socket_name = "/tmp/cdus-agent.sock";
+    let mut stream = LocalSocketStream::connect(socket_name)
+        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
+
+    let msg = IpcMessage::GetState { key };
+    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
+    stream.write_all(&bytes).map_err(|e| e.to_string())?;
+
+    let mut buffer = [0u8; 1024];
+    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
+
+    match response {
+        IpcMessage::StateResponse(val) => Ok(val),
+        IpcMessage::Log(err) => Err(err),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+fn set_state(key: String, value: String) -> Result<String, String> {
+    let socket_name = "/tmp/cdus-agent.sock";
+    let mut stream = LocalSocketStream::connect(socket_name)
+        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
+
+    let msg = IpcMessage::SetState { key, value };
+    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
+    stream.write_all(&bytes).map_err(|e| e.to_string())?;
+
+    let mut buffer = [0u8; 1024];
+    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
+
+    match response {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let status_i = MenuItem::with_id(app, "status", "Status: Online (LAN)", false, None::<&str>)?;
+            let status_i = MenuItem::with_id(app, "status", "Status: Checking...", false, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
             
             let menu = Menu::with_items(app, &[&status_i, &separator, &quit_i])?;
@@ -91,9 +147,30 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // Status update thread
+            let status_handle = status_i.clone();
+            thread::spawn(move || loop {
+                let online = check_agent_online();
+                let label = if online {
+                    "Status: Online (LAN)"
+                } else {
+                    "Status: Offline (Agent Disconnected)"
+                };
+                let _ = status_handle.set_text(label);
+                thread::sleep(Duration::from_secs(5));
+            });
+
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet, ping_agent, set_clipboard, get_clipboard_history])
+        .invoke_handler(tauri::generate_handler![
+            greet, 
+            ping_agent, 
+            set_clipboard, 
+            get_clipboard_history,
+            get_state,
+            set_state
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+

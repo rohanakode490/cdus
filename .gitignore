@@ -23,4 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 target/
+.geminiignore
 docs/
+agent-workspace
