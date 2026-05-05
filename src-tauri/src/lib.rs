@@ -3,7 +3,7 @@ use tauri::{
     tray::TrayIconBuilder,
 };
 
-use cdus_common::IpcMessage;
+use cdus_common::{IpcMessage, ClipboardEvent};
 use interprocess::local_socket::LocalSocketStream;
 use std::io::{Read, Write};
 
@@ -28,6 +28,44 @@ fn ping_agent() -> Result<String, String> {
     let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
 
     Ok(format!("{:?}", response))
+}
+
+#[tauri::command]
+fn set_clipboard(content: String) -> Result<String, String> {
+    let socket_name = "/tmp/cdus-agent.sock";
+    let mut stream = LocalSocketStream::connect(socket_name)
+        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
+
+    let msg = IpcMessage::SetClipboard(content);
+    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
+    stream.write_all(&bytes).map_err(|e| e.to_string())?;
+
+    let mut buffer = [0u8; 1024];
+    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
+
+    Ok(format!("{:?}", response))
+}
+
+#[tauri::command]
+fn get_clipboard_history(limit: u32) -> Result<Vec<ClipboardEvent>, String> {
+    let socket_name = "/tmp/cdus-agent.sock";
+    let mut stream = LocalSocketStream::connect(socket_name)
+        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
+
+    let msg = IpcMessage::GetHistory { limit };
+    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
+    stream.write_all(&bytes).map_err(|e| e.to_string())?;
+
+    let mut buffer = [0u8; 8192]; // Larger buffer for history
+    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
+
+    match response {
+        IpcMessage::HistoryResponse(history) => Ok(history),
+        IpcMessage::Log(err) => Err(err),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -55,7 +93,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet, ping_agent])
+        .invoke_handler(tauri::generate_handler![greet, ping_agent, set_clipboard, get_clipboard_history])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
