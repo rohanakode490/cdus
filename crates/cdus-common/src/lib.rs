@@ -22,9 +22,15 @@ pub enum IpcMessage {
     StateResponse(Option<String>),
     StartScan,
     StopScan,
-    DeviceDiscovered { node_id: String, label: String, os: String },
+    DeviceDiscovered { node_id: String, label: String, os: String, ip: String },
     GetDiscovered,
-    DiscoveredResponse(Vec<(String, String, String)>),
+    DiscoveredResponse(Vec<(String, String, String, String)>),
+    PairWith { node_id: String },
+    PairingPin(String),
+    ConfirmPairing(bool),
+    PairingResult { success: bool, node_id: String, label: String },
+    GetPairingStatus,
+    PairingStatusResponse { pin: Option<String>, active: bool },
 }
 
 #[cfg(test)]

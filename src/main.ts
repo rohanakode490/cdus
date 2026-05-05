@@ -96,10 +96,6 @@ window.addEventListener("DOMContentLoaded", () => {
     renderClipboard();
   }
 
-  document.querySelector("#add-device-btn")?.addEventListener("click", () => {
-    alert("Discovery mode started! Scanning for nearby devices...");
-  });
-
   const limitSlider = document.querySelector("#clipboard-limit") as HTMLInputElement;
   const limitValue = document.querySelector("#limit-value");
   
@@ -138,12 +134,14 @@ window.addEventListener("DOMContentLoaded", () => {
   // Local state
   let pairedDeviceIds: string[] = [];
   let scanInterval: any = null;
+  let pairingInterval: any = null;
+  let currentPairingDevice: any = null;
 
   async function updateDiscoveryList() {
     if (!discoveryList) return;
     
     try {
-      const discovered: [string, string, string][] = await invoke("get_discovered_devices");
+      const discovered: [string, string, string, string][] = await invoke("get_discovered_devices");
       
       // Filter out already paired devices
       const availableDevices = discovered.filter(([id]) => !pairedDeviceIds.includes(id));
@@ -153,7 +151,7 @@ window.addEventListener("DOMContentLoaded", () => {
       }
 
       discoveryList.innerHTML = "";
-      availableDevices.forEach(([id, name, os]) => {
+      availableDevices.forEach(([id, name, os, _ip]) => {
         const row = document.createElement("div");
         row.className = "device-row";
         row.innerHTML = `
@@ -164,8 +162,15 @@ window.addEventListener("DOMContentLoaded", () => {
           <button class="primary-btn connect-btn" data-id="${id}">Connect</button>
         `;
         
-        row.querySelector(".connect-btn")?.addEventListener("click", () => {
-          showPairingModal({ id, name, os });
+        row.querySelector(".connect-btn")?.addEventListener("click", async () => {
+          try {
+            await invoke("pair_with", { nodeId: id });
+            showPairingModal({ id, name, os });
+            startPairingPoll();
+          } catch (err) {
+            console.error("Failed to initiate pairing:", err);
+            alert("Failed to connect to device.");
+          }
         });
         
         discoveryList.appendChild(row);
@@ -175,18 +180,36 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  let currentPairingDevice: any = null;
+  async function startPairingPoll() {
+    if (pairingInterval) clearInterval(pairingInterval);
+    
+    pairingInterval = setInterval(async () => {
+      try {
+        const [pin, active]: [string | null, boolean] = await invoke("get_pairing_status");
+        if (pin) {
+          const digits = document.querySelectorAll(".pin-digit");
+          digits.forEach((el, i) => {
+            el.textContent = pin[i];
+          });
+        }
+        if (!active && pairingInterval) {
+          clearInterval(pairingInterval);
+        }
+      } catch (err) {
+        console.error("Error polling pairing status:", err);
+      }
+    }, 1000);
+  }
 
   function showPairingModal(device: any) {
     if (!pairingModal) return;
     currentPairingDevice = device;
     pairingModal.classList.remove("hidden");
     
-    // Generate random PIN
-    const pin = Math.floor(1000 + Math.random() * 9000).toString();
+    // Placeholder while waiting for real PIN from agent
     const digits = document.querySelectorAll(".pin-digit");
-    digits.forEach((el, i) => {
-      el.textContent = pin[i];
+    digits.forEach((el) => {
+      el.textContent = "?";
     });
   }
 
@@ -201,8 +224,6 @@ window.addEventListener("DOMContentLoaded", () => {
 
     devicesEmpty?.classList.add("hidden");
     pairedDeviceIds.forEach(id => {
-      // In a real app, we'd fetch this from the agent's trusted list
-      // For now we just use the ID as a placeholder or cache the name
       const row = document.createElement("div");
       row.className = "device-row";
       row.innerHTML = `
@@ -268,6 +289,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   cancelPairingBtn?.addEventListener("click", () => {
     pairingModal?.classList.add("hidden");
+    if (pairingInterval) clearInterval(pairingInterval);
     currentPairingDevice = null;
   });
 
@@ -277,6 +299,7 @@ window.addEventListener("DOMContentLoaded", () => {
       renderPairedDevices();
       alert(`Device ${currentPairingDevice.name} paired successfully!`);
       pairingModal?.classList.add("hidden");
+      if (pairingInterval) clearInterval(pairingInterval);
       currentPairingDevice = null;
       
       discoveryList!.innerHTML = "<div class=\"scanning-indicator\"><div class=\"spinner\"></div><span>Scanning for nearby devices...</span></div>";
@@ -288,34 +311,6 @@ window.addEventListener("DOMContentLoaded", () => {
 
   document.querySelector("#send-file-btn")?.addEventListener("click", () => {
     alert("File picker opened! (Mock)");
-  });
-
-  const pingBtn = document.querySelector("#ping-agent-btn");
-  const pingStatus = document.querySelector("#ping-status");
-
-  pingBtn?.addEventListener("click", async () => {
-    if (pingStatus) pingStatus.textContent = "Pinging...";
-    try {
-      const response = await invoke("ping_agent");
-      if (pingStatus) pingStatus.textContent = `Response: ${response}`;
-    } catch (err) {
-      if (pingStatus) pingStatus.textContent = `Error: ${err}`;
-    }
-  });
-
-  const setCbBtn = document.querySelector("#set-clipboard-btn");
-  const cbInput = document.querySelector("#test-clipboard-input") as HTMLInputElement;
-  const cbStatus = document.querySelector("#set-clipboard-status");
-
-  setCbBtn?.addEventListener("click", async () => {
-    if (!cbInput.value) return;
-    if (cbStatus) cbStatus.textContent = "Setting...";
-    try {
-      const response = await invoke("set_clipboard", { content: cbInput.value });
-      if (cbStatus) cbStatus.textContent = `Response: ${response}`;
-    } catch (err) {
-      if (cbStatus) cbStatus.textContent = `Error: ${err}`;
-    }
   });
 
   // Refresh clipboard history every 5 seconds if visible

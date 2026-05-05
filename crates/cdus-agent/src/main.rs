@@ -7,6 +7,7 @@ use tracing::{info, error};
 use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
 use std::sync::{Arc, Mutex};
+use std::net::SocketAddr;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -25,10 +26,13 @@ enum Commands {
 
 mod store;
 mod mdns;
+mod pairing;
 use store::Store;
 use mdns::MdnsManager;
+use pairing::PairingManager;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
 
@@ -53,7 +57,7 @@ fn main() {
     let store = Arc::new(store);
 
     // Initialize or load device identity
-    let (node_id, _) = store.get_or_create_identity().expect("Failed to initialize identity");
+    let (node_id, private_key) = store.get_or_create_identity().expect("Failed to initialize identity");
     let label = store.get_state("device_name").unwrap().unwrap_or_else(|| "Unknown".to_string());
     info!("Device identity initialized. Node ID: {}", node_id);
 
@@ -62,10 +66,18 @@ fn main() {
     mdns.register_device(&node_id, &label);
     let mdns = Arc::new(mdns);
 
+    let (tx, rx) = flume::unbounded::<IpcMessage>();
+
+    // Start Pairing Manager
+    let pm = PairingManager::new(Arc::clone(&store), tx.clone(), node_id, private_key);
+    let pm = Arc::new(pm);
+    let pm_clone = Arc::clone(&pm);
+    tokio::spawn(async move {
+        pm_clone.start_listener().await;
+    });
+
     info!("CDUS Agent starting...");
 
-    let (tx, rx) = flume::unbounded::<IpcMessage>();
-    
     // Shared state for loop prevention
     let last_written = Arc::new(Mutex::new(None::<String>));
 
@@ -76,124 +88,136 @@ fn main() {
         clipboard_watcher(clipboard_tx, last_written_watcher);
     });
 
-    let discovered_devices = Arc::new(Mutex::new(Vec::<(String, String, String)>::new()));
+    let discovered_devices = Arc::new(Mutex::new(Vec::<(String, String, String, String)>::new()));
     let discovered_devices_daemon = Arc::clone(&discovered_devices);
+
+    let active_pin = Arc::new(Mutex::new(None::<String>));
+    let active_pin_daemon = Arc::clone(&active_pin);
 
     // Start daemon logic thread
     let daemon_tx = tx.clone();
     let last_written_daemon = Arc::clone(&last_written);
     let daemon_store = Arc::clone(&store);
-    thread::spawn(move || {
-        daemon_loop(daemon_tx, rx, None, daemon_store, last_written_daemon, discovered_devices_daemon);
+    tokio::spawn(async move {
+        daemon_loop(daemon_tx, rx, None, daemon_store, last_written_daemon, discovered_devices_daemon, active_pin_daemon);
     });
 
     // Setup IPC listener
     let socket_name = "/tmp/cdus-agent.sock";
-    
-    // Cleanup old socket if exists
     let _ = std::fs::remove_file(socket_name);
-
-    let listener = LocalSocketListener::bind(socket_name)
-        .expect("Failed to bind local socket");
+    let listener = LocalSocketListener::bind(socket_name).expect("Failed to bind local socket");
 
     info!("IPC Listener bound to {}", socket_name);
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(mut stream) => {
-                info!("New IPC connection received");
-                let mut buffer = [0u8; 4096]; // Increased buffer for history
-                if let Ok(n) = stream.read(&mut buffer) {
-                    if let Ok(msg) = serde_json::from_slice::<IpcMessage>(&buffer[..n]) {
-                        info!("Received IPC message: {:?}", msg);
-                        match msg {
-                            IpcMessage::Ping => {
-                                let resp_bytes = serde_json::to_vec(&IpcMessage::Pong).unwrap();
-                                let _ = stream.write_all(&resp_bytes);
-                            }
-                            IpcMessage::StartScan => {
-                                {
-                                    let mut list = discovered_devices.lock().unwrap();
-                                    list.clear();
+    tokio::task::spawn_blocking(move || {
+        for stream in listener.incoming() {
+            match stream {
+                Ok(mut stream) => {
+                    let mut buffer = [0u8; 4096];
+                    if let Ok(n) = stream.read(&mut buffer) {
+                        if let Ok(msg) = serde_json::from_slice::<IpcMessage>(&buffer[..n]) {
+                            match msg {
+                                IpcMessage::Ping => {
+                                    let resp_bytes = serde_json::to_vec(&IpcMessage::Pong).unwrap();
+                                    let _ = stream.write_all(&resp_bytes);
                                 }
-                                let mdns_clone = Arc::clone(&mdns);
-                                let tx_clone = tx.clone();
-                                mdns_clone.start_discovery(tx_clone);
-                                let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Scan started".to_string())).unwrap();
-                                let _ = stream.write_all(&resp_bytes);
-                            }
-                            IpcMessage::StopScan => {
-                                let mdns_clone = Arc::clone(&mdns);
-                                mdns_clone.stop_discovery();
-                                let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Scan stopped".to_string())).unwrap();
-                                let _ = stream.write_all(&resp_bytes);
-                            }
-                            IpcMessage::DeviceDiscovered { node_id: _, label: _, os: _ } => {
-                                let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Discovery event received".to_string())).unwrap();
-                                let _ = stream.write_all(&resp_bytes);
-                            }
-                            IpcMessage::GetDiscovered => {
-                                let list = discovered_devices.lock().unwrap();
-                                let resp_bytes = serde_json::to_vec(&IpcMessage::DiscoveredResponse(list.clone())).unwrap();
-                                let _ = stream.write_all(&resp_bytes);
-                            }
-                            IpcMessage::GetHistory { limit } => {
-                                match store.get_recent_events(limit) {
-                                    Ok(history) => {
-                                        let resp_bytes = serde_json::to_vec(&IpcMessage::HistoryResponse(history)).unwrap();
-                                        let _ = stream.write_all(&resp_bytes);
+                                IpcMessage::StartScan => {
+                                    {
+                                        let mut list = discovered_devices.lock().unwrap();
+                                        list.clear();
                                     }
-                                    Err(e) => {
-                                        let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Error fetching history: {}", e))).unwrap();
-                                        let _ = stream.write_all(&resp_bytes);
+                                    mdns.start_discovery(tx.clone());
+                                    let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Scan started".to_string())).unwrap();
+                                    let _ = stream.write_all(&resp_bytes);
+                                }
+                                IpcMessage::StopScan => {
+                                    mdns.stop_discovery();
+                                    let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Scan stopped".to_string())).unwrap();
+                                    let _ = stream.write_all(&resp_bytes);
+                                }
+                                IpcMessage::GetDiscovered => {
+                                    let list = discovered_devices.lock().unwrap();
+                                    let resp_bytes = serde_json::to_vec(&IpcMessage::DiscoveredResponse(list.clone())).unwrap();
+                                    let _ = stream.write_all(&resp_bytes);
+                                }
+                                IpcMessage::PairWith { node_id } => {
+                                    let list = discovered_devices.lock().unwrap();
+                                    if let Some((_, _, _, ip)) = list.iter().find(|(id, _, _, _)| id == &node_id) {
+                                        if let Ok(ip_addr) = ip.parse() {
+                                            let addr = SocketAddr::new(ip_addr, 5200);
+                                            let pm_init = Arc::clone(&pm);
+                                            tokio::spawn(async move {
+                                                pm_init.initiate_pairing(addr).await;
+                                            });
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Pairing initiated".to_string())).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
                                     }
                                 }
-                            }
-                            IpcMessage::GetState { key } => {
-                                match store.get_state(&key) {
-                                    Ok(val) => {
-                                        let resp_bytes = serde_json::to_vec(&IpcMessage::StateResponse(val)).unwrap();
-                                        let _ = stream.write_all(&resp_bytes);
-                                    }
-                                    Err(e) => {
-                                        let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Error fetching state: {}", e))).unwrap();
-                                        let _ = stream.write_all(&resp_bytes);
+                                IpcMessage::GetPairingStatus => {
+                                    let pin = active_pin.lock().unwrap().clone();
+                                    let resp_bytes = serde_json::to_vec(&IpcMessage::PairingStatusResponse { 
+                                        pin, 
+                                        active: true 
+                                    }).unwrap();
+                                    let _ = stream.write_all(&resp_bytes);
+                                }
+                                IpcMessage::GetHistory { limit } => {
+                                    match store.get_recent_events(limit) {
+                                        Ok(history) => {
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::HistoryResponse(history)).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        Err(e) => {
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Error fetching history: {}", e))).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
                                     }
                                 }
-                            }
-                            IpcMessage::SetState { key, value } => {
-                                match store.set_state(&key, &value) {
-                                    Ok(_) => {
-                                        let resp_bytes = serde_json::to_vec(&IpcMessage::Log("State set successfully".to_string())).unwrap();
-                                        let _ = stream.write_all(&resp_bytes);
-                                    }
-                                    Err(e) => {
-                                        let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Error setting state: {}", e))).unwrap();
-                                        let _ = stream.write_all(&resp_bytes);
+                                IpcMessage::GetState { key } => {
+                                    match store.get_state(&key) {
+                                        Ok(val) => {
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::StateResponse(val)).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        Err(e) => {
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Error fetching state: {}", e))).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
                                     }
                                 }
-                            }
-                            IpcMessage::SetClipboard(content) => {
-                                let _ = tx.send(IpcMessage::SetClipboard(content));
-                                let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Clipboard set request queued".to_string())).unwrap();
-                                let _ = stream.write_all(&resp_bytes);
-                            }
-                            _ => {
-                                let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Message received".to_string())).unwrap();
-                                let _ = stream.write_all(&resp_bytes);
+                                IpcMessage::SetState { key, value } => {
+                                    match store.set_state(&key, &value) {
+                                        Ok(_) => {
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log("State set successfully".to_string())).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        Err(e) => {
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Error setting state: {}", e))).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                    }
+                                }
+                                IpcMessage::SetClipboard(content) => {
+                                    let _ = tx.send(IpcMessage::SetClipboard(content));
+                                    let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Clipboard set request queued".to_string())).unwrap();
+                                    let _ = stream.write_all(&resp_bytes);
+                                }
+                                _ => {
+                                    let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Message received".to_string())).unwrap();
+                                    let _ = stream.write_all(&resp_bytes);
+                                }
                             }
                         }
                     }
                 }
-            }
-            Err(e) => {
-                error!("IPC stream error: {}", e);
+                Err(e) => error!("IPC stream error: {}", e),
             }
         }
-    }
+    }).await.unwrap();
 }
 
-fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Option<usize>, store: Arc<Store>, last_written: Arc<Mutex<Option<String>>>, discovered_devices: Arc<Mutex<Vec<(String, String, String)>>>) {
+fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Option<usize>, store: Arc<Store>, last_written: Arc<Mutex<Option<String>>>, discovered_devices: Arc<Mutex<Vec<(String, String, String, String)>>>, active_pin: Arc<Mutex<Option<String>>>) {
     info!("Daemon logic thread started");
     use arboard::Clipboard;
     
@@ -234,11 +258,15 @@ fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Opt
                         error!("Clipboard not available in daemon loop");
                     }
                 }
-                IpcMessage::DeviceDiscovered { node_id, label, os } => {
+                IpcMessage::DeviceDiscovered { node_id, label, os, ip } => {
                     let mut list = discovered_devices.lock().unwrap();
-                    if !list.iter().any(|(id, _, _)| id == &node_id) {
-                        list.push((node_id, label, os));
+                    if !list.iter().any(|(id, _, _, _)| id == &node_id) {
+                        list.push((node_id, label, os, ip));
                     }
+                }
+                IpcMessage::PairingPin(pin) => {
+                    let mut p = active_pin.lock().unwrap();
+                    *p = Some(pin);
                 }
                 _ => {}
             }
@@ -366,9 +394,10 @@ mod tests {
         let store = Arc::new(store);
         let lw = Arc::new(Mutex::new(None));
         let dd = Arc::new(Mutex::new(Vec::new()));
+        let ap = Arc::new(Mutex::new(None));
         
         agent_tx.send(IpcMessage::Ping).unwrap();
-        daemon_loop(daemon_tx, daemon_rx, Some(5), store, lw, dd);
+        daemon_loop(daemon_tx, daemon_rx, Some(5), store, lw, dd, ap);
         
         let resp = agent_rx.try_recv().expect("Should have received a Pong");
         assert_eq!(resp, IpcMessage::Pong);
@@ -384,13 +413,14 @@ mod tests {
         let store = Arc::new(store);
         let lw = Arc::new(Mutex::new(None));
         let dd = Arc::new(Mutex::new(Vec::new()));
+        let ap = Arc::new(Mutex::new(None));
         
         let content = "Secret sync message".to_string();
         agent_tx.send(IpcMessage::ClipboardChanged(content.clone())).unwrap();
         
         let events_conn = Connection::open(dir.path().join("events.db")).unwrap();
 
-        daemon_loop(daemon_tx, daemon_rx, Some(5), store, lw, dd);
+        daemon_loop(daemon_tx, daemon_rx, Some(5), store, lw, dd, ap);
         
         let count: i64 = events_conn.query_row("SELECT count(*) FROM events", [], |r| r.get::<_, i64>(0)).unwrap();
         assert_eq!(count, 1);

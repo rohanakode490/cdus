@@ -177,7 +177,7 @@ async fn stop_scan() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn get_discovered_devices() -> Result<Vec<(String, String, String)>, String> {
+async fn get_discovered_devices() -> Result<Vec<(String, String, String, String)>, String> {
     let socket_name = "/tmp/cdus-agent.sock";
     let mut stream = LocalSocketStream::connect(socket_name)
         .map_err(|e| format!("Failed to connect to agent: {}", e))?;
@@ -192,6 +192,46 @@ async fn get_discovered_devices() -> Result<Vec<(String, String, String)>, Strin
 
     match response {
         IpcMessage::DiscoveredResponse(list) => Ok(list),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn pair_with(node_id: String) -> Result<String, String> {
+    let socket_name = "/tmp/cdus-agent.sock";
+    let mut stream = LocalSocketStream::connect(socket_name)
+        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
+
+    let msg = IpcMessage::PairWith { node_id };
+    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
+    stream.write_all(&bytes).map_err(|e| e.to_string())?;
+
+    let mut buffer = [0u8; 1024];
+    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
+
+    match response {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn get_pairing_status() -> Result<(Option<String>, bool), String> {
+    let socket_name = "/tmp/cdus-agent.sock";
+    let mut stream = LocalSocketStream::connect(socket_name)
+        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
+
+    let msg = IpcMessage::GetPairingStatus;
+    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
+    stream.write_all(&bytes).map_err(|e| e.to_string())?;
+
+    let mut buffer = [0u8; 1024];
+    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
+
+    match response {
+        IpcMessage::PairingStatusResponse { pin, active } => Ok((pin, active)),
         _ => Err("Unexpected response from agent".to_string()),
     }
 }
@@ -268,9 +308,10 @@ pub fn run() {
             set_state,
             start_scan,
             stop_scan,
-            get_discovered_devices
+            get_discovered_devices,
+            pair_with,
+            get_pairing_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-

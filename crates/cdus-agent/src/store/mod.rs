@@ -119,36 +119,37 @@ impl Store {
         ).optional()
     }
 
-    pub fn get_or_create_identity(&self) -> Result<(String, Vec<u8>)> {
+    pub fn get_or_create_identity(&self) -> anyhow::Result<(String, Vec<u8>)> {
+        use keyring::Entry;
+
         if let Some(node_id) = self.get_state("node_id")? {
-            if let Some(priv_key_hex) = self.get_state("private_key")? {
+            let entry = Entry::new("com.cdus.agent", "private_key")?;
+            if let Ok(priv_key_hex) = entry.get_password() {
                 if let Ok(priv_key) = hex::decode(priv_key_hex) {
                     return Ok((node_id, priv_key));
                 }
             }
         }
 
-        info!("No identity found, generating new ed25519 keypair...");
-        use ed25519_dalek::SigningKey;
-        use rand::rngs::OsRng;
-
-        let mut csprng = OsRng;
-        let signing_key = SigningKey::generate(&mut csprng);
-        let priv_bytes = signing_key.to_bytes().to_vec();
-        let pub_bytes = signing_key.verifying_key().to_bytes();
+        info!("No identity found, generating new x25519 keypair for Noise...");
         
-        let node_id = blake3::hash(&pub_bytes).to_hex().to_string();
+        let mut csprng = rand::rngs::OsRng;
+        let mut priv_bytes = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut csprng, &mut priv_bytes);
+        
+        let node_id = blake3::hash(&priv_bytes).to_hex().to_string();
         
         self.set_state("node_id", &node_id)?;
-        self.set_state("private_key", &hex::encode(&priv_bytes))?;
         
-        // Also set a default device name if not exists
+        let entry = Entry::new("com.cdus.agent", "private_key")?;
+        entry.set_password(&hex::encode(&priv_bytes))?;
+        
         if self.get_state("device_name")?.is_none() {
             let hostname = gethostname::gethostname().into_string().unwrap_or_else(|_| "Unknown Device".to_string());
             self.set_state("device_name", &hostname)?;
         }
 
-        Ok((node_id, priv_bytes))
+        Ok((node_id, priv_bytes.to_vec()))
     }
 }
 

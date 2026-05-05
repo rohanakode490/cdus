@@ -26,7 +26,7 @@ impl MdnsManager {
         let service_type = "_cdus._tcp.local.";
         let instance_name = node_id;
         let host_name = format!("{}.local.", node_id);
-        let port = 5200; // Placeholder for now
+        let port = 5200u16;
 
         let mut properties = HashMap::new();
         properties.insert("label".to_string(), label.to_string());
@@ -43,13 +43,11 @@ impl MdnsManager {
         properties.insert("os".to_string(), os.to_string());
         properties.insert("node_id".to_string(), node_id.to_string());
 
-        // In mdns-sd 0.13, new() takes (type, name, host, ip, port, properties)
-        // Passing () for ip as we want the daemon to handle it.
         let service_info = ServiceInfo::new(
             service_type,
             instance_name,
             &host_name,
-            "", // ip address string
+            (),
             port,
             Some(properties),
         ).expect("Failed to create service info");
@@ -85,14 +83,14 @@ impl MdnsManager {
                 if let Ok(event) = receiver.recv_timeout(std::time::Duration::from_millis(500)) {
                     match event {
                         ServiceEvent::ServiceResolved(info) => {
-                            let props = info.get_properties();
-                            let node_id = props.get("node_id").map(|v| v.to_string()).unwrap_or_default();
-                            let label = props.get("label").map(|v| v.to_string()).unwrap_or_else(|| info.get_fullname().to_string());
-                            let os = props.get("os").map(|v| v.to_string()).unwrap_or_else(|| "Unknown".to_string());
+                            let node_id = info.get_property_val_str("node_id").unwrap_or_default().to_string();
+                            let label = info.get_property_val_str("label").unwrap_or_else(|| info.get_fullname()).to_string();
+                            let os = info.get_property_val_str("os").unwrap_or("Unknown").to_string();
+                            let ip = info.get_addresses().iter().next().map(|addr| addr.to_string()).unwrap_or_default();
                             
-                            if !node_id.is_empty() {
-                                info!("Discovered CDUS device: {} ({})", label, node_id);
-                                let _ = tx.send(IpcMessage::DeviceDiscovered { node_id, label, os });
+                            if !node_id.is_empty() && !ip.is_empty() {
+                                info!("Discovered CDUS device: {} ({}) at {}", label, node_id, ip);
+                                let _ = tx.send(IpcMessage::DeviceDiscovered { node_id, label, os, ip });
                             }
                         }
                         _ => {}
