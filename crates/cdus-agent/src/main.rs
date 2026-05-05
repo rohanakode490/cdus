@@ -24,7 +24,9 @@ enum Commands {
 }
 
 mod store;
+mod mdns;
 use store::Store;
+use mdns::MdnsManager;
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -50,6 +52,16 @@ fn main() {
     let store = Store::init(data_dir).expect("Failed to initialize store");
     let store = Arc::new(store);
 
+    // Initialize or load device identity
+    let (node_id, _) = store.get_or_create_identity().expect("Failed to initialize identity");
+    let label = store.get_state("device_name").unwrap().unwrap_or_else(|| "Unknown".to_string());
+    info!("Device identity initialized. Node ID: {}", node_id);
+
+    // Start mDNS registration
+    let mdns = MdnsManager::new();
+    mdns.register_device(&node_id, &label);
+    let mdns = Arc::new(mdns);
+
     info!("CDUS Agent starting...");
 
     let (tx, rx) = flume::unbounded::<IpcMessage>();
@@ -64,12 +76,15 @@ fn main() {
         clipboard_watcher(clipboard_tx, last_written_watcher);
     });
 
+    let discovered_devices = Arc::new(Mutex::new(Vec::<(String, String, String)>::new()));
+    let discovered_devices_daemon = Arc::clone(&discovered_devices);
+
     // Start daemon logic thread
     let daemon_tx = tx.clone();
     let last_written_daemon = Arc::clone(&last_written);
     let daemon_store = Arc::clone(&store);
     thread::spawn(move || {
-        daemon_loop(daemon_tx, rx, None, daemon_store, last_written_daemon);
+        daemon_loop(daemon_tx, rx, None, daemon_store, last_written_daemon, discovered_devices_daemon);
     });
 
     // Setup IPC listener
@@ -96,9 +111,30 @@ fn main() {
                                 let resp_bytes = serde_json::to_vec(&IpcMessage::Pong).unwrap();
                                 let _ = stream.write_all(&resp_bytes);
                             }
-                            IpcMessage::SetClipboard(content) => {
-                                let _ = tx.send(IpcMessage::SetClipboard(content));
-                                let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Clipboard set request queued".to_string())).unwrap();
+                            IpcMessage::StartScan => {
+                                {
+                                    let mut list = discovered_devices.lock().unwrap();
+                                    list.clear();
+                                }
+                                let mdns_clone = Arc::clone(&mdns);
+                                let tx_clone = tx.clone();
+                                mdns_clone.start_discovery(tx_clone);
+                                let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Scan started".to_string())).unwrap();
+                                let _ = stream.write_all(&resp_bytes);
+                            }
+                            IpcMessage::StopScan => {
+                                let mdns_clone = Arc::clone(&mdns);
+                                mdns_clone.stop_discovery();
+                                let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Scan stopped".to_string())).unwrap();
+                                let _ = stream.write_all(&resp_bytes);
+                            }
+                            IpcMessage::DeviceDiscovered { node_id: _, label: _, os: _ } => {
+                                let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Discovery event received".to_string())).unwrap();
+                                let _ = stream.write_all(&resp_bytes);
+                            }
+                            IpcMessage::GetDiscovered => {
+                                let list = discovered_devices.lock().unwrap();
+                                let resp_bytes = serde_json::to_vec(&IpcMessage::DiscoveredResponse(list.clone())).unwrap();
                                 let _ = stream.write_all(&resp_bytes);
                             }
                             IpcMessage::GetHistory { limit } => {
@@ -137,6 +173,11 @@ fn main() {
                                     }
                                 }
                             }
+                            IpcMessage::SetClipboard(content) => {
+                                let _ = tx.send(IpcMessage::SetClipboard(content));
+                                let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Clipboard set request queued".to_string())).unwrap();
+                                let _ = stream.write_all(&resp_bytes);
+                            }
                             _ => {
                                 let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Message received".to_string())).unwrap();
                                 let _ = stream.write_all(&resp_bytes);
@@ -152,7 +193,7 @@ fn main() {
     }
 }
 
-fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Option<usize>, store: Arc<Store>, last_written: Arc<Mutex<Option<String>>>) {
+fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Option<usize>, store: Arc<Store>, last_written: Arc<Mutex<Option<String>>>, discovered_devices: Arc<Mutex<Vec<(String, String, String)>>>) {
     info!("Daemon logic thread started");
     use arboard::Clipboard;
     
@@ -191,6 +232,12 @@ fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Opt
                     } else {
                         clipboard = Clipboard::new().ok();
                         error!("Clipboard not available in daemon loop");
+                    }
+                }
+                IpcMessage::DeviceDiscovered { node_id, label, os } => {
+                    let mut list = discovered_devices.lock().unwrap();
+                    if !list.iter().any(|(id, _, _)| id == &node_id) {
+                        list.push((node_id, label, os));
                     }
                 }
                 _ => {}
@@ -318,9 +365,10 @@ mod tests {
         let store = Store::init(dir.path()).unwrap();
         let store = Arc::new(store);
         let lw = Arc::new(Mutex::new(None));
+        let dd = Arc::new(Mutex::new(Vec::new()));
         
         agent_tx.send(IpcMessage::Ping).unwrap();
-        daemon_loop(daemon_tx, daemon_rx, Some(5), store, lw);
+        daemon_loop(daemon_tx, daemon_rx, Some(5), store, lw, dd);
         
         let resp = agent_rx.try_recv().expect("Should have received a Pong");
         assert_eq!(resp, IpcMessage::Pong);
@@ -335,13 +383,14 @@ mod tests {
         let store = Store::init(dir.path()).unwrap();
         let store = Arc::new(store);
         let lw = Arc::new(Mutex::new(None));
+        let dd = Arc::new(Mutex::new(Vec::new()));
         
         let content = "Secret sync message".to_string();
         agent_tx.send(IpcMessage::ClipboardChanged(content.clone())).unwrap();
         
         let events_conn = Connection::open(dir.path().join("events.db")).unwrap();
 
-        daemon_loop(daemon_tx, daemon_rx, Some(5), store, lw);
+        daemon_loop(daemon_tx, daemon_rx, Some(5), store, lw, dd);
         
         let count: i64 = events_conn.query_row("SELECT count(*) FROM events", [], |r| r.get::<_, i64>(0)).unwrap();
         assert_eq!(count, 1);

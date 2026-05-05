@@ -16,6 +16,11 @@ directories = "5.0"
 rusqlite = { version = "0.31", features = ["bundled"] }
 blake3 = "1.5"
 arboard = "3.4"
+mdns-sd = "0.13"
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+rand = "0.8"
+gethostname = "0.4"
+hex = "0.4"
 
 [dev-dependencies]
 tempfile = "3.10"

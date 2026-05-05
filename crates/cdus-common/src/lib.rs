@@ -20,6 +20,11 @@ pub enum IpcMessage {
     GetState { key: String },
     SetState { key: String, value: String },
     StateResponse(Option<String>),
+    StartScan,
+    StopScan,
+    DeviceDiscovered { node_id: String, label: String, os: String },
+    GetDiscovered,
+    DiscoveredResponse(Vec<(String, String, String)>),
 }
 
 #[cfg(test)]

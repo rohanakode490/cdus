@@ -118,6 +118,38 @@ impl Store {
             |row| row.get(0),
         ).optional()
     }
+
+    pub fn get_or_create_identity(&self) -> Result<(String, Vec<u8>)> {
+        if let Some(node_id) = self.get_state("node_id")? {
+            if let Some(priv_key_hex) = self.get_state("private_key")? {
+                if let Ok(priv_key) = hex::decode(priv_key_hex) {
+                    return Ok((node_id, priv_key));
+                }
+            }
+        }
+
+        info!("No identity found, generating new ed25519 keypair...");
+        use ed25519_dalek::SigningKey;
+        use rand::rngs::OsRng;
+
+        let mut csprng = OsRng;
+        let signing_key = SigningKey::generate(&mut csprng);
+        let priv_bytes = signing_key.to_bytes().to_vec();
+        let pub_bytes = signing_key.verifying_key().to_bytes();
+        
+        let node_id = blake3::hash(&pub_bytes).to_hex().to_string();
+        
+        self.set_state("node_id", &node_id)?;
+        self.set_state("private_key", &hex::encode(&priv_bytes))?;
+        
+        // Also set a default device name if not exists
+        if self.get_state("device_name")?.is_none() {
+            let hostname = gethostname::gethostname().into_string().unwrap_or_else(|_| "Unknown Device".to_string());
+            self.set_state("device_name", &hostname)?;
+        }
+
+        Ok((node_id, priv_bytes))
+    }
 }
 
 #[cfg(test)]

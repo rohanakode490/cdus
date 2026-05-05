@@ -124,7 +124,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // --- Q2 Discovery & Pairing Mock Logic ---
+  // --- Q2 Discovery & Pairing Real Logic ---
   
   const scanBtn = document.querySelector("#scan-btn");
   const discoverySection = document.querySelector("#discovery-section");
@@ -135,47 +135,44 @@ window.addEventListener("DOMContentLoaded", () => {
   const pairedList = document.querySelector("#paired-list");
   const devicesEmpty = document.querySelector("#devices-empty");
 
-  // Mock state
+  // Local state
   let pairedDeviceIds: string[] = [];
-  const mockDiscoveredDevices = [
-    { id: "device-1", name: "Rahul's iPhone", os: "iOS" },
-    { id: "device-2", name: "Living Room Tablet", os: "Android" }
-  ];
+  let scanInterval: any = null;
 
-  function renderDiscovery() {
+  async function updateDiscoveryList() {
     if (!discoveryList) return;
     
-    // Clear scanning indicator after 2 seconds
-    setTimeout(() => {
-      discoveryList.innerHTML = "";
+    try {
+      const discovered: [string, string, string][] = await invoke("get_discovered_devices");
       
       // Filter out already paired devices
-      const availableDevices = mockDiscoveredDevices.filter(d => !pairedDeviceIds.includes(d.id));
+      const availableDevices = discovered.filter(([id]) => !pairedDeviceIds.includes(id));
       
       if (availableDevices.length === 0) {
-        const hint = document.querySelector("#no-discovery-hint");
-        hint?.classList.remove("hidden");
         return;
       }
 
-      availableDevices.forEach(device => {
+      discoveryList.innerHTML = "";
+      availableDevices.forEach(([id, name, os]) => {
         const row = document.createElement("div");
         row.className = "device-row";
         row.innerHTML = `
           <div class="device-info">
-            <span class="device-name-label">${device.name}</span>
-            <span class="device-type-label">${device.os}</span>
+            <span class="device-name-label">${name}</span>
+            <span class="device-type-label">${os}</span>
           </div>
-          <button class="primary-btn connect-btn" data-id="${device.id}">Connect</button>
+          <button class="primary-btn connect-btn" data-id="${id}">Connect</button>
         `;
         
         row.querySelector(".connect-btn")?.addEventListener("click", () => {
-          showPairingModal(device);
+          showPairingModal({ id, name, os });
         });
         
         discoveryList.appendChild(row);
       });
-    }, 2000);
+    } catch (err) {
+      console.error("Failed to fetch discovered devices:", err);
+    }
   }
 
   let currentPairingDevice: any = null;
@@ -204,24 +201,23 @@ window.addEventListener("DOMContentLoaded", () => {
 
     devicesEmpty?.classList.add("hidden");
     pairedDeviceIds.forEach(id => {
-      const device = mockDiscoveredDevices.find(d => d.id === id);
-      if (!device) return;
-
+      // In a real app, we'd fetch this from the agent's trusted list
+      // For now we just use the ID as a placeholder or cache the name
       const row = document.createElement("div");
       row.className = "device-row";
       row.innerHTML = `
         <div class="device-info">
-          <span class="device-name-label">${device.name}</span>
+          <span class="device-name-label">Device ${id.substring(0, 8)}</span>
           <div class="device-status">
             <span class="status-dot online"></span>
-            <span class="device-type-label">${device.os} • Online</span>
+            <span class="device-type-label">Online</span>
           </div>
         </div>
-        <button class="secondary-btn unpair-btn" data-id="${device.id}">Unpair</button>
+        <button class="secondary-btn unpair-btn" data-id="${id}">Unpair</button>
       `;
 
       row.querySelector(".unpair-btn")?.addEventListener("click", () => {
-        unpairDevice(device.id);
+        unpairDevice(id);
       });
 
       pairedList.appendChild(row);
@@ -229,28 +225,45 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function unpairDevice(id: string) {
-    if (confirm("Are you sure you want to unpair this device? It will no longer be able to sync with this workstation.")) {
+    if (confirm("Are you sure you want to unpair this device?")) {
       pairedDeviceIds = pairedDeviceIds.filter(pid => pid !== id);
       renderPairedDevices();
-      // If we are currently scanning, refresh discovery too
-      if (!scanBtn?.getAttribute("disabled")) {
-        // Discovery is ready for next scan
-      }
     }
   }
 
-  scanBtn?.addEventListener("click", () => {
+  scanBtn?.addEventListener("click", async () => {
     discoverySection?.classList.remove("hidden");
     document.querySelector("#no-discovery-hint")?.classList.add("hidden");
-    scanBtn.textContent = "Scanning...";
-    (scanBtn as HTMLButtonElement).disabled = true;
     
-    renderDiscovery();
-    
-    setTimeout(() => {
+    if (scanBtn.textContent === "Scanning...") {
+      await invoke("stop_scan");
+      if (scanInterval) clearInterval(scanInterval);
       scanBtn.textContent = "Scan for Devices";
-      (scanBtn as HTMLButtonElement).disabled = false;
-    }, 2000);
+      return;
+    }
+
+    scanBtn.textContent = "Scanning...";
+    discoveryList!.innerHTML = "<div class=\"scanning-indicator\"><div class=\"spinner\"></div><span>Scanning for nearby devices...</span></div>";
+    
+    try {
+      await invoke("start_scan");
+      scanInterval = setInterval(updateDiscoveryList, 2000);
+      
+      setTimeout(async () => {
+        if (scanBtn.textContent === "Scanning...") {
+          await invoke("stop_scan");
+          if (scanInterval) clearInterval(scanInterval);
+          scanBtn.textContent = "Scan for Devices";
+          if (discoveryList?.innerHTML.includes("scanning-indicator")) {
+            discoveryList.innerHTML = "";
+            document.querySelector("#no-discovery-hint")?.classList.remove("hidden");
+          }
+        }
+      }, 30000);
+    } catch (err) {
+      console.error("Failed to start scan:", err);
+      scanBtn.textContent = "Scan for Devices";
+    }
   });
 
   cancelPairingBtn?.addEventListener("click", () => {
@@ -266,13 +279,12 @@ window.addEventListener("DOMContentLoaded", () => {
       pairingModal?.classList.add("hidden");
       currentPairingDevice = null;
       
-      // Refresh discovery list to remove the newly paired device
       discoveryList!.innerHTML = "<div class=\"scanning-indicator\"><div class=\"spinner\"></div><span>Scanning for nearby devices...</span></div>";
       discoverySection?.classList.add("hidden");
     }
   });
 
-  // --- End Q2 Mock Logic ---
+  // --- End Q2 Real Logic ---
 
   document.querySelector("#send-file-btn")?.addEventListener("click", () => {
     alert("File picker opened! (Mock)");
