@@ -24,10 +24,46 @@
 
       <main id="content">
         <div id="view-devices" class="view active">
-          <h2>Devices</h2>
-          <div class="empty-state-container">
-            <p class="empty-state">No devices found. Add your first device to get started.</p>
-            <button id="add-device-btn" class="primary-btn">Add Device</button>
+          <div class="header-with-action">
+            <h2>Devices</h2>
+            <button id="scan-btn" class="secondary-btn">Scan for Devices</button>
+          </div>
+
+          <div id="discovery-section" class="hidden">
+            <h3>Discovered Devices</h3>
+            <div id="discovery-list">
+              <div class="scanning-indicator">
+                <div class="spinner"></div>
+                <span>Scanning for nearby devices...</span>
+              </div>
+            </div>
+            <p id="no-discovery-hint" class="empty-state hidden">No new devices found on your network.</p>
+          </div>
+
+          <div id="paired-section">
+            <h3>Your Devices</h3>
+            <div id="paired-list"></div>
+            <div id="devices-empty" class="empty-state-container">
+              <p class="empty-state">No devices paired yet. Start scanning to connect your first device.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pairing Modal -->
+        <div id="pairing-modal" class="modal hidden">
+          <div class="modal-content">
+            <h3>Pair Device</h3>
+            <p>Enter the 4-digit PIN shown on the other device:</p>
+            <div class="pin-display">
+              <span class="pin-digit">?</span>
+              <span class="pin-digit">?</span>
+              <span class="pin-digit">?</span>
+              <span class="pin-digit">?</span>
+            </div>
+            <div class="modal-actions">
+              <button id="pairing-cancel-btn" class="secondary-btn">Cancel</button>
+              <button id="pairing-confirm-btn" class="primary-btn">Confirm PIN</button>
+            </div>
           </div>
         </div>
         <div id="view-clipboard" class="view">

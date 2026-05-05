@@ -1,13 +1,19 @@
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
+    Manager,
 };
 
 use cdus_common::{IpcMessage, ClipboardEvent};
 use interprocess::local_socket::LocalSocketStream;
 use std::io::{Read, Write};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use std::thread;
+use std::sync::Mutex;
+
+struct AppState {
+    last_synced: Mutex<Option<SystemTime>>,
+}
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -63,7 +69,7 @@ fn set_clipboard(content: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn get_clipboard_history(limit: u32) -> Result<Vec<ClipboardEvent>, String> {
+fn get_clipboard_history(state: tauri::State<'_, AppState>, limit: u32) -> Result<Vec<ClipboardEvent>, String> {
     let socket_name = "/tmp/cdus-agent.sock";
     let mut stream = LocalSocketStream::connect(socket_name)
         .map_err(|e| format!("Failed to connect to agent: {}", e))?;
@@ -77,7 +83,13 @@ fn get_clipboard_history(limit: u32) -> Result<Vec<ClipboardEvent>, String> {
     let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
 
     match response {
-        IpcMessage::HistoryResponse(history) => Ok(history),
+        IpcMessage::HistoryResponse(history) => {
+            if !history.is_empty() {
+                let mut ls = state.last_synced.lock().unwrap();
+                *ls = Some(SystemTime::now());
+            }
+            Ok(history)
+        },
         IpcMessage::Log(err) => Err(err),
         _ => Err("Unexpected response from agent".to_string()),
     }
@@ -127,6 +139,7 @@ fn set_state(key: String, value: String) -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(AppState { last_synced: Mutex::new(None) })
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -135,7 +148,7 @@ pub fn run() {
             
             let menu = Menu::with_items(app, &[&status_i, &separator, &quit_i])?;
 
-            let _tray = TrayIconBuilder::new()
+            let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .show_menu_on_left_click(true)
@@ -147,8 +160,11 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Status update thread
+            // Status and Tooltip update thread
             let status_handle = status_i.clone();
+            let tray_handle = tray.clone();
+            let app_handle = app.handle().clone();
+
             thread::spawn(move || loop {
                 let online = check_agent_online();
                 let label = if online {
@@ -157,6 +173,27 @@ pub fn run() {
                     "Status: Offline (Agent Disconnected)"
                 };
                 let _ = status_handle.set_text(label);
+                
+                // Update tooltip
+                let state = app_handle.state::<AppState>();
+                let last_synced = {
+                    let ls = state.last_synced.lock().unwrap();
+                    *ls
+                };
+                
+                let tooltip = match last_synced {
+                    Some(time) => {
+                        let elapsed = time.elapsed().unwrap_or(Duration::from_secs(0)).as_secs();
+                        if elapsed < 60 {
+                            format!("CDUS - Last synced: {}s ago", elapsed)
+                        } else {
+                            format!("CDUS - Last synced: {}m ago", elapsed / 60)
+                        }
+                    }
+                    None => "CDUS - No sync yet".to_string(),
+                };
+                let _ = tray_handle.set_tooltip(Some(tooltip));
+                
                 thread::sleep(Duration::from_secs(5));
             });
 

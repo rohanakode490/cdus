@@ -172,7 +172,7 @@ fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Opt
                 }
                 IpcMessage::ClipboardChanged(content) => {
                     info!("Syncing clipboard content: {}", content);
-                    if let Err(e) = store.append_event(content.as_bytes()) {
+                    if let Err(e) = store.append_event(content.as_bytes(), "Local") {
                         error!("Failed to store clipboard event: {}", e);
                     }
                 }
@@ -348,5 +348,8 @@ mod tests {
         
         let db_payload: Vec<u8> = events_conn.query_row("SELECT payload FROM events LIMIT 1", [], |r| r.get::<_, Vec<u8>>(0)).unwrap();
         assert_eq!(String::from_utf8(db_payload).unwrap(), content);
+
+        let db_source: String = events_conn.query_row("SELECT source FROM events LIMIT 1", [], |r| r.get::<_, String>(0)).unwrap();
+        assert_eq!(db_source, "Local");
     }
 }

@@ -28,6 +28,7 @@ impl Store {
             "CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 payload BLOB NOT NULL,
+                source TEXT NOT NULL,
                 hash TEXT NOT NULL,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )",
@@ -48,7 +49,7 @@ impl Store {
         })
     }
 
-    pub fn append_event(&self, payload: &[u8]) -> Result<String> {
+    pub fn append_event(&self, payload: &[u8], source: &str) -> Result<String> {
         let conn = self.events_conn.lock().unwrap();
         
         let last_hash: Option<String> = conn.query_row(
@@ -64,14 +65,15 @@ impl Store {
             hasher.update(b"CDUS_GENESIS");
         }
         hasher.update(payload);
+        hasher.update(source.as_bytes());
         let new_hash = hasher.finalize().to_hex().to_string();
 
         conn.execute(
-            "INSERT INTO events (payload, hash) VALUES (?1, ?2)",
-            (payload, &new_hash),
+            "INSERT INTO events (payload, source, hash) VALUES (?1, ?2, ?3)",
+            (payload, source, &new_hash),
         )?;
 
-        info!("Appended event with hash: {}", new_hash);
+        info!("Appended event from {} with hash: {}", source, new_hash);
         Ok(new_hash)
     }
 
@@ -79,7 +81,7 @@ impl Store {
         let conn = self.events_conn.lock().unwrap();
         
         let mut stmt = conn.prepare(
-            "SELECT id, payload, timestamp FROM events ORDER BY id DESC LIMIT ?"
+            "SELECT id, payload, source, timestamp FROM events ORDER BY id DESC LIMIT ?"
         )?;
         
         let event_iter = stmt.query_map([limit], |row| {
@@ -87,7 +89,8 @@ impl Store {
             Ok(ClipboardEvent {
                 id: row.get(0)?,
                 content: String::from_utf8(payload).unwrap_or_else(|_| "[invalid utf8]".to_string()),
-                timestamp: row.get(2)?,
+                source: row.get(2)?,
+                timestamp: row.get(3)?,
             })
         })?;
 
@@ -127,9 +130,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = Store::init(dir.path()).unwrap();
 
-        let h1 = store.append_event(b"event1").unwrap();
-        let h2 = store.append_event(b"event2").unwrap();
-        let h3 = store.append_event(b"event3").unwrap();
+        let h1 = store.append_event(b"event1", "Local").unwrap();
+        let h2 = store.append_event(b"event2", "Remote").unwrap();
+        let h3 = store.append_event(b"event3", "Local").unwrap();
 
         assert_ne!(h1, h2);
         assert_ne!(h2, h3);
@@ -137,6 +140,7 @@ mod tests {
         let mut hasher = blake3::Hasher::new();
         hasher.update(b"CDUS_GENESIS");
         hasher.update(b"event1");
+        hasher.update(b"Local");
         let expected_h1 = hasher.finalize().to_hex().to_string();
         assert_eq!(h1, expected_h1);
     }
@@ -146,12 +150,14 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = Store::init(dir.path()).unwrap();
 
-        store.append_event(b"event1").unwrap();
-        store.append_event(b"event2").unwrap();
+        store.append_event(b"event1", "Local").unwrap();
+        store.append_event(b"event2", "iPhone").unwrap();
 
         let events = store.get_recent_events(10).unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].content, "event2");
+        assert_eq!(events[0].source, "iPhone");
         assert_eq!(events[1].content, "event1");
+        assert_eq!(events[1].source, "Local");
     }
 }

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct ClipboardEvent {
     pub id: i64,
     pub content: String,
+    pub source: String, // "Local" or remote device name
     pub timestamp: String,
 }
 
