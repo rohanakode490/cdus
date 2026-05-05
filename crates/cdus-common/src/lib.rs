@@ -1,11 +1,21 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+pub struct ClipboardEvent {
+    pub id: i64,
+    pub content: String,
+    pub timestamp: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum IpcMessage {
     Ping,
     Pong,
     Log(String),
     ClipboardChanged(String),
+    SetClipboard(String),
+    GetHistory { limit: u32 },
+    HistoryResponse(Vec<ClipboardEvent>),
 }
 
 #[cfg(test)]
