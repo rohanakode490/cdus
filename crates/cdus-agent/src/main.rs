@@ -185,8 +185,8 @@ async fn main() {
                                 IpcMessage::GetPairingStatus => {
                                     let pin = active_pin.lock().unwrap().clone();
                                     let resp_bytes = serde_json::to_vec(&IpcMessage::PairingStatusResponse { 
+                                        active: pin.is_some(),
                                         pin, 
-                                        active: true 
                                     }).unwrap();
                                     let _ = stream.write_all(&resp_bytes);
                                 }

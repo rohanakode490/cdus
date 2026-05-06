@@ -137,6 +137,27 @@ window.addEventListener("DOMContentLoaded", () => {
   let pairingInterval: any = null;
   let currentPairingDevice: any = null;
 
+  // Background check for incoming pairing requests
+  setInterval(async () => {
+    // Only poll if modal is NOT already open
+    if (pairingModal?.classList.contains("hidden")) {
+      try {
+        const [pin, active]: [string | null, boolean] = await invoke("get_pairing_status");
+        if (active && pin) {
+          console.log("Detected incoming pairing request!");
+          showPairingModal({ id: "remote", name: "Remote Device", os: "Unknown" });
+          const digits = document.querySelectorAll(".pin-digit");
+          digits.forEach((el, i) => {
+            el.textContent = pin[i];
+          });
+          startPairingPoll();
+        }
+      } catch (err) {
+        // Silently ignore background poll errors
+      }
+    }
+  }, 2000);
+
   async function updateDiscoveryList() {
     if (!discoveryList) return;
     
