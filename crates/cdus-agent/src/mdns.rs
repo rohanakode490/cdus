@@ -79,7 +79,9 @@ impl MdnsManager {
             info!("mDNS discovery started");
 
             while *is_scanning.lock().unwrap() {
+                info!("mDNS discovery started 2");
                 if let Ok(event) = receiver.recv_timeout(std::time::Duration::from_millis(500)) {
+                    info!("mDNS discovery started 3");
                     match event {
                         ServiceEvent::ServiceFound(ty, name) => {
                             info!("mDNS service found: {} (type: {})", name, ty);
@@ -99,7 +101,9 @@ impl MdnsManager {
                         }
                         _ => {}
                     }
+                    info!("mDNS discovery started 4");
                 }
+                info!("mDNS discovery started 5");
             }
             info!("mDNS discovery stopped");
         });

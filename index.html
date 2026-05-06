@@ -40,6 +40,16 @@
             <p id="no-discovery-hint" class="empty-state hidden">No new devices found on your network.</p>
           </div>
 
+          <div id="manual-connect-section" class="card">
+            <h3>Manual Connect</h3>
+            <div class="manual-connect-row">
+              <input type="text" id="manual-ip" placeholder="127.0.0.1" value="127.0.0.1" />
+              <input type="number" id="manual-port" placeholder="5200" value="5200" style="width: 80px;" />
+              <button id="manual-connect-btn" class="secondary-btn">Connect</button>
+            </div>
+            <p class="setting-hint">Use this if mDNS discovery is not working on your network.</p>
+          </div>
+
           <div id="paired-section">
             <h3>Your Devices</h3>
             <div id="paired-list"></div>

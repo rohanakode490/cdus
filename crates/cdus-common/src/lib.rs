@@ -26,6 +26,7 @@ pub enum IpcMessage {
     GetDiscovered,
     DiscoveredResponse(Vec<(String, String, String, String)>),
     PairWith { node_id: String },
+    PairWithIp { ip: String, port: u16 },
     PairingPin(String),
     ConfirmPairing(bool),
     PairingResult { success: bool, node_id: String, label: String },

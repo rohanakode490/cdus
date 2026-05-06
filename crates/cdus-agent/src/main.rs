@@ -161,7 +161,7 @@ async fn main() {
                                     let list = discovered_devices.lock().unwrap();
                                     if let Some((_, _, _, ip)) = list.iter().find(|(id, _, _, _)| id == &node_id) {
                                         if let Ok(ip_addr) = ip.parse() {
-                                            let addr = SocketAddr::new(ip_addr, 5200); // Fixed for now, or fetch from mDNS result
+                                            let addr = SocketAddr::new(ip_addr, 5200); // Default, or handle better
                                             let pm_init = Arc::clone(&pm);
                                             tokio::spawn(async move {
                                                 pm_init.initiate_pairing(addr).await;
@@ -169,6 +169,17 @@ async fn main() {
                                             let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Pairing initiated".to_string())).unwrap();
                                             let _ = stream.write_all(&resp_bytes);
                                         }
+                                    }
+                                }
+                                IpcMessage::PairWithIp { ip, port } => {
+                                    if let Ok(ip_addr) = ip.parse() {
+                                        let addr = SocketAddr::new(ip_addr, port);
+                                        let pm_init = Arc::clone(&pm);
+                                        tokio::spawn(async move {
+                                            pm_init.initiate_pairing(addr).await;
+                                        });
+                                        let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Manual pairing initiated".to_string())).unwrap();
+                                        let _ = stream.write_all(&resp_bytes);
                                     }
                                 }
                                 IpcMessage::GetPairingStatus => {

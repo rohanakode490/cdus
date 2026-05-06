@@ -307,6 +307,20 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  document.querySelector("#manual-connect-btn")?.addEventListener("click", async () => {
+    const ip = (document.querySelector("#manual-ip") as HTMLInputElement).value;
+    const port = parseInt((document.querySelector("#manual-port") as HTMLInputElement).value);
+    
+    try {
+      await invoke("manual_pair", { ip, port });
+      showPairingModal({ id: `manual-${ip}`, name: `Manual (${ip})`, os: "Unknown" });
+      startPairingPoll();
+    } catch (err) {
+      console.error("Manual pairing failed:", err);
+      alert("Failed to connect to IP.");
+    }
+  });
+
   // --- End Q2 Real Logic ---
 
   document.querySelector("#send-file-btn")?.addEventListener("click", () => {
