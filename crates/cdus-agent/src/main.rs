@@ -74,7 +74,7 @@ async fn main() {
     let store = Arc::new(store);
 
     // Initialize or load device identity
-    let (node_id, private_key) = store.get_or_create_identity().expect("Failed to initialize identity");
+    let (node_id, private_key) = store.get_or_create_identity(data_dir).expect("Failed to initialize identity");
     let label = store.get_state("device_name").unwrap().unwrap_or_else(|| "Unknown".to_string());
     info!("Device identity initialized. Node ID: {}", node_id);
 

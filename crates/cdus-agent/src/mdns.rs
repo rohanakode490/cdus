@@ -81,11 +81,16 @@ impl MdnsManager {
             while *is_scanning.lock().unwrap() {
                 if let Ok(event) = receiver.recv_timeout(std::time::Duration::from_millis(500)) {
                     match event {
+                        ServiceEvent::ServiceFound(ty, name) => {
+                            info!("mDNS service found: {} (type: {})", name, ty);
+                        }
                         ServiceEvent::ServiceResolved(info) => {
                             let node_id = info.get_property_val_str("node_id").unwrap_or_default().to_string();
                             let label = info.get_property_val_str("label").unwrap_or_else(|| info.get_fullname()).to_string();
                             let os = info.get_property_val_str("os").unwrap_or("Unknown").to_string();
                             let ip = info.get_addresses().iter().next().map(|addr| addr.to_string()).unwrap_or_default();
+                            
+                            info!("mDNS resolved service: {} at {}", label, ip);
                             
                             if !node_id.is_empty() && !ip.is_empty() {
                                 info!("Discovered CDUS device: {} ({}) at {}", label, node_id, ip);

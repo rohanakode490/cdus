@@ -119,11 +119,16 @@ impl Store {
         ).optional()
     }
 
-    pub fn get_or_create_identity(&self) -> anyhow::Result<(String, Vec<u8>)> {
+    pub fn get_or_create_identity(&self, data_dir: &Path) -> anyhow::Result<(String, Vec<u8>)> {
         use keyring::Entry;
 
+        // Create a unique service name for the keychain based on the data directory
+        // This allows multiple instances on the same machine to have separate keys
+        let dir_hash = blake3::hash(data_dir.to_string_lossy().as_bytes()).to_hex().to_string();
+        let service_name = format!("com.cdus.agent.{}", &dir_hash[..8]);
+
         if let Some(node_id) = self.get_state("node_id")? {
-            let entry = Entry::new("com.cdus.agent", "private_key")?;
+            let entry = Entry::new(&service_name, "private_key")?;
             if let Ok(priv_key_hex) = entry.get_password() {
                 if let Ok(priv_key) = hex::decode(priv_key_hex) {
                     return Ok((node_id, priv_key));
@@ -131,7 +136,7 @@ impl Store {
             }
         }
 
-        info!("No identity found, generating new x25519 keypair for Noise...");
+        info!("No identity found for {}, generating new x25519 keypair...", service_name);
         
         let mut csprng = rand::rngs::OsRng;
         let mut priv_bytes = [0u8; 32];
@@ -141,12 +146,12 @@ impl Store {
         
         self.set_state("node_id", &node_id)?;
         
-        let entry = Entry::new("com.cdus.agent", "private_key")?;
+        let entry = Entry::new(&service_name, "private_key")?;
         entry.set_password(&hex::encode(&priv_bytes))?;
         
         if self.get_state("device_name")?.is_none() {
             let hostname = gethostname::gethostname().into_string().unwrap_or_else(|_| "Unknown Device".to_string());
-            self.set_state("device_name", &hostname)?;
+            self.set_state("device_name", &format!("{} ({})", hostname, &dir_hash[..4]))?;
         }
 
         Ok((node_id, priv_bytes.to_vec()))
