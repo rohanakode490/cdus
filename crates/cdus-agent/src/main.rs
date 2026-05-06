@@ -14,6 +14,15 @@ use std::net::SocketAddr;
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+
+    #[arg(short, long, default_value = "5200")]
+    port: u16,
+
+    #[arg(short, long, default_value = "/tmp/cdus-agent.sock")]
+    socket: String,
+
+    #[arg(long)]
+    data_dir: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -48,9 +57,17 @@ async fn main() {
         None => {}
     }
 
-    let config_dir = ProjectDirs::from("com", "cdus", "agent")
-        .expect("Failed to get config directory");
-    let data_dir = config_dir.data_dir();
+    let data_dir_buf;
+    let data_dir = if let Some(ref d) = cli.data_dir {
+        data_dir_buf = std::path::PathBuf::from(d);
+        &data_dir_buf
+    } else {
+        let config_dir = ProjectDirs::from("com", "cdus", "agent")
+            .expect("Failed to get config directory");
+        data_dir_buf = config_dir.data_dir().to_path_buf();
+        &data_dir_buf
+    };
+
     std::fs::create_dir_all(data_dir).expect("Failed to create data directory");
 
     let store = Store::init(data_dir).expect("Failed to initialize store");
@@ -63,20 +80,20 @@ async fn main() {
 
     // Start mDNS registration
     let mdns = MdnsManager::new();
-    mdns.register_device(&node_id, &label);
+    mdns.register_device(&node_id, &label, cli.port);
     let mdns = Arc::new(mdns);
 
     let (tx, rx) = flume::unbounded::<IpcMessage>();
 
     // Start Pairing Manager
-    let pm = PairingManager::new(Arc::clone(&store), tx.clone(), node_id, private_key);
+    let pm = PairingManager::new(Arc::clone(&store), tx.clone(), node_id, private_key, cli.port);
     let pm = Arc::new(pm);
     let pm_clone = Arc::clone(&pm);
     tokio::spawn(async move {
         pm_clone.start_listener().await;
     });
 
-    info!("CDUS Agent starting...");
+    info!("CDUS Agent starting on port {}...", cli.port);
 
     // Shared state for loop prevention
     let last_written = Arc::new(Mutex::new(None::<String>));
@@ -103,9 +120,9 @@ async fn main() {
     });
 
     // Setup IPC listener
-    let socket_name = "/tmp/cdus-agent.sock";
-    let _ = std::fs::remove_file(socket_name);
-    let listener = LocalSocketListener::bind(socket_name).expect("Failed to bind local socket");
+    let socket_name = cli.socket.clone();
+    let _ = std::fs::remove_file(&socket_name);
+    let listener = LocalSocketListener::bind(&*socket_name).expect("Failed to bind local socket");
 
     info!("IPC Listener bound to {}", socket_name);
 
@@ -144,7 +161,7 @@ async fn main() {
                                     let list = discovered_devices.lock().unwrap();
                                     if let Some((_, _, _, ip)) = list.iter().find(|(id, _, _, _)| id == &node_id) {
                                         if let Ok(ip_addr) = ip.parse() {
-                                            let addr = SocketAddr::new(ip_addr, 5200);
+                                            let addr = SocketAddr::new(ip_addr, 5200); // Fixed for now, or fetch from mDNS result
                                             let pm_init = Arc::clone(&pm);
                                             tokio::spawn(async move {
                                                 pm_init.initiate_pairing(addr).await;

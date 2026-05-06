@@ -22,11 +22,10 @@ impl MdnsManager {
         }
     }
 
-    pub fn register_device(&self, node_id: &str, label: &str) {
+    pub fn register_device(&self, node_id: &str, label: &str, port: u16) {
         let service_type = "_cdus._tcp.local.";
         let instance_name = node_id;
         let host_name = format!("{}.local.", node_id);
-        let port = 5200u16;
 
         let mut properties = HashMap::new();
         properties.insert("label".to_string(), label.to_string());

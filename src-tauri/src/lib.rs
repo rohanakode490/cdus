@@ -15,6 +15,10 @@ struct AppState {
     last_synced: Mutex<Option<SystemTime>>,
 }
 
+fn get_socket_path() -> String {
+    std::env::var("CDUS_AGENT_SOCKET").unwrap_or_else(|_| "/tmp/cdus-agent.sock".to_string())
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -22,7 +26,7 @@ fn greet(name: &str) -> String {
 }
 
 fn check_agent_online() -> bool {
-    let socket_name = "/tmp/cdus-agent.sock";
+    let socket_name = get_socket_path();
     match LocalSocketStream::connect(socket_name) {
         Ok(mut stream) => {
             let msg = IpcMessage::Ping;
@@ -53,7 +57,7 @@ fn ping_agent() -> Result<String, String> {
 
 #[tauri::command]
 fn set_clipboard(content: String) -> Result<String, String> {
-    let socket_name = "/tmp/cdus-agent.sock";
+    let socket_name = get_socket_path();
     let mut stream = LocalSocketStream::connect(socket_name)
         .map_err(|e| format!("Failed to connect to agent: {}", e))?;
 
@@ -70,7 +74,7 @@ fn set_clipboard(content: String) -> Result<String, String> {
 
 #[tauri::command]
 fn get_clipboard_history(state: tauri::State<'_, AppState>, limit: u32) -> Result<Vec<ClipboardEvent>, String> {
-    let socket_name = "/tmp/cdus-agent.sock";
+    let socket_name = get_socket_path();
     let mut stream = LocalSocketStream::connect(socket_name)
         .map_err(|e| format!("Failed to connect to agent: {}", e))?;
 
@@ -97,7 +101,7 @@ fn get_clipboard_history(state: tauri::State<'_, AppState>, limit: u32) -> Resul
 
 #[tauri::command]
 fn get_state(key: String) -> Result<Option<String>, String> {
-    let socket_name = "/tmp/cdus-agent.sock";
+    let socket_name = get_socket_path();
     let mut stream = LocalSocketStream::connect(socket_name)
         .map_err(|e| format!("Failed to connect to agent: {}", e))?;
 
@@ -118,7 +122,7 @@ fn get_state(key: String) -> Result<Option<String>, String> {
 
 #[tauri::command]
 fn set_state(key: String, value: String) -> Result<String, String> {
-    let socket_name = "/tmp/cdus-agent.sock";
+    let socket_name = get_socket_path();
     let mut stream = LocalSocketStream::connect(socket_name)
         .map_err(|e| format!("Failed to connect to agent: {}", e))?;
 
@@ -138,7 +142,7 @@ fn set_state(key: String, value: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn start_scan() -> Result<String, String> {
-    let socket_name = "/tmp/cdus-agent.sock";
+    let socket_name = get_socket_path();
     let mut stream = LocalSocketStream::connect(socket_name)
         .map_err(|e| format!("Failed to connect to agent: {}", e))?;
 
@@ -158,7 +162,7 @@ async fn start_scan() -> Result<String, String> {
 
 #[tauri::command]
 async fn stop_scan() -> Result<String, String> {
-    let socket_name = "/tmp/cdus-agent.sock";
+    let socket_name = get_socket_path();
     let mut stream = LocalSocketStream::connect(socket_name)
         .map_err(|e| format!("Failed to connect to agent: {}", e))?;
 
@@ -178,7 +182,7 @@ async fn stop_scan() -> Result<String, String> {
 
 #[tauri::command]
 async fn get_discovered_devices() -> Result<Vec<(String, String, String, String)>, String> {
-    let socket_name = "/tmp/cdus-agent.sock";
+    let socket_name = get_socket_path();
     let mut stream = LocalSocketStream::connect(socket_name)
         .map_err(|e| format!("Failed to connect to agent: {}", e))?;
 
@@ -198,7 +202,7 @@ async fn get_discovered_devices() -> Result<Vec<(String, String, String, String)
 
 #[tauri::command]
 async fn pair_with(node_id: String) -> Result<String, String> {
-    let socket_name = "/tmp/cdus-agent.sock";
+    let socket_name = get_socket_path();
     let mut stream = LocalSocketStream::connect(socket_name)
         .map_err(|e| format!("Failed to connect to agent: {}", e))?;
 
@@ -218,7 +222,7 @@ async fn pair_with(node_id: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn get_pairing_status() -> Result<(Option<String>, bool), String> {
-    let socket_name = "/tmp/cdus-agent.sock";
+    let socket_name = get_socket_path();
     let mut stream = LocalSocketStream::connect(socket_name)
         .map_err(|e| format!("Failed to connect to agent: {}", e))?;
 

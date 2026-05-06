@@ -1,5 +1,5 @@
 use snow::{Builder, params::NoiseParams};
-use std::net::{SocketAddr, IpAddr};
+use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{info, error};
@@ -13,16 +13,17 @@ pub struct PairingManager {
     ipc_tx: Sender<IpcMessage>,
     node_id: String,
     private_key: Vec<u8>,
+    port: u16,
 }
 
 impl PairingManager {
-    pub fn new(store: Arc<Store>, ipc_tx: Sender<IpcMessage>, node_id: String, private_key: Vec<u8>) -> Self {
-        Self { store, ipc_tx, node_id, private_key }
+    pub fn new(store: Arc<Store>, ipc_tx: Sender<IpcMessage>, node_id: String, private_key: Vec<u8>, port: u16) -> Self {
+        Self { store, ipc_tx, node_id, private_key, port }
     }
 
     pub async fn start_listener(&self) {
-        let addr = "0.0.0.0:5200";
-        let listener = match TcpListener::bind(addr).await {
+        let addr = format!("0.0.0.0:{}", self.port);
+        let listener = match TcpListener::bind(&addr).await {
             Ok(l) => l,
             Err(e) => {
                 error!("Failed to bind pairing listener on {}: {}", addr, e);
@@ -100,9 +101,6 @@ async fn handle_incoming_pairing(mut stream: TcpStream, _store: Arc<Store>, ipc_
     // Notify UI
     let _ = ipc_tx.send(IpcMessage::PairingPin(pin));
 
-    // Wait for UI confirmation (in a real app we'd need a channel here)
-    // For now we'll assume success if the handshake finished
-    
     Ok(())
 }
 
