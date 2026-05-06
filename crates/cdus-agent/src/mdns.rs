@@ -91,12 +91,13 @@ impl MdnsManager {
                             let label = info.get_property_val_str("label").unwrap_or_else(|| info.get_fullname()).to_string();
                             let os = info.get_property_val_str("os").unwrap_or("Unknown").to_string();
                             let ip = info.get_addresses().iter().next().map(|addr| addr.to_string()).unwrap_or_default();
+                            let port = info.get_port();
                             
-                            info!("mDNS resolved service: {} at {}", label, ip);
+                            info!("mDNS resolved service: {} at {}:{}", label, ip, port);
                             
                             if !node_id.is_empty() && !ip.is_empty() {
-                                info!("Discovered CDUS device: {} ({}) at {}", label, node_id, ip);
-                                let _ = tx.send(IpcMessage::DeviceDiscovered { node_id, label, os, ip });
+                                info!("Discovered CDUS device: {} ({}) at {}:{}", label, node_id, ip, port);
+                                let _ = tx.send(IpcMessage::DeviceDiscovered { node_id, label, os, ip, port });
                             }
                         }
                         _ => {}

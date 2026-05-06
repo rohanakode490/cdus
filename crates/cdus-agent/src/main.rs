@@ -117,7 +117,7 @@ async fn main() {
         clipboard_watcher(clipboard_tx, last_written_watcher);
     });
 
-    let discovered_devices = Arc::new(Mutex::new(Vec::<(String, String, String, String)>::new()));
+    let discovered_devices = Arc::new(Mutex::new(Vec::<(String, String, String, String, u16)>::new()));
     let discovered_devices_daemon = Arc::clone(&discovered_devices);
 
     // Start daemon logic thread
@@ -168,9 +168,9 @@ async fn main() {
                                 }
                                 IpcMessage::PairWith { node_id } => {
                                     let list = discovered_devices.lock().unwrap();
-                                    if let Some((_, _, _, ip)) = list.iter().find(|(id, _, _, _)| id == &node_id) {
+                                    if let Some((_, _, _, ip, port)) = list.iter().find(|(id, _, _, _, _)| id == &node_id) {
                                         if let Ok(ip_addr) = ip.parse() {
-                                            let addr = SocketAddr::new(ip_addr, 5200); // Default, or handle better
+                                            let addr = SocketAddr::new(ip_addr, *port);
                                             let pm_init = Arc::clone(&pm);
                                             tokio::spawn(async move {
                                                 pm_init.initiate_pairing(addr).await;
@@ -298,7 +298,7 @@ async fn main() {
     }).await.unwrap();
 }
 
-fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Option<usize>, store: Arc<Store>, last_written: Arc<Mutex<Option<String>>>, discovered_devices: Arc<Mutex<Vec<(String, String, String, String)>>>, active_pairing: Arc<Mutex<Option<ActivePairingState>>>) {
+fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Option<usize>, store: Arc<Store>, last_written: Arc<Mutex<Option<String>>>, discovered_devices: Arc<Mutex<Vec<(String, String, String, String, u16)>>>, _active_pairing: Arc<Mutex<Option<ActivePairingState>>>) {
     info!("Daemon logic thread started");
     use arboard::Clipboard;
     
@@ -339,24 +339,10 @@ fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Opt
                         error!("Clipboard not available in daemon loop");
                     }
                 }
-                IpcMessage::DeviceDiscovered { node_id, label, os, ip } => {
+                IpcMessage::DeviceDiscovered { node_id, label, os, ip, port } => {
                     let mut list = discovered_devices.lock().unwrap();
-                    if !list.iter().any(|(id, _, _, _)| id == &node_id) {
-                        list.push((node_id, label, os, ip));
-                    }
-                }
-                IpcMessage::PairingPin(pin) => {
-                    // This branch might be redundant now that pairing.rs updates active_pairing directly,
-                    // but we'll keep it for compatibility if needed.
-                    let mut ap = active_pairing.lock().unwrap();
-                    if ap.is_none() {
-                        *ap = Some(ActivePairingState {
-                            pin,
-                            is_initiator: false, // Default to false if we don't know
-                            remote_id: "unknown".to_string(),
-                            remote_label: "Unknown Device".to_string(),
-                            confirmed: Arc::new(Mutex::new(None)),
-                        });
+                    if !list.iter().any(|(id, _, _, _, _)| id == &node_id) {
+                        list.push((node_id, label, os, ip, port));
                     }
                 }
                 _ => {}

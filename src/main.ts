@@ -150,7 +150,7 @@ window.addEventListener("DOMContentLoaded", () => {
       try {
         const [pin, active, isInitiator, remoteLabel]: [string | null, boolean, boolean, string] = await invoke("get_pairing_status");
         if (active && pin) {
-          console.log("Detected incoming pairing request!");
+          console.log("Detected active pairing state. isInitiator:", isInitiator);
           showPairingModal({ id: "remote", name: remoteLabel, os: "Unknown" }, isInitiator);
           const digits = document.querySelectorAll(".pin-digit");
           digits.forEach((el, i) => {
@@ -162,23 +162,24 @@ window.addEventListener("DOMContentLoaded", () => {
         // Silently ignore background poll errors
       }
     }
-  }, 2000);
+  }, 1000);
 
   async function updateDiscoveryList() {
     if (!discoveryList) return;
     
     try {
-      const discovered: [string, string, string, string][] = await invoke("get_discovered_devices");
-      
-      // Filter out already paired devices
-      const availableDevices = discovered.filter(([id]) => !pairedDeviceIds.includes(id));
+      const discovered: [string, string, string, string, number][] = await invoke("get_discovered_devices");
+      const selfNodeId: string | null = await invoke("get_state", { key: "node_id" });
+
+      // Filter out already paired devices AND self
+      const availableDevices = discovered.filter(([id]) => !pairedDeviceIds.includes(id) && id !== selfNodeId);
       
       if (availableDevices.length === 0) {
         return;
       }
 
       discoveryList.innerHTML = "";
-      availableDevices.forEach(([id, name, os, _ip]) => {
+      availableDevices.forEach(([id, name, os, _ip, _port]) => {
         const row = document.createElement("div");
         row.className = "device-row";
         row.innerHTML = `
@@ -236,16 +237,22 @@ window.addEventListener("DOMContentLoaded", () => {
     
     const modalTitle = pairingModal.querySelector("h3");
     const modalDesc = pairingModal.querySelector("p");
-    const confirmBtn = document.querySelector("#pairing-confirm-btn");
+    const confirmBtn = document.querySelector("#pairing-confirm-btn") as HTMLElement;
 
     if (isInitiator) {
+      console.log("UI: Acting as Initiator. Hiding confirm button.");
       if (modalTitle) modalTitle.textContent = "Waiting for Confirmation";
       if (modalDesc) modalDesc.textContent = `Please verify that the PIN below matches on ${device.name}. Waiting for them to confirm...`;
-      confirmBtn?.classList.add("hidden");
+      if (confirmBtn) {
+        confirmBtn.style.setProperty("display", "none", "important");
+      }
     } else {
+      console.log("UI: Acting as Responder. Showing confirm button.");
       if (modalTitle) modalTitle.textContent = "Pair Device";
       if (modalDesc) modalDesc.textContent = `Incoming pairing request from ${device.name}. Enter the 4-digit PIN shown on the other device:`;
-      confirmBtn?.classList.remove("hidden");
+      if (confirmBtn) {
+        confirmBtn.style.setProperty("display", "block", "important");
+      }
     }
     
     // Placeholder while waiting for real PIN from agent

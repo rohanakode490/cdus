@@ -130,33 +130,55 @@ impl Store {
         ).optional()
     }
 
-    pub fn get_or_create_identity(&self, data_dir: &Path) -> anyhow::Result<(String, Vec<u8>)> {
+    pub fn get_or_create_identity(&self, data_dir: &std::path::Path) -> anyhow::Result<(String, Vec<u8>)> {
         use keyring::Entry;
+        use snow::{Builder, params::NoiseParams};
+
+        let params: NoiseParams = "Noise_XX_25519_ChaChaPoly_BLAKE2s".parse()?;
+        let builder = Builder::new(params.clone());
 
         // Create a unique service name for the keychain based on the data directory
-        // This allows multiple instances on the same machine to have separate keys
         let dir_hash = blake3::hash(data_dir.to_string_lossy().as_bytes()).to_hex().to_string();
         let service_name = format!("com.cdus.agent.{}", &dir_hash[..8]);
 
-        if let Some(node_id) = self.get_state("node_id")? {
+        if let Some(existing_id) = self.get_state("node_id")? {
             let entry = Entry::new(&service_name, "private_key")?;
             if let Ok(priv_key_hex) = entry.get_password() {
-                if let Ok(priv_key) = hex::decode(priv_key_hex) {
-                    return Ok((node_id, priv_key));
+                if let Ok(priv_bytes) = hex::decode(priv_key_hex) {
+                    // VERIFY: Does existing_id match the public key of these priv_bytes?
+                    // We generate a keypair from the private key to get the corresponding public key.
+                    let mut temp_builder = Builder::new(params);
+                    temp_builder = temp_builder.local_private_key(&priv_bytes);
+                    
+                    // Since snow doesn't easily expose deriving public from private without building,
+                    // we use a trick: any Noise handshake will have the local static key.
+                    if let Ok(handshake) = temp_builder.build_initiator() {
+                        // In snow 0.9, we can't easily get the local static key back out of HandshakeState.
+                        // However, we KNOW the public key is correct if we generated it ourselves.
+                        // For legacy migration, we'll just check if the ID is 64 hex chars (32 bytes).
+                        // If it's a blake3 hash (also 64 chars), we might collide, so let's be safer.
+                        if existing_id.len() == 64 && !existing_id.starts_with("0000") { // Crude check
+                            // If it's already a hex string of correct length, we'll assume it's fine for now
+                            // OR we could regenerate once to be absolutely sure.
+                            // Let's force a migration by checking a flag.
+                            if self.get_state("id_migrated_v2")?.is_some() {
+                                return Ok((existing_id, priv_bytes));
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        info!("No identity found for {}, generating new x25519 keypair...", service_name);
+        info!("Generating fresh Noise identity for {}...", service_name);
         
-        let mut csprng = rand::rngs::OsRng;
-        let mut priv_bytes = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut csprng, &mut priv_bytes);
-        
-        let node_id = blake3::hash(&priv_bytes).to_hex().to_string();
+        let keypair = builder.generate_keypair()?;
+        let priv_bytes = keypair.private;
+        let pub_bytes = keypair.public;
+        let node_id = hex::encode(&pub_bytes);
         
         self.set_state("node_id", &node_id)?;
-        
+        self.set_state("id_migrated_v2", "true")?;
         let entry = Entry::new(&service_name, "private_key")?;
         entry.set_password(&hex::encode(&priv_bytes))?;
         
@@ -165,7 +187,7 @@ impl Store {
             self.set_state("device_name", &format!("{} ({})", hostname, &dir_hash[..4]))?;
         }
 
-        Ok((node_id, priv_bytes.to_vec()))
+        Ok((node_id, priv_bytes))
     }
 
     pub fn add_paired_device(&self, node_id: &str, label: &str) -> Result<()> {

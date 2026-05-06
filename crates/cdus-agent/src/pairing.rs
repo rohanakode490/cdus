@@ -44,8 +44,9 @@ impl PairingManager {
                     let ipc_tx = self.ipc_tx.clone();
                     let priv_key = self.private_key.clone();
                     let active_pairing = Arc::clone(&self.active_pairing);
+                    let self_node_id = self.node_id.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_incoming_pairing(stream, store, ipc_tx, priv_key, active_pairing).await {
+                        if let Err(e) = handle_incoming_pairing(stream, store, ipc_tx, priv_key, active_pairing, self_node_id).await {
                             error!("Error in incoming pairing: {}", e);
                         }
                     });
@@ -68,16 +69,17 @@ impl PairingManager {
         let ipc_tx = self.ipc_tx.clone();
         let priv_key = self.private_key.clone();
         let active_pairing = Arc::clone(&self.active_pairing);
+        let self_node_id = self.node_id.clone();
         
         tokio::spawn(async move {
-            if let Err(e) = handle_outgoing_pairing(stream, store, ipc_tx, priv_key, active_pairing).await {
+            if let Err(e) = handle_outgoing_pairing(stream, store, ipc_tx, priv_key, active_pairing, self_node_id).await {
                 error!("Error in outgoing pairing: {}", e);
             }
         });
     }
 }
 
-async fn handle_incoming_pairing(mut stream: TcpStream, store: Arc<Store>, ipc_tx: Sender<IpcMessage>, priv_key: Vec<u8>, active_pairing: Arc<Mutex<Option<ActivePairingState>>>) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_incoming_pairing(mut stream: TcpStream, store: Arc<Store>, ipc_tx: Sender<IpcMessage>, priv_key: Vec<u8>, active_pairing: Arc<Mutex<Option<ActivePairingState>>>, self_node_id: String) -> Result<(), Box<dyn std::error::Error>> {
     info!("Handling incoming pairing request");
     
     let self_label = store.get_state("device_name")?.unwrap_or_else(|| "Unknown Device".to_string());
@@ -108,6 +110,13 @@ async fn handle_incoming_pairing(mut stream: TcpStream, store: Arc<Store>, ipc_t
     let pin = derive_pin(h);
     let remote_node_id = hex::encode(noise.get_remote_static().unwrap());
     
+    info!("Handshake comparison: self={} remote={}", self_node_id, remote_node_id);
+    
+    if remote_node_id == self_node_id {
+        error!("Self-pairing detected in incoming. Aborting.");
+        return Err("Self-pairing not allowed".into());
+    }
+
     info!("Incoming pairing PIN: {} from {} ({})", pin, initiator_label, remote_node_id);
     
     // Update state
@@ -166,7 +175,7 @@ async fn handle_incoming_pairing(mut stream: TcpStream, store: Arc<Store>, ipc_t
     Ok(())
 }
 
-async fn handle_outgoing_pairing(mut stream: TcpStream, store: Arc<Store>, ipc_tx: Sender<IpcMessage>, priv_key: Vec<u8>, active_pairing: Arc<Mutex<Option<ActivePairingState>>>) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_outgoing_pairing(mut stream: TcpStream, store: Arc<Store>, ipc_tx: Sender<IpcMessage>, priv_key: Vec<u8>, active_pairing: Arc<Mutex<Option<ActivePairingState>>>, self_node_id: String) -> Result<(), Box<dyn std::error::Error>> {
     info!("Initiating outgoing pairing request");
 
     let self_label = store.get_state("device_name")?.unwrap_or_else(|| "Unknown Device".to_string());
@@ -197,6 +206,13 @@ async fn handle_outgoing_pairing(mut stream: TcpStream, store: Arc<Store>, ipc_t
     let pin = derive_pin(h);
     let remote_node_id = hex::encode(noise.get_remote_static().unwrap());
     
+    info!("Handshake comparison: self={} remote={}", self_node_id, remote_node_id);
+    
+    if remote_node_id == self_node_id {
+        error!("Self-pairing detected in outgoing. Aborting.");
+        return Err("Self-pairing not allowed".into());
+    }
+
     info!("Outgoing pairing PIN: {} for {} ({})", pin, responder_label, remote_node_id);
 
     // Update state

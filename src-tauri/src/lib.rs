@@ -181,7 +181,7 @@ async fn stop_scan() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn get_discovered_devices() -> Result<Vec<(String, String, String, String)>, String> {
+async fn get_discovered_devices() -> Result<Vec<(String, String, String, String, u16)>, String> {
     let socket_name = get_socket_path();
     let mut stream = LocalSocketStream::connect(socket_name)
         .map_err(|e| format!("Failed to connect to agent: {}", e))?;
