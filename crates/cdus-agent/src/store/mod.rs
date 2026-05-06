@@ -35,13 +35,24 @@ impl Store {
             [],
         )?;
 
+        // State table for simple key-value settings
         state_conn.execute(
             "CREATE TABLE IF NOT EXISTS state (
                 key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
+                value TEXT
             )",
             [],
         )?;
+
+        // Paired devices table
+        state_conn.execute(
+            "CREATE TABLE IF NOT EXISTS paired_devices (
+                node_id TEXT PRIMARY KEY,
+                label TEXT
+            )",
+            [],
+        )?;
+
 
         Ok(Store {
             events_conn: Mutex::new(events_conn),
@@ -155,6 +166,38 @@ impl Store {
         }
 
         Ok((node_id, priv_bytes.to_vec()))
+    }
+
+    pub fn add_paired_device(&self, node_id: &str, label: &str) -> Result<()> {
+        let conn = self.state_conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO paired_devices (node_id, label) VALUES (?1, ?2)",
+            (node_id, label),
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_paired_device(&self, node_id: &str) -> Result<()> {
+        let conn = self.state_conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM paired_devices WHERE node_id = ?",
+            [node_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_paired_devices(&self) -> Result<Vec<(String, String)>> {
+        let conn = self.state_conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT node_id, label FROM paired_devices")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+
+        let mut devices = Vec::new();
+        for row in rows {
+            devices.push(row?);
+        }
+        Ok(devices)
     }
 }
 

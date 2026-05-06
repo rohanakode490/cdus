@@ -88,12 +88,18 @@ window.addEventListener("DOMContentLoaded", () => {
       if (targetViewId === "clipboard") {
         renderClipboard();
       }
+      if (targetViewId === "devices") {
+        renderPairedDevices();
+      }
     });
   });
 
   const activeView = document.querySelector(".view.active");
   if (activeView?.id === "view-clipboard") {
     renderClipboard();
+  }
+  if (activeView?.id === "view-devices") {
+    renderPairedDevices();
   }
 
   const limitSlider = document.querySelector("#clipboard-limit") as HTMLInputElement;
@@ -142,10 +148,10 @@ window.addEventListener("DOMContentLoaded", () => {
     // Only poll if modal is NOT already open
     if (pairingModal?.classList.contains("hidden")) {
       try {
-        const [pin, active]: [string | null, boolean] = await invoke("get_pairing_status");
+        const [pin, active, isInitiator, remoteLabel]: [string | null, boolean, boolean, string] = await invoke("get_pairing_status");
         if (active && pin) {
           console.log("Detected incoming pairing request!");
-          showPairingModal({ id: "remote", name: "Remote Device", os: "Unknown" });
+          showPairingModal({ id: "remote", name: remoteLabel, os: "Unknown" }, isInitiator);
           const digits = document.querySelectorAll(".pin-digit");
           digits.forEach((el, i) => {
             el.textContent = pin[i];
@@ -186,8 +192,7 @@ window.addEventListener("DOMContentLoaded", () => {
         row.querySelector(".connect-btn")?.addEventListener("click", async () => {
           try {
             await invoke("pair_with", { nodeId: id });
-            showPairingModal({ id, name, os });
-            startPairingPoll();
+            // Note: Modal will be shown by background poll once agent updates state
           } catch (err) {
             console.error("Failed to initiate pairing:", err);
             alert("Failed to connect to device.");
@@ -206,7 +211,7 @@ window.addEventListener("DOMContentLoaded", () => {
     
     pairingInterval = setInterval(async () => {
       try {
-        const [pin, active]: [string | null, boolean] = await invoke("get_pairing_status");
+        const [pin, active, _isInitiator, _remoteLabel]: [string | null, boolean, boolean, string] = await invoke("get_pairing_status");
         if (pin) {
           const digits = document.querySelectorAll(".pin-digit");
           digits.forEach((el, i) => {
@@ -215,6 +220,8 @@ window.addEventListener("DOMContentLoaded", () => {
         }
         if (!active && pairingInterval) {
           clearInterval(pairingInterval);
+          pairingModal?.classList.add("hidden");
+          renderPairedDevices(); // Refresh list to show success
         }
       } catch (err) {
         console.error("Error polling pairing status:", err);
@@ -222,10 +229,24 @@ window.addEventListener("DOMContentLoaded", () => {
     }, 1000);
   }
 
-  function showPairingModal(device: any) {
+  function showPairingModal(device: any, isInitiator: boolean) {
     if (!pairingModal) return;
     currentPairingDevice = device;
     pairingModal.classList.remove("hidden");
+    
+    const modalTitle = pairingModal.querySelector("h3");
+    const modalDesc = pairingModal.querySelector("p");
+    const confirmBtn = document.querySelector("#pairing-confirm-btn");
+
+    if (isInitiator) {
+      if (modalTitle) modalTitle.textContent = "Waiting for Confirmation";
+      if (modalDesc) modalDesc.textContent = `Please verify that the PIN below matches on ${device.name}. Waiting for them to confirm...`;
+      confirmBtn?.classList.add("hidden");
+    } else {
+      if (modalTitle) modalTitle.textContent = "Pair Device";
+      if (modalDesc) modalDesc.textContent = `Incoming pairing request from ${device.name}. Enter the 4-digit PIN shown on the other device:`;
+      confirmBtn?.classList.remove("hidden");
+    }
     
     // Placeholder while waiting for real PIN from agent
     const digits = document.querySelectorAll(".pin-digit");
@@ -234,42 +255,54 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  function renderPairedDevices() {
+  async function renderPairedDevices() {
     if (!pairedList) return;
-    pairedList.innerHTML = "";
     
-    if (pairedDeviceIds.length === 0) {
-      devicesEmpty?.classList.remove("hidden");
-      return;
-    }
+    try {
+      const devices: [string, string][] = await invoke("get_paired_devices");
+      pairedDeviceIds = devices.map(([id]) => id);
+      
+      pairedList.innerHTML = "";
+      
+      if (devices.length === 0) {
+        devicesEmpty?.classList.remove("hidden");
+        return;
+      }
 
-    devicesEmpty?.classList.add("hidden");
-    pairedDeviceIds.forEach(id => {
-      const row = document.createElement("div");
-      row.className = "device-row";
-      row.innerHTML = `
-        <div class="device-info">
-          <span class="device-name-label">Device ${id.substring(0, 8)}</span>
-          <div class="device-status">
-            <span class="status-dot online"></span>
-            <span class="device-type-label">Online</span>
+      devicesEmpty?.classList.add("hidden");
+      devices.forEach(([id, name]) => {
+        const row = document.createElement("div");
+        row.className = "device-row";
+        row.innerHTML = `
+          <div class="device-info">
+            <span class="device-name-label">${name}</span>
+            <div class="device-status">
+              <span class="status-dot online"></span>
+              <span class="device-type-label">Online</span>
+            </div>
           </div>
-        </div>
-        <button class="secondary-btn unpair-btn" data-id="${id}">Unpair</button>
-      `;
+          <button class="secondary-btn unpair-btn" data-id="${id}">Unpair</button>
+        `;
 
-      row.querySelector(".unpair-btn")?.addEventListener("click", () => {
-        unpairDevice(id);
+        row.querySelector(".unpair-btn")?.addEventListener("click", () => {
+          unpairDevice(id);
+        });
+
+        pairedList.appendChild(row);
       });
-
-      pairedList.appendChild(row);
-    });
+    } catch (err) {
+      console.error("Failed to render paired devices:", err);
+    }
   }
 
-  function unpairDevice(id: string) {
+  async function unpairDevice(id: string) {
     if (confirm("Are you sure you want to unpair this device?")) {
-      pairedDeviceIds = pairedDeviceIds.filter(pid => pid !== id);
-      renderPairedDevices();
+      try {
+        await invoke("unpair_device", { nodeId: id });
+        renderPairedDevices();
+      } catch (err) {
+        console.error("Failed to unpair device:", err);
+      }
     }
   }
 
@@ -308,23 +341,26 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  cancelPairingBtn?.addEventListener("click", () => {
+  cancelPairingBtn?.addEventListener("click", async () => {
+    try {
+      await invoke("confirm_pairing", { accepted: false });
+    } catch (err) {
+      console.error("Failed to cancel pairing on agent:", err);
+    }
     pairingModal?.classList.add("hidden");
     if (pairingInterval) clearInterval(pairingInterval);
     currentPairingDevice = null;
   });
 
-  confirmPairingBtn?.addEventListener("click", () => {
+  confirmPairingBtn?.addEventListener("click", async () => {
     if (currentPairingDevice) {
-      pairedDeviceIds.push(currentPairingDevice.id);
-      renderPairedDevices();
-      alert(`Device ${currentPairingDevice.name} paired successfully!`);
-      pairingModal?.classList.add("hidden");
-      if (pairingInterval) clearInterval(pairingInterval);
-      currentPairingDevice = null;
-      
-      discoveryList!.innerHTML = "<div class=\"scanning-indicator\"><div class=\"spinner\"></div><span>Scanning for nearby devices...</span></div>";
-      discoverySection?.classList.add("hidden");
+      try {
+        await invoke("confirm_pairing", { accepted: true });
+        // UI will be closed by startPairingPoll when active becomes false
+      } catch (err) {
+        console.error("Failed to confirm pairing on agent:", err);
+        alert("Failed to confirm pairing.");
+      }
     }
   });
 
@@ -334,8 +370,7 @@ window.addEventListener("DOMContentLoaded", () => {
     
     try {
       await invoke("manual_pair", { ip, port });
-      showPairingModal({ id: `manual-${ip}`, name: `Manual (${ip})`, os: "Unknown" });
-      startPairingPoll();
+      // Modal will be shown by background poll
     } catch (err) {
       console.error("Manual pairing failed:", err);
       alert("Failed to connect to IP.");
@@ -355,4 +390,7 @@ window.addEventListener("DOMContentLoaded", () => {
       renderClipboard();
     }
   }, 5000);
+
+  // Initial load of paired devices
+  renderPairedDevices();
 });

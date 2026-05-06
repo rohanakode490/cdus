@@ -241,7 +241,27 @@ async fn manual_pair(ip: String, port: u16) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn get_pairing_status() -> Result<(Option<String>, bool), String> {
+async fn confirm_pairing(accepted: bool) -> Result<String, String> {
+    let socket_name = get_socket_path();
+    let mut stream = LocalSocketStream::connect(socket_name)
+        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
+
+    let msg = IpcMessage::ConfirmPairing(accepted);
+    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
+    stream.write_all(&bytes).map_err(|e| e.to_string())?;
+
+    let mut buffer = [0u8; 1024];
+    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
+
+    match response {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn get_pairing_status() -> Result<(Option<String>, bool, bool, String), String> {
     let socket_name = get_socket_path();
     let mut stream = LocalSocketStream::connect(socket_name)
         .map_err(|e| format!("Failed to connect to agent: {}", e))?;
@@ -255,7 +275,47 @@ async fn get_pairing_status() -> Result<(Option<String>, bool), String> {
     let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
 
     match response {
-        IpcMessage::PairingStatusResponse { pin, active } => Ok((pin, active)),
+        IpcMessage::PairingStatusResponse { pin, active, is_initiator, remote_label } => Ok((pin, active, is_initiator, remote_label)),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn get_paired_devices() -> Result<Vec<(String, String)>, String> {
+    let socket_name = get_socket_path();
+    let mut stream = LocalSocketStream::connect(socket_name)
+        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
+
+    let msg = IpcMessage::GetPairedDevices;
+    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
+    stream.write_all(&bytes).map_err(|e| e.to_string())?;
+
+    let mut buffer = [0u8; 4096];
+    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
+
+    match response {
+        IpcMessage::PairedDevicesResponse(devices) => Ok(devices),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn unpair_device(node_id: String) -> Result<String, String> {
+    let socket_name = get_socket_path();
+    let mut stream = LocalSocketStream::connect(socket_name)
+        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
+
+    let msg = IpcMessage::UnpairDevice { node_id };
+    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
+    stream.write_all(&bytes).map_err(|e| e.to_string())?;
+
+    let mut buffer = [0u8; 1024];
+    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
+
+    match response {
+        IpcMessage::Log(msg) => Ok(msg),
         _ => Err("Unexpected response from agent".to_string()),
     }
 }
@@ -335,7 +395,10 @@ pub fn run() {
             get_discovered_devices,
             pair_with,
             manual_pair,
-            get_pairing_status
+            confirm_pairing,
+            get_pairing_status,
+            get_paired_devices,
+            unpair_device
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

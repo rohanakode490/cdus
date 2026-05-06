@@ -40,6 +40,15 @@ use store::Store;
 use mdns::MdnsManager;
 use pairing::PairingManager;
 
+#[derive(Clone)]
+pub struct ActivePairingState {
+    pub pin: String,
+    pub is_initiator: bool,
+    pub remote_id: String,
+    pub remote_label: String,
+    pub confirmed: Arc<Mutex<Option<bool>>>,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -73,6 +82,9 @@ async fn main() {
     let store = Store::init(data_dir).expect("Failed to initialize store");
     let store = Arc::new(store);
 
+    let active_pairing = Arc::new(Mutex::new(None::<ActivePairingState>));
+    let active_pairing_daemon = Arc::clone(&active_pairing);
+
     // Initialize or load device identity
     let (node_id, private_key) = store.get_or_create_identity(data_dir).expect("Failed to initialize identity");
     let label = store.get_state("device_name").unwrap().unwrap_or_else(|| "Unknown".to_string());
@@ -86,7 +98,7 @@ async fn main() {
     let (tx, rx) = flume::unbounded::<IpcMessage>();
 
     // Start Pairing Manager
-    let pm = PairingManager::new(Arc::clone(&store), tx.clone(), node_id, private_key, cli.port);
+    let pm = PairingManager::new(Arc::clone(&store), tx.clone(), node_id, private_key, cli.port, Arc::clone(&active_pairing));
     let pm = Arc::new(pm);
     let pm_clone = Arc::clone(&pm);
     tokio::spawn(async move {
@@ -108,15 +120,12 @@ async fn main() {
     let discovered_devices = Arc::new(Mutex::new(Vec::<(String, String, String, String)>::new()));
     let discovered_devices_daemon = Arc::clone(&discovered_devices);
 
-    let active_pin = Arc::new(Mutex::new(None::<String>));
-    let active_pin_daemon = Arc::clone(&active_pin);
-
     // Start daemon logic thread
     let daemon_tx = tx.clone();
     let last_written_daemon = Arc::clone(&last_written);
     let daemon_store = Arc::clone(&store);
     tokio::spawn(async move {
-        daemon_loop(daemon_tx, rx, None, daemon_store, last_written_daemon, discovered_devices_daemon, active_pin_daemon);
+        daemon_loop(daemon_tx, rx, None, daemon_store, last_written_daemon, discovered_devices_daemon, active_pairing_daemon);
     });
 
     // Setup IPC listener
@@ -182,13 +191,57 @@ async fn main() {
                                         let _ = stream.write_all(&resp_bytes);
                                     }
                                 }
-                                IpcMessage::GetPairingStatus => {
-                                    let pin = active_pin.lock().unwrap().clone();
-                                    let resp_bytes = serde_json::to_vec(&IpcMessage::PairingStatusResponse { 
-                                        active: pin.is_some(),
-                                        pin, 
-                                    }).unwrap();
+                                IpcMessage::ConfirmPairing(accepted) => {
+                                    let ap = active_pairing.lock().unwrap();
+                                    if let Some(ref state) = *ap {
+                                        let mut res = state.confirmed.lock().unwrap();
+                                        *res = Some(accepted);
+                                    }
+                                    let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Pairing result processed: {}", accepted))).unwrap();
                                     let _ = stream.write_all(&resp_bytes);
+                                }
+                                IpcMessage::GetPairingStatus => {
+                                    let ap = active_pairing.lock().unwrap();
+                                    let resp = match *ap {
+                                        Some(ref state) => IpcMessage::PairingStatusResponse {
+                                            pin: Some(state.pin.clone()),
+                                            active: true,
+                                            is_initiator: state.is_initiator,
+                                            remote_label: state.remote_label.clone(),
+                                        },
+                                        None => IpcMessage::PairingStatusResponse {
+                                            pin: None,
+                                            active: false,
+                                            is_initiator: false,
+                                            remote_label: String::new(),
+                                        },
+                                    };
+                                    let resp_bytes = serde_json::to_vec(&resp).unwrap();
+                                    let _ = stream.write_all(&resp_bytes);
+                                }
+                                IpcMessage::GetPairedDevices => {
+                                    match store.get_paired_devices() {
+                                        Ok(devices) => {
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::PairedDevicesResponse(devices)).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        Err(e) => {
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Error fetching paired devices: {}", e))).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                    }
+                                }
+                                IpcMessage::UnpairDevice { node_id } => {
+                                    match store.remove_paired_device(&node_id) {
+                                        Ok(_) => {
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Device unpaired".to_string())).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        Err(e) => {
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Error unpairing device: {}", e))).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                    }
                                 }
                                 IpcMessage::GetHistory { limit } => {
                                     match store.get_recent_events(limit) {
@@ -245,7 +298,7 @@ async fn main() {
     }).await.unwrap();
 }
 
-fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Option<usize>, store: Arc<Store>, last_written: Arc<Mutex<Option<String>>>, discovered_devices: Arc<Mutex<Vec<(String, String, String, String)>>>, active_pin: Arc<Mutex<Option<String>>>) {
+fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Option<usize>, store: Arc<Store>, last_written: Arc<Mutex<Option<String>>>, discovered_devices: Arc<Mutex<Vec<(String, String, String, String)>>>, active_pairing: Arc<Mutex<Option<ActivePairingState>>>) {
     info!("Daemon logic thread started");
     use arboard::Clipboard;
     
@@ -293,8 +346,18 @@ fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Opt
                     }
                 }
                 IpcMessage::PairingPin(pin) => {
-                    let mut p = active_pin.lock().unwrap();
-                    *p = Some(pin);
+                    // This branch might be redundant now that pairing.rs updates active_pairing directly,
+                    // but we'll keep it for compatibility if needed.
+                    let mut ap = active_pairing.lock().unwrap();
+                    if ap.is_none() {
+                        *ap = Some(ActivePairingState {
+                            pin,
+                            is_initiator: false, // Default to false if we don't know
+                            remote_id: "unknown".to_string(),
+                            remote_label: "Unknown Device".to_string(),
+                            confirmed: Arc::new(Mutex::new(None)),
+                        });
+                    }
                 }
                 _ => {}
             }

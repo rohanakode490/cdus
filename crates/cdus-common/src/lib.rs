@@ -31,7 +31,15 @@ pub enum IpcMessage {
     ConfirmPairing(bool),
     PairingResult { success: bool, node_id: String, label: String },
     GetPairingStatus,
-    PairingStatusResponse { pin: Option<String>, active: bool },
+    PairingStatusResponse { 
+        pin: Option<String>, 
+        active: bool,
+        is_initiator: bool,
+        remote_label: String 
+    },
+    GetPairedDevices,
+    PairedDevicesResponse(Vec<(String, String)>),
+    UnpairDevice { node_id: String },
 }
 
 #[cfg(test)]
