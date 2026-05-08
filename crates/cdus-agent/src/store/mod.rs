@@ -152,7 +152,7 @@ impl Store {
                     
                     // Since snow doesn't easily expose deriving public from private without building,
                     // we use a trick: any Noise handshake will have the local static key.
-                    if let Ok(handshake) = temp_builder.build_initiator() {
+                    if let Ok(_handshake) = temp_builder.build_initiator() {
                         // In snow 0.9, we can't easily get the local static key back out of HandshakeState.
                         // However, we KNOW the public key is correct if we generated it ourselves.
                         // For legacy migration, we'll just check if the ID is 64 hex chars (32 bytes).
@@ -220,6 +220,16 @@ impl Store {
             devices.push(row?);
         }
         Ok(devices)
+    }
+
+    pub fn is_device_paired(&self, node_id: &str) -> Result<bool> {
+        let conn = self.state_conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT count(*) FROM paired_devices WHERE node_id = ?",
+            [node_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
     }
 }
 

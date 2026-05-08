@@ -114,12 +114,35 @@ impl MdnsManager {
     }
 
     pub fn stop_discovery(&self) {
-        let mut scanning = self.is_scanning.lock().unwrap();
-        *scanning = false;
+        {
+            let mut scanning = self.is_scanning.lock().unwrap();
+            *scanning = false;
+        }
         
         let mut thread_handle = self.discovery_thread.lock().unwrap();
         if let Some(handle) = thread_handle.take() {
             let _ = handle.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flume;
+    use std::time::Duration;
+
+    #[test]
+    fn test_mdns_manager_lifecycle() {
+        let manager = MdnsManager::new();
+        let (tx, _rx) = flume::unbounded();
+        
+        manager.start_discovery(tx);
+        assert!(*manager.is_scanning.lock().unwrap());
+        
+        thread::sleep(Duration::from_millis(100));
+        
+        manager.stop_discovery();
+        assert!(!*manager.is_scanning.lock().unwrap());
     }
 }

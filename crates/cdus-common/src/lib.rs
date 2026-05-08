@@ -13,8 +13,8 @@ pub enum IpcMessage {
     Ping,
     Pong,
     Log(String),
-    ClipboardChanged(String),
-    SetClipboard(String),
+    ClipboardChanged { content: String, timestamp: u64 },
+    SetClipboard { content: String, timestamp: u64, source: String },
     GetHistory { limit: u32 },
     HistoryResponse(Vec<ClipboardEvent>),
     GetState { key: String },
@@ -40,6 +40,11 @@ pub enum IpcMessage {
     GetPairedDevices,
     PairedDevicesResponse(Vec<(String, String)>),
     UnpairDevice { node_id: String },
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+pub enum SyncMessage {
+    ClipboardUpdate { content: String, timestamp: u64 },
 }
 
 #[cfg(test)]
