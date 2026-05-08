@@ -7,7 +7,7 @@ use tauri::{
 use cdus_common::{IpcMessage, ClipboardEvent};
 use interprocess::local_socket::LocalSocketStream;
 use std::io::{Read, Write};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::thread;
 use std::sync::Mutex;
 
@@ -15,8 +15,30 @@ struct AppState {
     last_synced: Mutex<Option<SystemTime>>,
 }
 
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+}
+
 fn get_socket_path() -> String {
     std::env::var("CDUS_AGENT_SOCKET").unwrap_or_else(|_| "/tmp/cdus-agent.sock".to_string())
+}
+
+fn send_ipc_message(msg: IpcMessage) -> Result<IpcMessage, String> {
+    let socket_name = get_socket_path();
+    let mut stream = LocalSocketStream::connect(socket_name)
+        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
+
+    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
+    stream.write_all(&bytes).map_err(|e| e.to_string())?;
+
+    let mut buffer = Vec::new();
+    stream.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+    
+    if buffer.is_empty() {
+        return Err("Agent closed connection without response".to_string());
+    }
+
+    serde_json::from_slice(&buffer).map_err(|e| format!("Failed to parse response: {}", e))
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -26,23 +48,10 @@ fn greet(name: &str) -> String {
 }
 
 fn check_agent_online() -> bool {
-    let socket_name = get_socket_path();
-    match LocalSocketStream::connect(socket_name) {
-        Ok(mut stream) => {
-            let msg = IpcMessage::Ping;
-            if let Ok(bytes) = serde_json::to_vec(&msg) {
-                if stream.write_all(&bytes).is_ok() {
-                    let mut buffer = [0u8; 1024];
-                    if let Ok(n) = stream.read(&mut buffer) {
-                        if let Ok(response) = serde_json::from_slice::<IpcMessage>(&buffer[..n]) {
-                            return response == IpcMessage::Pong;
-                        }
-                    }
-                }
-            }
-            false
-        }
-        Err(_) => false,
+    let msg = IpcMessage::Ping;
+    match send_ipc_message(msg) {
+        Ok(IpcMessage::Pong) => true,
+        _ => false,
     }
 }
 
@@ -57,36 +66,23 @@ fn ping_agent() -> Result<String, String> {
 
 #[tauri::command]
 fn set_clipboard(content: String) -> Result<String, String> {
-    let socket_name = get_socket_path();
-    let mut stream = LocalSocketStream::connect(socket_name)
-        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
-
-    let msg = IpcMessage::SetClipboard(content);
-    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-
-    let mut buffer = [0u8; 1024];
-    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
-
-    Ok(format!("{:?}", response))
+    let msg = IpcMessage::SetClipboard { 
+        content, 
+        timestamp: now_ms(), 
+        source: "Local".to_string() 
+    };
+    
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        response => Ok(format!("{:?}", response)),
+    }
 }
 
 #[tauri::command]
 fn get_clipboard_history(state: tauri::State<'_, AppState>, limit: u32) -> Result<Vec<ClipboardEvent>, String> {
-    let socket_name = get_socket_path();
-    let mut stream = LocalSocketStream::connect(socket_name)
-        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
-
     let msg = IpcMessage::GetHistory { limit };
-    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-
-    let mut buffer = [0u8; 8192]; // Larger buffer for history
-    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
-
-    match response {
+    
+    match send_ipc_message(msg)? {
         IpcMessage::HistoryResponse(history) => {
             if !history.is_empty() {
                 let mut ls = state.last_synced.lock().unwrap();
@@ -101,19 +97,8 @@ fn get_clipboard_history(state: tauri::State<'_, AppState>, limit: u32) -> Resul
 
 #[tauri::command]
 fn get_state(key: String) -> Result<Option<String>, String> {
-    let socket_name = get_socket_path();
-    let mut stream = LocalSocketStream::connect(socket_name)
-        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
-
     let msg = IpcMessage::GetState { key };
-    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-
-    let mut buffer = [0u8; 1024];
-    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
-
-    match response {
+    match send_ipc_message(msg)? {
         IpcMessage::StateResponse(val) => Ok(val),
         IpcMessage::Log(err) => Err(err),
         _ => Err("Unexpected response from agent".to_string()),
@@ -122,19 +107,8 @@ fn get_state(key: String) -> Result<Option<String>, String> {
 
 #[tauri::command]
 fn set_state(key: String, value: String) -> Result<String, String> {
-    let socket_name = get_socket_path();
-    let mut stream = LocalSocketStream::connect(socket_name)
-        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
-
     let msg = IpcMessage::SetState { key, value };
-    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-
-    let mut buffer = [0u8; 1024];
-    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
-
-    match response {
+    match send_ipc_message(msg)? {
         IpcMessage::Log(msg) => Ok(msg),
         _ => Err("Unexpected response from agent".to_string()),
     }
@@ -142,19 +116,8 @@ fn set_state(key: String, value: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn start_scan() -> Result<String, String> {
-    let socket_name = get_socket_path();
-    let mut stream = LocalSocketStream::connect(socket_name)
-        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
-
     let msg = IpcMessage::StartScan;
-    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-
-    let mut buffer = [0u8; 1024];
-    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
-
-    match response {
+    match send_ipc_message(msg)? {
         IpcMessage::Log(msg) => Ok(msg),
         _ => Err("Unexpected response from agent".to_string()),
     }
@@ -162,19 +125,8 @@ async fn start_scan() -> Result<String, String> {
 
 #[tauri::command]
 async fn stop_scan() -> Result<String, String> {
-    let socket_name = get_socket_path();
-    let mut stream = LocalSocketStream::connect(socket_name)
-        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
-
     let msg = IpcMessage::StopScan;
-    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-
-    let mut buffer = [0u8; 1024];
-    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
-
-    match response {
+    match send_ipc_message(msg)? {
         IpcMessage::Log(msg) => Ok(msg),
         _ => Err("Unexpected response from agent".to_string()),
     }
@@ -182,19 +134,8 @@ async fn stop_scan() -> Result<String, String> {
 
 #[tauri::command]
 async fn get_discovered_devices() -> Result<Vec<(String, String, String, String, u16)>, String> {
-    let socket_name = get_socket_path();
-    let mut stream = LocalSocketStream::connect(socket_name)
-        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
-
     let msg = IpcMessage::GetDiscovered;
-    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-
-    let mut buffer = [0u8; 4096];
-    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
-
-    match response {
+    match send_ipc_message(msg)? {
         IpcMessage::DiscoveredResponse(list) => Ok(list),
         _ => Err("Unexpected response from agent".to_string()),
     }
@@ -202,19 +143,8 @@ async fn get_discovered_devices() -> Result<Vec<(String, String, String, String,
 
 #[tauri::command]
 async fn pair_with(node_id: String) -> Result<String, String> {
-    let socket_name = get_socket_path();
-    let mut stream = LocalSocketStream::connect(socket_name)
-        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
-
     let msg = IpcMessage::PairWith { node_id };
-    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-
-    let mut buffer = [0u8; 1024];
-    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
-
-    match response {
+    match send_ipc_message(msg)? {
         IpcMessage::Log(msg) => Ok(msg),
         _ => Err("Unexpected response from agent".to_string()),
     }
@@ -222,19 +152,8 @@ async fn pair_with(node_id: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn manual_pair(ip: String, port: u16) -> Result<String, String> {
-    let socket_name = get_socket_path();
-    let mut stream = LocalSocketStream::connect(socket_name)
-        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
-
     let msg = IpcMessage::PairWithIp { ip, port };
-    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-
-    let mut buffer = [0u8; 1024];
-    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
-
-    match response {
+    match send_ipc_message(msg)? {
         IpcMessage::Log(msg) => Ok(msg),
         _ => Err("Unexpected response from agent".to_string()),
     }
@@ -242,19 +161,8 @@ async fn manual_pair(ip: String, port: u16) -> Result<String, String> {
 
 #[tauri::command]
 async fn confirm_pairing(accepted: bool) -> Result<String, String> {
-    let socket_name = get_socket_path();
-    let mut stream = LocalSocketStream::connect(socket_name)
-        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
-
     let msg = IpcMessage::ConfirmPairing(accepted);
-    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-
-    let mut buffer = [0u8; 1024];
-    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
-
-    match response {
+    match send_ipc_message(msg)? {
         IpcMessage::Log(msg) => Ok(msg),
         _ => Err("Unexpected response from agent".to_string()),
     }
@@ -262,19 +170,8 @@ async fn confirm_pairing(accepted: bool) -> Result<String, String> {
 
 #[tauri::command]
 async fn get_pairing_status() -> Result<(Option<String>, bool, bool, String), String> {
-    let socket_name = get_socket_path();
-    let mut stream = LocalSocketStream::connect(socket_name)
-        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
-
     let msg = IpcMessage::GetPairingStatus;
-    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-
-    let mut buffer = [0u8; 1024];
-    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
-
-    match response {
+    match send_ipc_message(msg)? {
         IpcMessage::PairingStatusResponse { pin, active, is_initiator, remote_label } => Ok((pin, active, is_initiator, remote_label)),
         _ => Err("Unexpected response from agent".to_string()),
     }
@@ -282,19 +179,8 @@ async fn get_pairing_status() -> Result<(Option<String>, bool, bool, String), St
 
 #[tauri::command]
 async fn get_paired_devices() -> Result<Vec<(String, String)>, String> {
-    let socket_name = get_socket_path();
-    let mut stream = LocalSocketStream::connect(socket_name)
-        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
-
     let msg = IpcMessage::GetPairedDevices;
-    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-
-    let mut buffer = [0u8; 4096];
-    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
-
-    match response {
+    match send_ipc_message(msg)? {
         IpcMessage::PairedDevicesResponse(devices) => Ok(devices),
         _ => Err("Unexpected response from agent".to_string()),
     }
@@ -302,19 +188,8 @@ async fn get_paired_devices() -> Result<Vec<(String, String)>, String> {
 
 #[tauri::command]
 async fn unpair_device(node_id: String) -> Result<String, String> {
-    let socket_name = get_socket_path();
-    let mut stream = LocalSocketStream::connect(socket_name)
-        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
-
     let msg = IpcMessage::UnpairDevice { node_id };
-    let bytes = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-
-    let mut buffer = [0u8; 1024];
-    let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-    let response: IpcMessage = serde_json::from_slice(&buffer[..n]).map_err(|e| e.to_string())?;
-
-    match response {
+    match send_ipc_message(msg)? {
         IpcMessage::Log(msg) => Ok(msg),
         _ => Err("Unexpected response from agent".to_string()),
     }

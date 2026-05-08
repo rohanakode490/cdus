@@ -237,22 +237,22 @@ window.addEventListener("DOMContentLoaded", () => {
     
     const modalTitle = pairingModal.querySelector("h3");
     const modalDesc = pairingModal.querySelector("p");
-    const confirmBtn = document.querySelector("#pairing-confirm-btn") as HTMLElement;
+    const confirmBtn = document.querySelector("#pairing-confirm-btn") as HTMLButtonElement;
+
+    if (confirmBtn) {
+      confirmBtn.style.setProperty("display", "block", "important");
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = "Confirm PIN Matches";
+    }
 
     if (isInitiator) {
-      console.log("UI: Acting as Initiator. Hiding confirm button.");
-      if (modalTitle) modalTitle.textContent = "Waiting for Confirmation";
-      if (modalDesc) modalDesc.textContent = `Please verify that the PIN below matches on ${device.name}. Waiting for them to confirm...`;
-      if (confirmBtn) {
-        confirmBtn.style.setProperty("display", "none", "important");
-      }
+      console.log("UI: Acting as Initiator. Both sides must confirm.");
+      if (modalTitle) modalTitle.textContent = "Confirm Pairing";
+      if (modalDesc) modalDesc.textContent = `Please verify that the PIN below matches on ${device.name}. Click Confirm once you have verified it.`;
     } else {
-      console.log("UI: Acting as Responder. Showing confirm button.");
-      if (modalTitle) modalTitle.textContent = "Pair Device";
-      if (modalDesc) modalDesc.textContent = `Incoming pairing request from ${device.name}. Enter the 4-digit PIN shown on the other device:`;
-      if (confirmBtn) {
-        confirmBtn.style.setProperty("display", "block", "important");
-      }
+      console.log("UI: Acting as Responder. Both sides must confirm.");
+      if (modalTitle) modalTitle.textContent = "Incoming Pairing Request";
+      if (modalDesc) modalDesc.textContent = `Device ${device.name} wants to pair. Please verify that the PIN below matches on their screen.`;
     }
     
     // Placeholder while waiting for real PIN from agent
@@ -362,11 +362,15 @@ window.addEventListener("DOMContentLoaded", () => {
   confirmPairingBtn?.addEventListener("click", async () => {
     if (currentPairingDevice) {
       try {
+        confirmPairingBtn.disabled = true;
+        confirmPairingBtn.textContent = "Waiting for other device...";
         await invoke("confirm_pairing", { accepted: true });
         // UI will be closed by startPairingPoll when active becomes false
       } catch (err) {
         console.error("Failed to confirm pairing on agent:", err);
         alert("Failed to confirm pairing.");
+        confirmPairingBtn.disabled = false;
+        confirmPairingBtn.textContent = "Confirm PIN Matches";
       }
     }
   });
