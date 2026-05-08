@@ -23,8 +23,8 @@ gethostname = "0.4"
 hex = "0.4"
 snow = "0.9"
 keyring = "2.3"
-tokio = { version = "1.36", features = ["full"] }
 anyhow = "1.0"
+tungstenite = "0.21"
 
 [dev-dependencies]
 tempfile = "3.10"
