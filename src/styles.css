@@ -152,6 +152,24 @@ h3 {
   font-size: 0.8rem;
 }
 
+.connection-path {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  background-color: #f0f0f0;
+  color: #666;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .connection-path {
+    background-color: #333;
+    color: #aaa;
+  }
+}
+
 .status-dot {
   width: 8px;
   height: 8px;

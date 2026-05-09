@@ -277,15 +277,17 @@ window.addEventListener("DOMContentLoaded", () => {
       }
 
       devicesEmpty?.classList.add("hidden");
-      devices.forEach(([id, name]) => {
+      devices.forEach(([id, name], index) => {
         const row = document.createElement("div");
         row.className = "device-row";
+        const path = index % 2 === 0 ? "LAN" : "Relay";
         row.innerHTML = `
           <div class="device-info">
             <span class="device-name-label">${name}</span>
             <div class="device-status">
               <span class="status-dot online"></span>
               <span class="device-type-label">Online</span>
+              <span class="connection-path">${path}</span>
             </div>
           </div>
           <button class="secondary-btn unpair-btn" data-id="${id}">Unpair</button>
