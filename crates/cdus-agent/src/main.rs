@@ -27,6 +27,9 @@ struct Cli {
 
     #[arg(long)]
     data_dir: Option<String>,
+
+    #[arg(long, default_value = "http://localhost:8080")]
+    relay_url: String,
 }
 
 #[derive(Subcommand)]
@@ -40,10 +43,12 @@ enum Commands {
 mod store;
 mod mdns;
 mod pairing;
+mod relay;
 mod integration_tests;
 use store::Store;
 use mdns::MdnsManager;
 use pairing::{PairingManager, SyncManager};
+use relay::RelayManager;
 use cdus_common::{IpcMessage, SyncMessage};
 
 #[derive(Clone)]
@@ -94,6 +99,13 @@ fn main() {
     let (node_id, private_key) = store.get_or_create_identity(data_dir).expect("Failed to initialize identity");
     let label = store.get_state("device_name").unwrap().unwrap_or_else(|| "Unknown".to_string());
     info!("Device identity initialized. Node ID: {}", node_id);
+
+    // Initialize Relay Manager
+    let relay = RelayManager::new(node_id.clone(), cli.relay_url.clone());
+    if let Err(e) = relay.register() {
+        error!("Failed to register with relay: {}. Will retry connection in background loop.", e);
+    }
+    relay.start_signaling_loop();
 
     // Start mDNS registration
     let mdns = MdnsManager::new();
