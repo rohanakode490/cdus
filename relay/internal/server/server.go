@@ -2,9 +2,14 @@ package server
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -82,6 +87,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /v1/register", s.handleRegister)
 	mux.HandleFunc("POST /v1/pairing/token", s.handleCreateToken)
 	mux.HandleFunc("GET /v1/signaling", s.handleSignaling)
+	mux.HandleFunc("GET /v1/turn", s.handleGetTurnCredentials)
 	return mux
 }
 
@@ -188,4 +194,54 @@ func (s *Server) handleSignaling(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.hub.ServeWs(w, r, deviceUUID)
+}
+
+type turnResponse struct {
+	Username string   `json:"username"`
+	Password string   `json:"password"`
+	URLs     []string `json:"urls"`
+}
+
+func (s *Server) handleGetTurnCredentials(w http.ResponseWriter, r *http.Request) {
+	deviceUUID := r.URL.Query().Get("uuid")
+	if deviceUUID == "" {
+		http.Error(w, "missing uuid", http.StatusBadRequest)
+		return
+	}
+
+	// Verify device exists and is not revoked
+	revoked, err := s.store.IsDeviceRevoked(r.Context(), deviceUUID)
+	if err != nil || revoked {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Coturn REST API authentication
+	// Username: <timestamp>:<username>
+	// Password: hmac-sha1(secret, username)
+
+	secret := os.Getenv("TURN_SECRET")
+	if secret == "" {
+		secret = "v1-default-secret-replace-me" // For MVP/Test
+	}
+	turnURL := os.Getenv("TURN_URL")
+	if turnURL == "" {
+		turnURL = "turn:localhost:3478"
+	}
+
+	timestamp := time.Now().Add(24 * time.Hour).Unix()
+	username := fmt.Sprintf("%d:%s", timestamp, deviceUUID)
+
+	h := hmac.New(sha1.New, []byte(secret))
+	h.Write([]byte(username))
+	password := base64.StdEncoding.EncodeToString(h.Sum(nil))
+
+	resp := turnResponse{
+		Username: username,
+		Password: password,
+		URLs:     []string{turnURL},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }

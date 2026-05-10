@@ -232,3 +232,64 @@ func TestTokenManager_Cleanup(t *testing.T) {
 		t.Error("valid token was cleaned up")
 	}
 }
+
+func TestHandleGetTurnCredentials(t *testing.T) {
+	tests := []struct {
+		name       string
+		uuid       string
+		revoked    bool
+		expectedOk int
+	}{
+		{
+			name:       "success",
+			uuid:       "device-1",
+			expectedOk: http.StatusOK,
+		},
+		{
+			name:       "revoked",
+			uuid:       "device-1",
+			revoked:    true,
+			expectedOk: http.StatusUnauthorized,
+		},
+		{
+			name:       "missing-uuid",
+			uuid:       "",
+			expectedOk: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ms := newMockStore()
+			if tt.revoked {
+				ms.revoked[tt.uuid] = true
+			}
+			logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+			h := hub.NewHub(ms, logger)
+			srv := NewServer(ms, h, logger)
+
+			url := "/v1/turn"
+			if tt.uuid != "" {
+				url += "?uuid=" + tt.uuid
+			}
+			req, _ := http.NewRequest("GET", url, nil)
+			rr := httptest.NewRecorder()
+
+			srv.Routes().ServeHTTP(rr, req)
+
+			if rr.Code != tt.expectedOk {
+				t.Errorf("expected status %d, got %d", tt.expectedOk, rr.Code)
+			}
+
+			if rr.Code == http.StatusOK {
+				var resp turnResponse
+				if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+				if resp.Username == "" || resp.Password == "" || len(resp.URLs) == 0 {
+					t.Errorf("invalid response content: %+v", resp)
+				}
+			}
+		})
+	}
+}

@@ -27,6 +27,11 @@ anyhow = "1.0"
 tungstenite = "0.21"
 ureq = { version = "2.9", features = ["json"] }
 base64 = "0.22"
+tokio = { version = "1.36", features = ["rt", "net", "time", "sync", "macros"] }
+turn = "0.7"
+webrtc-util = "0.8"
+libp2p = { version = "0.56", features = ["tcp", "quic", "mdns", "noise", "yamux", "dcutr", "identify", "ping", "relay", "kad", "tokio", "gossipsub", "cbor", "macros"] }
 
 [dev-dependencies]
 tempfile = "3.10"
+httpmock = "0.7"

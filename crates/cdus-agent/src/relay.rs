@@ -22,6 +22,13 @@ pub struct SignalMessage {
     pub payload: String, // Base64 encoded from Go
 }
 
+#[derive(Deserialize, Debug, Clone)]
+pub struct TurnCredentials {
+    pub username: String,
+    pub password: String,
+    pub urls: Vec<String>,
+}
+
 pub struct RelayManager {
     node_id: String,
     relay_url: String,
@@ -38,6 +45,23 @@ impl RelayManager {
             tx,
             outgoing_tx,
         }, outgoing_rx)
+    }
+
+    pub fn get_turn_credentials(&self) -> Result<TurnCredentials> {
+        let url = format!("{}/v1/turn?uuid={}", self.relay_url, self.node_id);
+        info!("Fetching TURN credentials from relay at {}...", url);
+
+        let resp = ureq::get(&url)
+            .call()?;
+
+        if resp.status() == 200 {
+            let creds: TurnCredentials = resp.into_json()?;
+            Ok(creds)
+        } else {
+            let err_msg = resp.into_string().unwrap_or_else(|_| "Unknown error".to_string());
+            error!("Failed to fetch TURN credentials: {}", err_msg);
+            Err(anyhow::anyhow!("Failed to fetch TURN credentials: {}", err_msg))
+        }
     }
 
     pub fn send_signal(&self, target_uuid: String, payload: Vec<u8>) -> Result<()> {
@@ -85,11 +109,12 @@ impl RelayManager {
                         // Set read timeout to allow checking outgoing channel
                         let timeout_res = match socket.get_mut() {
                             MaybeTlsStream::Plain(s) => s.set_read_timeout(Some(Duration::from_millis(100))),
-                            #[cfg(feature = "native-tls")]
-                            MaybeTlsStream::NativeTls(s) => s.get_mut().set_read_timeout(Some(Duration::from_millis(100))),
-                            #[cfg(feature = "rustls")]
-                            MaybeTlsStream::Rustls(s) => s.get_mut().set_read_timeout(Some(Duration::from_millis(100))),
-                            _ => Ok(()),
+                            _ => {
+                                // For TLS streams, we might not be able to set timeout directly on the underlying socket
+                                // without more complex matching. 
+                                // tungstenite/native-tls/rustls handling is simplified here for now.
+                                Ok(())
+                            }
                         };
 
                         if let Err(e) = timeout_res {
@@ -152,5 +177,42 @@ impl RelayManager {
                 thread::sleep(Duration::from_secs(10));
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flume;
+    use httpmock::prelude::*;
+
+    #[test]
+    fn test_get_turn_credentials() {
+        let server = MockServer::start();
+        let node_id = "test-node".to_string();
+        let (tx, _) = flume::unbounded();
+        
+        let relay = RelayManager {
+            node_id: node_id.clone(),
+            relay_url: server.base_url(),
+            tx,
+            outgoing_tx: flume::unbounded().0,
+        };
+
+        let mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/turn")
+                .query_param("uuid", &node_id);
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"username":"user","password":"pass","urls":["turn:localhost:3478"]}"#);
+        });
+
+        let creds = relay.get_turn_credentials().unwrap();
+        mock.assert();
+        
+        assert_eq!(creds.username, "user");
+        assert_eq!(creds.password, "pass");
+        assert_eq!(creds.urls[0], "turn:localhost:3478");
     }
 }

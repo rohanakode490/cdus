@@ -44,11 +44,15 @@ mod store;
 mod mdns;
 mod pairing;
 mod relay;
+mod turn_manager;
+mod libp2p_manager;
 mod integration_tests;
 use store::Store;
 use mdns::MdnsManager;
 use pairing::{PairingManager, SyncManager, ActivePairingState};
 use relay::RelayManager;
+use turn_manager::TurnManager;
+use libp2p_manager::Libp2pManager;
 use cdus_common::{IpcMessage, SyncMessage};
 
 fn main() {
@@ -100,16 +104,25 @@ fn main() {
     }
     relay.start_signaling_loop(relay_rx);
 
+    // Initialize Turn Manager
+    let turn_manager = Arc::new(TurnManager::new().expect("Failed to initialize TurnManager"));
+
+    // Initialize Libp2p Manager
+    let libp2p_manager = Arc::new(Libp2pManager::new(private_key.clone(), tx.clone(), Arc::clone(&store)).expect("Failed to initialize Libp2pManager"));
+    libp2p_manager.start();
+    let libp2p_sync_tx = libp2p_manager.get_sync_tx();
+
     // Start mDNS registration
     let mdns = MdnsManager::new();
     mdns.register_device(&node_id, &label, cli.port);
     let mdns = Arc::new(mdns);
 
     let sync_manager = Arc::new(SyncManager::new());
+    sync_manager.add_peer("libp2p_broadcast".to_string(), libp2p_sync_tx);
     let sync_manager_daemon = Arc::clone(&sync_manager);
 
     // Start Pairing Manager
-    let pm = PairingManager::new(Arc::clone(&store), tx.clone(), node_id, private_key, cli.port, Arc::clone(&active_pairing), Arc::clone(&sync_manager), Arc::clone(&relay));
+    let pm = PairingManager::new(Arc::clone(&store), tx.clone(), node_id, private_key, cli.port, Arc::clone(&active_pairing), Arc::clone(&sync_manager), Arc::clone(&relay), Arc::clone(&turn_manager));
     let pm = Arc::new(pm);
     let pm_clone = Arc::clone(&pm);
     thread::spawn(move || {
@@ -544,8 +557,9 @@ mod tests {
         let lw = Arc::new(Mutex::new(None));
         let dd = Arc::new(Mutex::new(Vec::new()));
         let ap = Arc::new(Mutex::new(None));
+        let tm = Arc::new(TurnManager::new().unwrap());
         let (relay, _) = RelayManager::new("test".to_string(), "http://localhost".to_string(), daemon_tx.clone());
-        let pm = PairingManager::new(Arc::clone(&store), daemon_tx.clone(), "test".to_string(), vec![], 0, Arc::clone(&ap), Arc::new(SyncManager::new()), Arc::new(relay));
+        let pm = PairingManager::new(Arc::clone(&store), daemon_tx.clone(), "test".to_string(), vec![], 0, Arc::clone(&ap), Arc::new(SyncManager::new()), Arc::new(relay), tm);
         let pm = Arc::new(pm);
         let lpt = Arc::new(Mutex::new(0u64));
         

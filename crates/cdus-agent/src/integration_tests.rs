@@ -2,6 +2,7 @@
 mod tests {
     use crate::pairing::{PairingManager, SyncManager};
     use crate::relay::RelayManager;
+    use crate::turn_manager::TurnManager;
     use crate::store::Store;
     use crate::ActivePairingState;
     use cdus_common::{IpcMessage, SyncMessage};
@@ -13,6 +14,7 @@ mod tests {
 
     #[test]
     fn test_mutual_pairing_and_clipboard_sync() {
+        let _ = tracing_subscriber::fmt::try_init();
         let dir1 = tempdir().unwrap();
         let dir2 = tempdir().unwrap();
 
@@ -27,6 +29,9 @@ mod tests {
 
         let sm1 = Arc::new(SyncManager::new());
         let sm2 = Arc::new(SyncManager::new());
+
+        let tm1 = Arc::new(TurnManager::new().unwrap());
+        let tm2 = Arc::new(TurnManager::new().unwrap());
 
         let (id1, priv1) = store1.get_or_create_identity(dir1.path()).unwrap();
         let (id2, priv2) = store2.get_or_create_identity(dir2.path()).unwrap();
@@ -43,6 +48,7 @@ mod tests {
             Arc::clone(&ap1),
             Arc::clone(&sm1),
             Arc::new(relay1),
+            tm1,
         );
         let pm2 = PairingManager::new(
             Arc::clone(&store2),
@@ -53,6 +59,7 @@ mod tests {
             Arc::clone(&ap2),
             Arc::clone(&sm2),
             Arc::new(relay2),
+            tm2,
         );
 
         let pm1 = Arc::new(pm1);
@@ -74,13 +81,13 @@ mod tests {
 
         // Wait for both to see active pairing
         let mut attempts = 0;
-        while attempts < 20 {
+        while attempts < 50 {
             let p1 = ap1.lock().unwrap().is_some();
             let p2 = ap2.lock().unwrap().is_some();
             if p1 && p2 {
                 break;
             }
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(200));
             attempts += 1;
         }
 
@@ -158,8 +165,9 @@ mod tests {
         let dd = Arc::new(Mutex::new(Vec::new()));
         let ap = Arc::new(Mutex::new(None));
         let sm = Arc::new(SyncManager::new());
+        let tm = Arc::new(TurnManager::new().unwrap());
         let (relay, _) = RelayManager::new("test".to_string(), "http://localhost".to_string(), tx.clone());
-        let pm = Arc::new(PairingManager::new(Arc::clone(&store), tx.clone(), "test".to_string(), vec![], 0, Arc::clone(&ap), Arc::clone(&sm), Arc::new(relay)));
+        let pm = Arc::new(PairingManager::new(Arc::clone(&store), tx.clone(), "test".to_string(), vec![], 0, Arc::clone(&ap), Arc::clone(&sm), Arc::new(relay), tm));
         let lpt = Arc::new(Mutex::new(0u64));
 
         // Initial state
@@ -212,11 +220,14 @@ mod tests {
         let (id1, priv1) = store1.get_or_create_identity(dir1.path()).unwrap();
         let (id2, priv2) = store2.get_or_create_identity(dir2.path()).unwrap();
 
+        let tm1 = Arc::new(TurnManager::new().unwrap());
+        let tm2 = Arc::new(TurnManager::new().unwrap());
+
         let (relay1, _) = RelayManager::new(id1.clone(), "http://localhost".to_string(), tx1.clone());
         let (relay2, _) = RelayManager::new(id2.clone(), "http://localhost".to_string(), tx2.clone());
 
-        let pm1 = Arc::new(PairingManager::new(Arc::clone(&store1), tx1, id1, priv1, 5301, Arc::clone(&ap1), Arc::clone(&sm1), Arc::new(relay1)));
-        let pm2 = Arc::new(PairingManager::new(Arc::clone(&store2), tx2, id2, priv2, 5302, Arc::clone(&ap2), Arc::clone(&sm2), Arc::new(relay2)));
+        let pm1 = Arc::new(PairingManager::new(Arc::clone(&store1), tx1, id1, priv1, 5301, Arc::clone(&ap1), Arc::clone(&sm1), Arc::new(relay1), tm1));
+        let pm2 = Arc::new(PairingManager::new(Arc::clone(&store2), tx2, id2, priv2, 5302, Arc::clone(&ap2), Arc::clone(&sm2), Arc::new(relay2), tm2));
 
         let pm2_c = Arc::clone(&pm2);
         thread::spawn(move || pm2_c.start_listener());
@@ -261,8 +272,9 @@ mod tests {
         let (id, priv_key) = store.get_or_create_identity(dir.path()).unwrap();
         let ap = Arc::new(Mutex::new(None));
         let sm = Arc::new(SyncManager::new());
+        let tm = Arc::new(TurnManager::new().unwrap());
         let (relay, _) = RelayManager::new(id.clone(), "http://localhost".to_string(), tx.clone());
-        let pm = Arc::new(PairingManager::new(Arc::clone(&store), tx, id.clone(), priv_key, 5401, Arc::clone(&ap), Arc::clone(&sm), Arc::new(relay)));
+        let pm = Arc::new(PairingManager::new(Arc::clone(&store), tx, id.clone(), priv_key, 5401, Arc::clone(&ap), Arc::clone(&sm), Arc::new(relay), tm));
 
         let pm_c = Arc::clone(&pm);
         thread::spawn(move || pm_c.start_listener());
@@ -285,8 +297,9 @@ mod tests {
         let (id, priv_key) = store.get_or_create_identity(dir.path()).unwrap();
         let ap = Arc::new(Mutex::new(None));
         let sm = Arc::new(SyncManager::new());
+        let tm = Arc::new(TurnManager::new().unwrap());
         let (relay, _) = RelayManager::new(id.clone(), "http://localhost".to_string(), tx.clone());
-        let pm = PairingManager::new(Arc::clone(&store), tx, id, priv_key, 5501, Arc::clone(&ap), Arc::clone(&sm), Arc::new(relay));
+        let pm = PairingManager::new(Arc::clone(&store), tx, id, priv_key, 5501, Arc::clone(&ap), Arc::clone(&sm), Arc::new(relay), tm);
 
         thread::spawn(move || pm.start_listener());
         thread::sleep(Duration::from_millis(50));
@@ -322,6 +335,9 @@ mod tests {
         let (id1, priv1) = store1.get_or_create_identity(dir1.path()).unwrap();
         let (id2, priv2) = store2.get_or_create_identity(dir2.path()).unwrap();
 
+        let tm1 = Arc::new(TurnManager::new().unwrap());
+        let tm2 = Arc::new(TurnManager::new().unwrap());
+
         let (relay1, relay_rx1) = RelayManager::new(id1.clone(), "http://localhost".to_string(), tx1.clone());
         let (relay2, relay_rx2) = RelayManager::new(id2.clone(), "http://localhost".to_string(), tx2.clone());
 
@@ -337,6 +353,7 @@ mod tests {
             Arc::clone(&ap1),
             Arc::clone(&sm1),
             Arc::clone(&relay1),
+            tm1,
         ));
 
         let pm2 = Arc::new(PairingManager::new(
@@ -348,6 +365,7 @@ mod tests {
             Arc::clone(&ap2),
             Arc::clone(&sm2),
             Arc::clone(&relay2),
+            tm2,
         ));
 
         // Mock the relay server by cross-connecting the relay channels

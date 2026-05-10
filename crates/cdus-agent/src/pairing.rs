@@ -13,6 +13,16 @@ use anyhow::Result;
 use tungstenite::{accept, client, Message, WebSocket};
 
 use crate::relay::RelayManager;
+use crate::turn_manager::{TurnManager, TurnConnection};
+use serde::{Deserialize, Serialize};
+use libp2p::Multiaddr;
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum RelaySignal {
+    Noise(Vec<u8>),
+    TurnCandidate { relayed_addr: SocketAddr },
+    Libp2pCandidate { multiaddr: Multiaddr },
+}
 
 #[derive(Clone)]
 pub struct ActivePairingState {
@@ -69,6 +79,8 @@ pub struct PairingManager {
     active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
     sync_manager: Arc<SyncManager>,
     relay_manager: Arc<RelayManager>,
+    turn_manager: Arc<TurnManager>,
+    pending_turn_sessions: Mutex<HashMap<String, TurnConnection>>,
 }
 
 impl PairingManager {
@@ -81,13 +93,41 @@ impl PairingManager {
         active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
         sync_manager: Arc<SyncManager>,
         relay_manager: Arc<RelayManager>,
+        turn_manager: Arc<TurnManager>,
     ) -> Self {
-        Self { store, ipc_tx, node_id, private_key, port, active_pairing, sync_manager, relay_manager }
+        Self { 
+            store, 
+            ipc_tx, 
+            node_id, 
+            private_key, 
+            port, 
+            active_pairing, 
+            sync_manager, 
+            relay_manager, 
+            turn_manager,
+            pending_turn_sessions: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn handle_relay_message(&self, source_uuid: String, payload: Vec<u8>) {
         info!("Processing relay signaling message from {} ({} bytes)", source_uuid, payload.len());
         
+        let signal: RelaySignal = match serde_json::from_slice(&payload) {
+            Ok(s) => s,
+            Err(_) => {
+                // Fallback for legacy raw Noise messages if any
+                RelaySignal::Noise(payload)
+            }
+        };
+
+        match signal {
+            RelaySignal::Noise(noise_payload) => self.handle_noise_signal(source_uuid, noise_payload),
+            RelaySignal::TurnCandidate { relayed_addr } => self.handle_turn_candidate(source_uuid, relayed_addr),
+            RelaySignal::Libp2pCandidate { multiaddr } => self.handle_libp2p_candidate(source_uuid, multiaddr),
+        }
+    }
+
+    fn handle_noise_signal(&self, source_uuid: String, payload: Vec<u8>) {
         let mut ap = self.active_pairing.lock().unwrap();
         
         // 1. If no active pairing, this might be a new incoming pairing request (Responder Message 1)
@@ -108,7 +148,9 @@ impl PairingManager {
                     match noise.write_message(self_label.as_bytes(), &mut out_buf) {
                         Ok(n) => {
                             info!("Sending handshake response (step 2) to {} via relay", source_uuid);
-                            if let Err(e) = self.relay_manager.send_signal(source_uuid.clone(), out_buf[..n].to_vec()) {
+                            let sig = RelaySignal::Noise(out_buf[..n].to_vec());
+                            let sig_bytes = serde_json::to_vec(&sig).unwrap();
+                            if let Err(e) = self.relay_manager.send_signal(source_uuid.clone(), sig_bytes) {
                                 error!("Failed to send handshake response via relay: {}", e);
                                 return;
                             }
@@ -117,11 +159,14 @@ impl PairingManager {
                             *ap = Some(ActivePairingState {
                                 pin: String::new(), 
                                 is_initiator: false,
-                                remote_id: source_uuid,
+                                remote_id: source_uuid.clone(),
                                 remote_label: "Remote Device (Relay)".to_string(), 
                                 confirmed: Arc::new(Mutex::new(None)),
                                 handshake: Arc::new(Mutex::new(Some(noise))),
                             });
+
+                            // Start monitoring for confirmation
+                            self.monitor_relay_pairing(source_uuid);
                         }
                         Err(e) => error!("Failed to write Noise message (step 2): {}", e),
                     }
@@ -168,7 +213,9 @@ impl PairingManager {
                                 match noise.write_message(self_label.as_bytes(), &mut out_buf) {
                                     Ok(n) => {
                                         info!("Sending handshake step 3 to {} via relay", source_uuid);
-                                        let _ = self.relay_manager.send_signal(source_uuid.clone(), out_buf[..n].to_vec());
+                                        let sig = RelaySignal::Noise(out_buf[..n].to_vec());
+                                        let sig_bytes = serde_json::to_vec(&sig).unwrap();
+                                        let _ = self.relay_manager.send_signal(source_uuid.clone(), sig_bytes);
 
                                         if noise.is_handshake_finished() {
                                             info!("Handshake finished via relay with {} (after sending step 3)", source_uuid);
@@ -189,6 +236,115 @@ impl PairingManager {
         }
     }
 
+    fn handle_turn_candidate(&self, source_uuid: String, relayed_addr: SocketAddr) {
+        info!("Received TURN candidate from {}: {}", source_uuid, relayed_addr);
+        
+        // 1. If we have a pending session for this UUID, we can now update its remote address
+        // (Wait, my start_session doesn't allow updating remote_addr after start)
+        // I'll store it in a map for now.
+        
+        let mut ap = self.active_pairing.lock().unwrap();
+        if let Some(ref mut state) = *ap {
+            if state.remote_id == source_uuid {
+                let confirmed = state.confirmed.lock().unwrap();
+                if let Some(true) = *confirmed {
+                    // Start TURN session if we haven't already
+                    if !self.pending_turn_sessions.lock().unwrap().contains_key(&source_uuid) {
+                        if let Ok(creds) = self.relay_manager.get_turn_credentials() {
+                            match self.turn_manager.start_session(creds, Some(relayed_addr)) {
+                                Ok((conn, _handle)) => {
+                                    // Send our candidate back if we haven't
+                                    let sig = RelaySignal::TurnCandidate { relayed_addr: conn.local_relayed_addr };
+                                    let sig_bytes = serde_json::to_vec(&sig).unwrap();
+                                    let _ = self.relay_manager.send_signal(source_uuid.clone(), sig_bytes);
+
+                                    // Initiate sync session
+                                    let mut hs = state.handshake.lock().unwrap();
+                                    if let Some(noise) = hs.take() {
+                                        if let Ok(transport) = noise.into_transport_mode() {
+                                            let remote_node_id = state.remote_id.clone();
+                                            let remote_label = state.remote_label.clone();
+                                            let sync_manager = Arc::clone(&self.sync_manager);
+                                            let ipc_tx = self.ipc_tx.clone();
+                                            let remote_uuid = source_uuid.clone();
+                                            
+                                            thread::spawn(move || {
+                                                if let Err(e) = run_turn_sync_session(conn, transport, remote_node_id, remote_label, sync_manager, ipc_tx) {
+                                                    error!("TURN sync session error for {}: {}", remote_uuid, e);
+                                                }
+                                            });
+                                            
+                                            // Pairing successful
+                                            let _ = self.store.add_paired_device(&source_uuid, &state.remote_label);
+                                            let _ = self.ipc_tx.send(IpcMessage::PairingResult { 
+                                                success: true, 
+                                                node_id: source_uuid, 
+                                                label: state.remote_label.clone() 
+                                            });
+                                        }
+                                    }
+                                }
+                                Err(e) => error!("Failed to start TURN session: {}", e),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_libp2p_candidate(&self, source_uuid: String, multiaddr: Multiaddr) {
+        info!("Received Libp2p candidate from {}: {}", source_uuid, multiaddr);
+        // In the future, we could bridge this to Libp2pManager to dial directly
+    }
+
+    fn monitor_relay_pairing(&self, remote_uuid: String) {
+        let active_pairing = Arc::clone(&self.active_pairing);
+        let relay_manager = Arc::clone(&self.relay_manager);
+        let turn_manager = Arc::clone(&self.turn_manager);
+
+        thread::spawn(move || {
+            info!("Monitoring relay pairing for {}", remote_uuid);
+            loop {
+                let status = {
+                    let ap = active_pairing.lock().unwrap();
+                    if let Some(ref state) = *ap {
+                        if state.remote_id == remote_uuid {
+                            let res = state.confirmed.lock().unwrap();
+                            *res
+                        } else {
+                            break; 
+                        }
+                    } else {
+                        break; 
+                    }
+                };
+
+                if let Some(accepted) = status {
+                    if accepted {
+                        info!("Relay pairing confirmed locally for {}. Fetching TURN credentials.", remote_uuid);
+                        if let Ok(creds) = relay_manager.get_turn_credentials() {
+                            // Initiator allocates and sends candidate first
+                            match turn_manager.start_session(creds, None) {
+                                Ok((conn, _handle)) => {
+                                    let relayed_addr = conn.local_relayed_addr;
+                                    let sig = RelaySignal::TurnCandidate { relayed_addr };
+                                    let sig_bytes = serde_json::to_vec(&sig).unwrap();
+                                    let _ = relay_manager.send_signal(remote_uuid.clone(), sig_bytes);
+                                    
+                                    // The session will be started in handle_turn_candidate when peer responds
+                                }
+                                Err(e) => error!("Failed to start TURN session for {}: {}", remote_uuid, e),
+                            }
+                        }
+                    }
+                    break;
+                }
+                thread::sleep(Duration::from_millis(500));
+            }
+        });
+    }
+
     pub fn initiate_remote_pairing(&self, target_uuid: String) {
         info!("Initiating remote pairing with {} via relay", target_uuid);
         
@@ -201,7 +357,9 @@ impl PairingManager {
         match noise.write_message(&[], &mut buf) {
             Ok(n) => {
                 info!("Sending handshake initiation (step 1) to {} via relay", target_uuid);
-                if let Err(e) = self.relay_manager.send_signal(target_uuid.clone(), buf[..n].to_vec()) {
+                let sig = RelaySignal::Noise(buf[..n].to_vec());
+                let sig_bytes = serde_json::to_vec(&sig).unwrap();
+                if let Err(e) = self.relay_manager.send_signal(target_uuid.clone(), sig_bytes) {
                     error!("Failed to send handshake initiation via relay: {}", e);
                     return;
                 }
@@ -210,11 +368,13 @@ impl PairingManager {
                 *ap = Some(ActivePairingState {
                     pin: String::new(),
                     is_initiator: true,
-                    remote_id: target_uuid,
+                    remote_id: target_uuid.clone(),
                     remote_label: "Remote Device (Relay)".to_string(),
                     confirmed: Arc::new(Mutex::new(None)),
                     handshake: Arc::new(Mutex::new(Some(noise))),
                 });
+
+                self.monitor_relay_pairing(target_uuid);
             }
             Err(e) => error!("Failed to write Noise message (step 1): {}", e),
         }
@@ -281,6 +441,71 @@ impl PairingManager {
             }
         });
     }
+}
+
+fn run_turn_sync_session(
+    conn: TurnConnection,
+    mut transport: TransportState,
+    node_id: String,
+    label: String,
+    sync_manager: Arc<SyncManager>,
+    ipc_tx: Sender<IpcMessage>,
+) -> Result<()> {
+    let (tx, rx) = flume::unbounded::<SyncMessage>();
+    sync_manager.add_peer(node_id.clone(), tx);
+
+    info!("TURN Sync session started for {} ({})", label, node_id);
+
+    loop {
+        // 1. Check for incoming messages from peer via TURN
+        if let Ok(data) = conn.rx.try_recv() {
+            let mut out = vec![0u8; data.len()];
+            match transport.read_message(&data, &mut out) {
+                Ok(n) => {
+                    out.truncate(n);
+                    if let Ok(msg) = serde_json::from_slice::<SyncMessage>(&out) {
+                        match msg {
+                            SyncMessage::ClipboardUpdate { content, timestamp } => {
+                                info!("Received clipboard update from peer {} via TURN: {}", label, content);
+                                let _ = ipc_tx.send(IpcMessage::SetClipboard { 
+                                    content, 
+                                    timestamp, 
+                                    source: label.clone() 
+                                });
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Noise decryption failed via TURN: {}", e);
+                    break;
+                }
+            }
+        }
+
+        // 2. Check for outgoing messages
+        if let Ok(msg) = rx.try_recv() {
+            let data = serde_json::to_vec(&msg)?;
+            let mut buf = vec![0u8; data.len() + 1024];
+            match transport.write_message(&data, &mut buf) {
+                Ok(n) => {
+                    if let Err(e) = conn.tx.send(buf[..n].to_vec()) {
+                        error!("Failed to send to TURN thread: {}", e);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!("Noise encryption failed: {}", e);
+                    break;
+                }
+            }
+        }
+
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    sync_manager.remove_peer(&node_id);
+    Ok(())
 }
 
 fn handle_incoming_connection(
