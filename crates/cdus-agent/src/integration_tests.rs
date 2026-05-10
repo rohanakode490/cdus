@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::pairing::{PairingManager, SyncManager};
+    use crate::relay::RelayManager;
     use crate::store::Store;
     use crate::ActivePairingState;
     use cdus_common::{IpcMessage, SyncMessage};
@@ -8,6 +9,7 @@ mod tests {
     use std::time::Duration;
     use std::thread;
     use tempfile::tempdir;
+    use base64::Engine;
 
     #[test]
     fn test_mutual_pairing_and_clipboard_sync() {
@@ -29,6 +31,9 @@ mod tests {
         let (id1, priv1) = store1.get_or_create_identity(dir1.path()).unwrap();
         let (id2, priv2) = store2.get_or_create_identity(dir2.path()).unwrap();
 
+        let (relay1, _) = RelayManager::new(id1.clone(), "http://localhost".to_string(), tx1.clone());
+        let (relay2, _) = RelayManager::new(id2.clone(), "http://localhost".to_string(), tx2.clone());
+
         let pm1 = PairingManager::new(
             Arc::clone(&store1),
             tx1.clone(),
@@ -37,6 +42,7 @@ mod tests {
             5201,
             Arc::clone(&ap1),
             Arc::clone(&sm1),
+            Arc::new(relay1),
         );
         let pm2 = PairingManager::new(
             Arc::clone(&store2),
@@ -46,6 +52,7 @@ mod tests {
             5202,
             Arc::clone(&ap2),
             Arc::clone(&sm2),
+            Arc::new(relay2),
         );
 
         let pm1 = Arc::new(pm1);
@@ -151,7 +158,8 @@ mod tests {
         let dd = Arc::new(Mutex::new(Vec::new()));
         let ap = Arc::new(Mutex::new(None));
         let sm = Arc::new(SyncManager::new());
-        let pm = Arc::new(PairingManager::new(Arc::clone(&store), tx.clone(), "test".to_string(), vec![], 0, Arc::clone(&ap), Arc::clone(&sm)));
+        let (relay, _) = RelayManager::new("test".to_string(), "http://localhost".to_string(), tx.clone());
+        let pm = Arc::new(PairingManager::new(Arc::clone(&store), tx.clone(), "test".to_string(), vec![], 0, Arc::clone(&ap), Arc::clone(&sm), Arc::new(relay)));
         let lpt = Arc::new(Mutex::new(0u64));
 
         // Initial state
@@ -195,7 +203,7 @@ mod tests {
         let dir2 = tempdir().unwrap();
         let store1 = Arc::new(Store::init(dir1.path()).unwrap());
         let store2 = Arc::new(Store::init(dir2.path()).unwrap());
-        let (tx1, rx1) = flume::unbounded();
+        let (tx1, _) = flume::unbounded();
         let (tx2, rx2) = flume::unbounded();
         let ap1 = Arc::new(Mutex::new(None));
         let ap2 = Arc::new(Mutex::new(None));
@@ -204,8 +212,11 @@ mod tests {
         let (id1, priv1) = store1.get_or_create_identity(dir1.path()).unwrap();
         let (id2, priv2) = store2.get_or_create_identity(dir2.path()).unwrap();
 
-        let pm1 = Arc::new(PairingManager::new(Arc::clone(&store1), tx1, id1, priv1, 5301, Arc::clone(&ap1), Arc::clone(&sm1)));
-        let pm2 = Arc::new(PairingManager::new(Arc::clone(&store2), tx2, id2, priv2, 5302, Arc::clone(&ap2), Arc::clone(&sm2)));
+        let (relay1, _) = RelayManager::new(id1.clone(), "http://localhost".to_string(), tx1.clone());
+        let (relay2, _) = RelayManager::new(id2.clone(), "http://localhost".to_string(), tx2.clone());
+
+        let pm1 = Arc::new(PairingManager::new(Arc::clone(&store1), tx1, id1, priv1, 5301, Arc::clone(&ap1), Arc::clone(&sm1), Arc::new(relay1)));
+        let pm2 = Arc::new(PairingManager::new(Arc::clone(&store2), tx2, id2, priv2, 5302, Arc::clone(&ap2), Arc::clone(&sm2), Arc::new(relay2)));
 
         let pm2_c = Arc::clone(&pm2);
         thread::spawn(move || pm2_c.start_listener());
@@ -250,7 +261,8 @@ mod tests {
         let (id, priv_key) = store.get_or_create_identity(dir.path()).unwrap();
         let ap = Arc::new(Mutex::new(None));
         let sm = Arc::new(SyncManager::new());
-        let pm = Arc::new(PairingManager::new(Arc::clone(&store), tx, id.clone(), priv_key, 5401, Arc::clone(&ap), Arc::clone(&sm)));
+        let (relay, _) = RelayManager::new(id.clone(), "http://localhost".to_string(), tx.clone());
+        let pm = Arc::new(PairingManager::new(Arc::clone(&store), tx, id.clone(), priv_key, 5401, Arc::clone(&ap), Arc::clone(&sm), Arc::new(relay)));
 
         let pm_c = Arc::clone(&pm);
         thread::spawn(move || pm_c.start_listener());
@@ -273,7 +285,8 @@ mod tests {
         let (id, priv_key) = store.get_or_create_identity(dir.path()).unwrap();
         let ap = Arc::new(Mutex::new(None));
         let sm = Arc::new(SyncManager::new());
-        let pm = PairingManager::new(Arc::clone(&store), tx, id, priv_key, 5501, Arc::clone(&ap), Arc::clone(&sm));
+        let (relay, _) = RelayManager::new(id.clone(), "http://localhost".to_string(), tx.clone());
+        let pm = PairingManager::new(Arc::clone(&store), tx, id, priv_key, 5501, Arc::clone(&ap), Arc::clone(&sm), Arc::new(relay));
 
         thread::spawn(move || pm.start_listener());
         thread::sleep(Duration::from_millis(50));
@@ -285,5 +298,110 @@ mod tests {
         
         thread::sleep(Duration::from_millis(100));
         assert!(ap.lock().unwrap().is_none(), "Should not crash or hang on malformed data");
+    }
+
+    #[test]
+    fn test_relay_remote_pairing() {
+        use crate::relay::RelayManager;
+
+        let dir1 = tempdir().unwrap();
+        let dir2 = tempdir().unwrap();
+
+        let store1 = Arc::new(Store::init(dir1.path()).unwrap());
+        let store2 = Arc::new(Store::init(dir2.path()).unwrap());
+
+        let (tx1, _) = flume::unbounded();
+        let (tx2, _) = flume::unbounded();
+
+        let ap1 = Arc::new(Mutex::new(None));
+        let ap2 = Arc::new(Mutex::new(None));
+
+        let sm1 = Arc::new(SyncManager::new());
+        let sm2 = Arc::new(SyncManager::new());
+
+        let (id1, priv1) = store1.get_or_create_identity(dir1.path()).unwrap();
+        let (id2, priv2) = store2.get_or_create_identity(dir2.path()).unwrap();
+
+        let (relay1, relay_rx1) = RelayManager::new(id1.clone(), "http://localhost".to_string(), tx1.clone());
+        let (relay2, relay_rx2) = RelayManager::new(id2.clone(), "http://localhost".to_string(), tx2.clone());
+
+        let relay1 = Arc::new(relay1);
+        let relay2 = Arc::new(relay2);
+
+        let pm1 = Arc::new(PairingManager::new(
+            Arc::clone(&store1),
+            tx1.clone(),
+            id1.clone(),
+            priv1,
+            5601,
+            Arc::clone(&ap1),
+            Arc::clone(&sm1),
+            Arc::clone(&relay1),
+        ));
+
+        let pm2 = Arc::new(PairingManager::new(
+            Arc::clone(&store2),
+            tx2.clone(),
+            id2.clone(),
+            priv2,
+            5602,
+            Arc::clone(&ap2),
+            Arc::clone(&sm2),
+            Arc::clone(&relay2),
+        ));
+
+        // Mock the relay server by cross-connecting the relay channels
+        let pm1_c = Arc::clone(&pm1);
+        let pm2_c = Arc::clone(&pm2);
+
+        thread::spawn(move || {
+            while let Ok(msg) = relay_rx1.recv() {
+                pm2_c.handle_relay_message(msg.source_uuid, base64::engine::general_purpose::STANDARD.decode(&msg.payload).unwrap());
+            }
+        });
+
+        thread::spawn(move || {
+            while let Ok(msg) = relay_rx2.recv() {
+                pm1_c.handle_relay_message(msg.source_uuid, base64::engine::general_purpose::STANDARD.decode(&msg.payload).unwrap());
+            }
+        });
+
+        // Step 1: Initiate remote pairing from PM1 to PM2
+        pm1.initiate_remote_pairing(id2.clone());
+
+        // Wait for handshake to complete and PIN to be derived
+        let mut attempts = 0;
+        let mut pin1 = String::new();
+        let mut pin2 = String::new();
+
+        while attempts < 20 {
+            {
+                let s1 = ap1.lock().unwrap();
+                if let Some(ref st) = *s1 {
+                    pin1 = st.pin.clone();
+                }
+            }
+            {
+                let s2 = ap2.lock().unwrap();
+                if let Some(ref st) = *s2 {
+                    pin2 = st.pin.clone();
+                }
+            }
+            if !pin1.is_empty() && !pin2.is_empty() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+            attempts += 1;
+        }
+
+        assert_eq!(pin1, pin2, "Pairing PINs should match");
+        assert_eq!(pin1.len(), 4, "PIN should be 4 digits");
+        
+        // Verify labels were exchanged
+        let label1 = store1.get_state("device_name").unwrap().unwrap();
+        let label2 = store2.get_state("device_name").unwrap().unwrap();
+
+        assert_eq!(ap1.lock().unwrap().as_ref().unwrap().remote_label, label2);
+        assert_eq!(ap2.lock().unwrap().as_ref().unwrap().remote_label, label1);
     }
 }

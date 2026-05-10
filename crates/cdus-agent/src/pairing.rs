@@ -1,17 +1,28 @@
-use snow::{Builder, params::NoiseParams, TransportState};
+use snow::{Builder, params::NoiseParams, TransportState, HandshakeState};
 use std::net::{TcpListener, TcpStream, SocketAddr};
-use tracing::{info, error};
+use tracing::{info, error, warn};
 use std::sync::Arc;
 use flume::Sender;
 use cdus_common::{IpcMessage, SyncMessage};
 use crate::store::Store;
-use crate::ActivePairingState;
 use std::sync::Mutex;
 use std::time::Duration;
 use std::collections::HashMap;
 use std::thread;
 use anyhow::Result;
 use tungstenite::{accept, client, Message, WebSocket};
+
+use crate::relay::RelayManager;
+
+#[derive(Clone)]
+pub struct ActivePairingState {
+    pub pin: String,
+    pub is_initiator: bool,
+    pub remote_id: String,
+    pub remote_label: String,
+    pub confirmed: Arc<Mutex<Option<bool>>>,
+    pub handshake: Arc<Mutex<Option<HandshakeState>>>,
+}
 
 pub struct SyncManager {
     peers: Mutex<HashMap<String, Sender<SyncMessage>>>,
@@ -57,6 +68,7 @@ pub struct PairingManager {
     port: u16,
     active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
     sync_manager: Arc<SyncManager>,
+    relay_manager: Arc<RelayManager>,
 }
 
 impl PairingManager {
@@ -68,8 +80,144 @@ impl PairingManager {
         port: u16, 
         active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
         sync_manager: Arc<SyncManager>,
+        relay_manager: Arc<RelayManager>,
     ) -> Self {
-        Self { store, ipc_tx, node_id, private_key, port, active_pairing, sync_manager }
+        Self { store, ipc_tx, node_id, private_key, port, active_pairing, sync_manager, relay_manager }
+    }
+
+    pub fn handle_relay_message(&self, source_uuid: String, payload: Vec<u8>) {
+        info!("Processing relay signaling message from {} ({} bytes)", source_uuid, payload.len());
+        
+        let mut ap = self.active_pairing.lock().unwrap();
+        
+        // 1. If no active pairing, this might be a new incoming pairing request (Responder Message 1)
+        if ap.is_none() {
+            info!("Received potential new pairing request from {} via relay", source_uuid);
+            
+            let params: NoiseParams = "Noise_XX_25519_ChaChaPoly_BLAKE2s".parse().unwrap();
+            let mut builder = Builder::new(params);
+            builder = builder.local_private_key(&self.private_key);
+            let mut noise = builder.build_responder().unwrap();
+            
+            let mut buf = [0u8; 1024];
+            match noise.read_message(&payload, &mut buf) {
+                Ok(_) => {
+                    // Handshake step 1 successful. Now send step 2.
+                    let self_label = self.store.get_state("device_name").unwrap().unwrap_or_else(|| "Unknown Device".to_string());
+                    let mut out_buf = [0u8; 1024];
+                    match noise.write_message(self_label.as_bytes(), &mut out_buf) {
+                        Ok(n) => {
+                            info!("Sending handshake response (step 2) to {} via relay", source_uuid);
+                            if let Err(e) = self.relay_manager.send_signal(source_uuid.clone(), out_buf[..n].to_vec()) {
+                                error!("Failed to send handshake response via relay: {}", e);
+                                return;
+                            }
+                            
+                            // Initialize active pairing state
+                            *ap = Some(ActivePairingState {
+                                pin: String::new(), 
+                                is_initiator: false,
+                                remote_id: source_uuid,
+                                remote_label: "Remote Device (Relay)".to_string(), 
+                                confirmed: Arc::new(Mutex::new(None)),
+                                handshake: Arc::new(Mutex::new(Some(noise))),
+                            });
+                        }
+                        Err(e) => error!("Failed to write Noise message (step 2): {}", e),
+                    }
+                }
+                Err(e) => error!("Failed to read Noise message (step 1) from relay: {}", e),
+            }
+            return;
+        }
+
+        // 2. If active pairing exists, check if it's the next step
+        if let Some(ref mut state) = *ap {
+            if state.remote_id != source_uuid {
+                warn!("Received relay message from {} while busy pairing with {}", source_uuid, state.remote_id);
+                return;
+            }
+
+            let mut handshake_lock = state.handshake.lock().unwrap();
+            if let Some(ref mut noise) = *handshake_lock {
+                let mut buf = [0u8; 1024];
+                match noise.read_message(&payload, &mut buf) {
+                    Ok(len) => {
+                        if noise.is_handshake_finished() {
+                            info!("Handshake finished via relay with {}", source_uuid);
+                            
+                            let h = noise.get_handshake_hash();
+                            state.pin = derive_pin(h);
+                            let remote_node_id = hex::encode(noise.get_remote_static().unwrap());
+                            
+                            if state.is_initiator {
+                                info!("Relay pairing with {} ({}) successful. PIN: {}", state.remote_label, remote_node_id, state.pin);
+                            } else {
+                                let remote_label = String::from_utf8_lossy(&buf[..len]).to_string();
+                                info!("Relay pairing with {} ({}) successful. PIN: {}", remote_label, remote_node_id, state.pin);
+                                state.remote_label = remote_label;
+                            }
+                        } else {
+                            if state.is_initiator {
+                                let remote_label = String::from_utf8_lossy(&buf[..len]).to_string();
+                                info!("Received responder label via relay: {}", remote_label);
+                                state.remote_label = remote_label;
+
+                                let self_label = self.store.get_state("device_name").unwrap().unwrap_or_else(|| "Unknown Device".to_string());
+                                let mut out_buf = [0u8; 1024];
+                                match noise.write_message(self_label.as_bytes(), &mut out_buf) {
+                                    Ok(n) => {
+                                        info!("Sending handshake step 3 to {} via relay", source_uuid);
+                                        let _ = self.relay_manager.send_signal(source_uuid.clone(), out_buf[..n].to_vec());
+
+                                        if noise.is_handshake_finished() {
+                                            info!("Handshake finished via relay with {} (after sending step 3)", source_uuid);
+                                            let h = noise.get_handshake_hash();
+                                            state.pin = derive_pin(h);
+                                            let remote_node_id = hex::encode(noise.get_remote_static().unwrap());
+                                            info!("Relay pairing with {} ({}) successful. PIN: {}", state.remote_label, remote_node_id, state.pin);
+                                        }
+                                    }
+                                    Err(e) => error!("Failed to write Noise message (step 3): {}", e),
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => error!("Failed to read Noise message during relay handshake: {}", e),
+                }
+            }
+        }
+    }
+
+    pub fn initiate_remote_pairing(&self, target_uuid: String) {
+        info!("Initiating remote pairing with {} via relay", target_uuid);
+        
+        let params: NoiseParams = "Noise_XX_25519_ChaChaPoly_BLAKE2s".parse().unwrap();
+        let mut builder = Builder::new(params);
+        builder = builder.local_private_key(&self.private_key);
+        let mut noise = builder.build_initiator().unwrap();
+        
+        let mut buf = [0u8; 1024];
+        match noise.write_message(&[], &mut buf) {
+            Ok(n) => {
+                info!("Sending handshake initiation (step 1) to {} via relay", target_uuid);
+                if let Err(e) = self.relay_manager.send_signal(target_uuid.clone(), buf[..n].to_vec()) {
+                    error!("Failed to send handshake initiation via relay: {}", e);
+                    return;
+                }
+                
+                let mut ap = self.active_pairing.lock().unwrap();
+                *ap = Some(ActivePairingState {
+                    pin: String::new(),
+                    is_initiator: true,
+                    remote_id: target_uuid,
+                    remote_label: "Remote Device (Relay)".to_string(),
+                    confirmed: Arc::new(Mutex::new(None)),
+                    handshake: Arc::new(Mutex::new(Some(noise))),
+                });
+            }
+            Err(e) => error!("Failed to write Noise message (step 1): {}", e),
+        }
     }
 
     pub fn start_listener(&self) {
@@ -208,6 +356,7 @@ fn handle_incoming_connection(
                     remote_id: remote_node_id.clone(),
                     remote_label: initiator_label.clone(),
                     confirmed: Arc::clone(&confirmed),
+                    handshake: Arc::new(Mutex::new(None)),
                 });
             }
 
@@ -352,6 +501,7 @@ fn handle_outgoing_connection(
                     remote_id: remote_node_id.clone(),
                     remote_label: responder_label.clone(),
                     confirmed: Arc::clone(&confirmed),
+                    handshake: Arc::new(Mutex::new(None)),
                 });
             }
 

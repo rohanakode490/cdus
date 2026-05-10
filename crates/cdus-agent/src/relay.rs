@@ -3,9 +3,11 @@ use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::thread;
 use std::time::Duration;
-use tracing::{error, info};
-use tungstenite::{connect, Message};
+use tracing::{error, info, warn};
+use tungstenite::{connect, Message, stream::MaybeTlsStream};
 use ureq;
+use flume::{Sender, Receiver};
+use cdus_common::IpcMessage;
 
 #[derive(Serialize)]
 struct RegisterRequest {
@@ -13,7 +15,7 @@ struct RegisterRequest {
     public_key: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SignalMessage {
     pub source_uuid: String,
     pub target_uuid: String,
@@ -23,14 +25,29 @@ pub struct SignalMessage {
 pub struct RelayManager {
     node_id: String,
     relay_url: String,
+    tx: Sender<IpcMessage>,
+    outgoing_tx: Sender<SignalMessage>,
 }
 
 impl RelayManager {
-    pub fn new(node_id: String, relay_url: String) -> Self {
-        Self {
+    pub fn new(node_id: String, relay_url: String, tx: Sender<IpcMessage>) -> (Self, Receiver<SignalMessage>) {
+        let (outgoing_tx, outgoing_rx) = flume::unbounded();
+        (Self {
             node_id,
             relay_url,
-        }
+            tx,
+            outgoing_tx,
+        }, outgoing_rx)
+    }
+
+    pub fn send_signal(&self, target_uuid: String, payload: Vec<u8>) -> Result<()> {
+        let b64_payload = general_purpose::STANDARD.encode(payload);
+        let msg = SignalMessage {
+            source_uuid: self.node_id.clone(),
+            target_uuid,
+            payload: b64_payload,
+        };
+        self.outgoing_tx.send(msg).map_err(|e| anyhow::anyhow!("Failed to queue signaling message: {}", e))
     }
 
     pub fn register(&self) -> Result<()> {
@@ -54,8 +71,9 @@ impl RelayManager {
         }
     }
 
-    pub fn start_signaling_loop(&self) {
+    pub fn start_signaling_loop(&self, outgoing_rx: Receiver<SignalMessage>) {
         let ws_url = self.relay_url.replace("http", "ws") + "/v1/signaling?uuid=" + &self.node_id;
+        let tx = self.tx.clone();
 
         thread::spawn(move || {
             loop {
@@ -63,7 +81,23 @@ impl RelayManager {
                 match connect(&ws_url) {
                     Ok((mut socket, _response)) => {
                         info!("Connected to relay signaling.");
+                        
+                        // Set read timeout to allow checking outgoing channel
+                        let timeout_res = match socket.get_mut() {
+                            MaybeTlsStream::Plain(s) => s.set_read_timeout(Some(Duration::from_millis(100))),
+                            #[cfg(feature = "native-tls")]
+                            MaybeTlsStream::NativeTls(s) => s.get_mut().set_read_timeout(Some(Duration::from_millis(100))),
+                            #[cfg(feature = "rustls")]
+                            MaybeTlsStream::Rustls(s) => s.get_mut().set_read_timeout(Some(Duration::from_millis(100))),
+                            _ => Ok(()),
+                        };
+
+                        if let Err(e) = timeout_res {
+                            warn!("Failed to set socket read timeout: {}", e);
+                        }
+
                         loop {
+                            // 1. Check for incoming messages
                             match socket.read() {
                                 Ok(msg) => {
                                     let maybe_signal = match msg {
@@ -76,15 +110,37 @@ impl RelayManager {
                                         match general_purpose::STANDARD.decode(&signal.payload) {
                                             Ok(decoded_payload) => {
                                                 info!("Received signaling message from {} ({} bytes)", signal.source_uuid, decoded_payload.len());
-                                                // TODO: Route decoded_payload to PairingManager/SyncManager
+                                                let _ = tx.send(IpcMessage::RelayMessage { 
+                                                    source_uuid: signal.source_uuid, 
+                                                    payload: decoded_payload 
+                                                });
                                             }
                                             Err(e) => error!("Failed to decode base64 payload from {}: {}", signal.source_uuid, e),
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Relay signaling read error: {}", e);
-                                    break;
+                                    if let tungstenite::Error::Io(io_err) = &e {
+                                        if io_err.kind() == std::io::ErrorKind::WouldBlock || io_err.kind() == std::io::ErrorKind::TimedOut {
+                                            // Normal timeout, continue to check outgoing
+                                        } else {
+                                            error!("Relay signaling IO error: {}", e);
+                                            break;
+                                        }
+                                    } else {
+                                        error!("Relay signaling error: {}", e);
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // 2. Check for outgoing messages
+                            while let Ok(msg) = outgoing_rx.try_recv() {
+                                if let Ok(json_msg) = serde_json::to_string(&msg) {
+                                    if let Err(e) = socket.send(Message::Text(json_msg)) {
+                                        error!("Failed to send signaling message over WebSocket: {}", e);
+                                        break;
+                                    }
                                 }
                             }
                         }

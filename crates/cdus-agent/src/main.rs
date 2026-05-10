@@ -47,18 +47,9 @@ mod relay;
 mod integration_tests;
 use store::Store;
 use mdns::MdnsManager;
-use pairing::{PairingManager, SyncManager};
+use pairing::{PairingManager, SyncManager, ActivePairingState};
 use relay::RelayManager;
 use cdus_common::{IpcMessage, SyncMessage};
-
-#[derive(Clone)]
-pub struct ActivePairingState {
-    pub pin: String,
-    pub is_initiator: bool,
-    pub remote_id: String,
-    pub remote_label: String,
-    pub confirmed: Arc<Mutex<Option<bool>>>,
-}
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -101,24 +92,24 @@ fn main() {
     info!("Device identity initialized. Node ID: {}", node_id);
 
     // Initialize Relay Manager
-    let relay = RelayManager::new(node_id.clone(), cli.relay_url.clone());
+    let (tx, rx) = flume::unbounded::<IpcMessage>();
+    let (relay, relay_rx) = RelayManager::new(node_id.clone(), cli.relay_url.clone(), tx.clone());
+    let relay = Arc::new(relay);
     if let Err(e) = relay.register() {
         error!("Failed to register with relay: {}. Will retry connection in background loop.", e);
     }
-    relay.start_signaling_loop();
+    relay.start_signaling_loop(relay_rx);
 
     // Start mDNS registration
     let mdns = MdnsManager::new();
     mdns.register_device(&node_id, &label, cli.port);
     let mdns = Arc::new(mdns);
 
-    let (tx, rx) = flume::unbounded::<IpcMessage>();
-
     let sync_manager = Arc::new(SyncManager::new());
     let sync_manager_daemon = Arc::clone(&sync_manager);
 
     // Start Pairing Manager
-    let pm = PairingManager::new(Arc::clone(&store), tx.clone(), node_id, private_key, cli.port, Arc::clone(&active_pairing), Arc::clone(&sync_manager));
+    let pm = PairingManager::new(Arc::clone(&store), tx.clone(), node_id, private_key, cli.port, Arc::clone(&active_pairing), Arc::clone(&sync_manager), Arc::clone(&relay));
     let pm = Arc::new(pm);
     let pm_clone = Arc::clone(&pm);
     thread::spawn(move || {
@@ -221,6 +212,14 @@ fn main() {
                                     let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Manual pairing initiated".to_string())).unwrap();
                                     let _ = stream.write_all(&resp_bytes);
                                 }
+                            }
+                            IpcMessage::PairWithRemote { uuid } => {
+                                let pm_init = Arc::clone(&pm);
+                                thread::spawn(move || {
+                                    pm_init.initiate_remote_pairing(uuid);
+                                });
+                                let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Remote pairing initiated".to_string())).unwrap();
+                                let _ = stream.write_all(&resp_bytes);
                             }
                             IpcMessage::ConfirmPairing(accepted) => {
                                 let ap = active_pairing.lock().unwrap();
@@ -416,6 +415,9 @@ fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Opt
                         }
                     }
                 }
+                IpcMessage::RelayMessage { source_uuid, payload } => {
+                    pm.handle_relay_message(source_uuid, payload);
+                }
                 _ => {}
             }
         }
@@ -542,7 +544,8 @@ mod tests {
         let lw = Arc::new(Mutex::new(None));
         let dd = Arc::new(Mutex::new(Vec::new()));
         let ap = Arc::new(Mutex::new(None));
-        let pm = PairingManager::new(Arc::clone(&store), daemon_tx.clone(), "test".to_string(), vec![], 0, Arc::clone(&ap), Arc::new(SyncManager::new()));
+        let (relay, _) = RelayManager::new("test".to_string(), "http://localhost".to_string(), daemon_tx.clone());
+        let pm = PairingManager::new(Arc::clone(&store), daemon_tx.clone(), "test".to_string(), vec![], 0, Arc::clone(&ap), Arc::new(SyncManager::new()), Arc::new(relay));
         let pm = Arc::new(pm);
         let lpt = Arc::new(Mutex::new(0u64));
         

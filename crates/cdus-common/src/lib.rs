@@ -27,6 +27,7 @@ pub enum IpcMessage {
     DiscoveredResponse(Vec<(String, String, String, String, u16)>),
     PairWith { node_id: String },
     PairWithIp { ip: String, port: u16 },
+    PairWithRemote { uuid: String },
     PairingPin(String),
     ConfirmPairing(bool),
     PairingResult { success: bool, node_id: String, label: String },
@@ -40,6 +41,7 @@ pub enum IpcMessage {
     GetPairedDevices,
     PairedDevicesResponse(Vec<(String, String)>),
     UnpairDevice { node_id: String },
+    RelayMessage { source_uuid: String, payload: Vec<u8> },
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
