@@ -9,8 +9,10 @@ activityCompose = "1.13.0"
 navigationCompose = "2.8.1"
 kotlin = "2.2.10"
 composeBom = "2024.09.00"
+jna = "5.14.0"
 
 [libraries]
+jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
@@ -31,4 +33,3 @@ androidx-compose-material-icons-extended = { group = "androidx.compose.material"
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-

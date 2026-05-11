@@ -28,13 +28,59 @@ import io.cdus.app.ui.screens.FilesScreen
 import io.cdus.app.ui.screens.SettingsScreen
 import io.cdus.app.ui.theme.CdusandroidTheme
 
+import android.util.Log
+import uniffi.cdus_ffi.greetFromRust
+import uniffi.cdus_ffi.initLogging
+import uniffi.cdus_ffi.initCore
+import uniffi.cdus_ffi.registerDevice
+import android.net.wifi.WifiManager
+import android.content.Context
+
 class MainActivity : ComponentActivity() {
+    private var multicastLock: WifiManager.MulticastLock? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        initLogging()
+        
+        val wifi = getSystemService(Context.WIFI_SERVICE) as WifiManager
+        multicastLock = wifi.createMulticastLock("cdus_multicast_lock").apply {
+            setReferenceCounted(true)
+            acquire()
+        }
+
+        // Initialize core and register for mDNS
+        val dataDir = filesDir.absolutePath
+        val identity = initCore(dataDir)
+        if (!identity.startsWith("error:")) {
+            val parts = identity.split(":", limit = 2)
+            if (parts.size >= 2) {
+                val nodeId = parts[0]
+                val label = parts[1]
+                registerDevice(nodeId, label, 5200.toUShort())
+                Log.i("CDUS", "Device registered: $nodeId ($label)")
+            }
+        } else {
+            Log.e("CDUS", "Failed to init core: $identity")
+        }
+        
+        val greeting = greetFromRust("Android")
+        Log.d("CDUS", "Rust says: $greeting")
+        
         enableEdgeToEdge()
         setContent {
             CdusandroidTheme {
                 MainScreen()
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        multicastLock?.let {
+            if (it.isHeld) {
+                it.release()
             }
         }
     }

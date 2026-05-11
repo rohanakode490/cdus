@@ -12,34 +12,54 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import uniffi.cdus_ffi.startDiscovery
+import uniffi.cdus_ffi.stopDiscovery
+import uniffi.cdus_ffi.getDiscoveredDevices
+import uniffi.cdus_ffi.DiscoveredDevice
+import uniffi.cdus_ffi.PairingStatus
+import uniffi.cdus_ffi.getPairingStatus
+import uniffi.cdus_ffi.initiatePairing
+import uniffi.cdus_ffi.confirmPairing
+import uniffi.cdus_ffi.cancelPairing
 
-data class Device(val id: String, val name: String, val os: String)
+import uniffi.cdus_ffi.clearDiscoveredDevices
 
 @Composable
 fun DevicesScreen() {
     var isScanning by remember { mutableStateOf(false) }
-    var mockDevices by remember { mutableStateOf(emptyList<Device>()) }
-    var deviceToPair by remember { mutableStateOf<Device?>(null) }
+    var devices by remember { mutableStateOf(emptyList<DiscoveredDevice>()) }
+    var pairingStatus by remember { mutableStateOf<PairingStatus?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(isScanning) {
         if (isScanning) {
-            delay(2000) // Simulate discovery delay
-            mockDevices = listOf(
-                Device("1", "MacBook Pro", "macOS"),
-                Device("2", "Linux Desktop", "Linux"),
-                Device("3", "Pixel 7", "Android")
-            )
+            clearDiscoveredDevices()
+            devices = emptyList()
+            startDiscovery()
+            while (isActive) {
+                devices = getDiscoveredDevices()
+                delay(1000)
+            }
         } else {
-            mockDevices = emptyList()
+            stopDiscovery()
+            // Don't clear devices here, keep them visible
         }
     }
 
-    if (deviceToPair != null) {
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            pairingStatus = getPairingStatus()
+            delay(1000)
+        }
+    }
+
+    if (pairingStatus != null && pairingStatus!!.active) {
         PairingDialog(
-            device = deviceToPair!!,
-            onDismiss = { deviceToPair = null },
-            onConfirm = { deviceToPair = null }
+            status = pairingStatus!!,
+            onDismiss = { cancelPairing() },
+            onConfirm = { confirmPairing(true) },
+            onDecline = { confirmPairing(false) }
         )
     }
 
@@ -64,20 +84,20 @@ fun DevicesScreen() {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (isScanning && mockDevices.isEmpty()) {
+        if (isScanning && devices.isEmpty()) {
             CircularProgressIndicator()
             Spacer(modifier = Modifier.height(8.dp))
             Text("Scanning for devices...")
-        } else if (!isScanning && mockDevices.isEmpty()) {
+        } else if (!isScanning && devices.isEmpty()) {
             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
                 Text("No devices found. Tap Start Scan to search.")
             }
         } else {
             LazyColumn(modifier = Modifier.weight(1f)) {
-                items(mockDevices) { device ->
+                items(devices) { device ->
                     DeviceListItem(
                         device = device,
-                        onConnectClick = { deviceToPair = device }
+                        onConnectClick = { initiatePairing(device.nodeId) }
                     )
                 }
             }
@@ -86,7 +106,7 @@ fun DevicesScreen() {
 }
 
 @Composable
-fun DeviceListItem(device: Device, onConnectClick: () -> Unit) {
+fun DeviceListItem(device: DiscoveredDevice, onConnectClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -108,8 +128,8 @@ fun DeviceListItem(device: Device, onConnectClick: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.width(16.dp))
                 Column {
-                    Text(text = device.name, style = MaterialTheme.typography.bodyLarge)
-                    Text(text = device.os, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+                    Text(text = device.label, style = MaterialTheme.typography.bodyLarge)
+                    Text(text = "${device.os} • ${device.ip}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
                 }
             }
             Button(onClick = onConnectClick) {
@@ -120,16 +140,21 @@ fun DeviceListItem(device: Device, onConnectClick: () -> Unit) {
 }
 
 @Composable
-fun PairingDialog(device: Device, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+fun PairingDialog(
+    status: PairingStatus, 
+    onDismiss: () -> Unit, 
+    onConfirm: () -> Unit,
+    onDecline: () -> Unit
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(text = "Pair with ${device.name}") },
+        title = { Text(text = "Pair with ${status.remoteLabel}") },
         text = {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                 Text(text = "Verify this PIN matches the other device:")
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    text = "1234",
+                    text = status.pin,
                     style = MaterialTheme.typography.displayMedium,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -141,10 +166,9 @@ fun PairingDialog(device: Device, onDismiss: () -> Unit, onConfirm: () -> Unit) 
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDecline) {
                 Text("Decline")
             }
         }
     )
 }
-

@@ -5,15 +5,11 @@ plugins {
 
 android {
     namespace = "io.cdus.app"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "io.cdus.app"
-        minSdk = 36
+        minSdk = 30
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
@@ -40,6 +36,7 @@ android {
 }
 
 dependencies {
+    implementation("net.java.dev.jna:jna:5.14.0@aar")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
