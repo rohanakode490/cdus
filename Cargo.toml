@@ -3,5 +3,5 @@ members = [
     "src-tauri",
     "crates/cdus-agent",
     "crates/cdus-common"
-]
+, "crates/cdus-ffi"]
 resolver = "2"
