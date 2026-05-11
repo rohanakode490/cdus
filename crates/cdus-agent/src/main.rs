@@ -40,6 +40,14 @@ enum Commands {
     Uninstall,
 }
 
+use store::Store;
+use mdns::MdnsManager;
+use pairing::{PairingManager, SyncManager, ActivePairingState};
+use relay::RelayManager;
+use turn_manager::TurnManager;
+use libp2p_manager::Libp2pManager;
+use cdus_common::{IpcMessage, SyncMessage, TransportType};
+
 mod store;
 mod mdns;
 mod pairing;
@@ -47,13 +55,6 @@ mod relay;
 mod turn_manager;
 mod libp2p_manager;
 mod integration_tests;
-use store::Store;
-use mdns::MdnsManager;
-use pairing::{PairingManager, SyncManager, ActivePairingState};
-use relay::RelayManager;
-use turn_manager::TurnManager;
-use libp2p_manager::Libp2pManager;
-use cdus_common::{IpcMessage, SyncMessage};
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -118,7 +119,7 @@ fn main() {
     let mdns = Arc::new(mdns);
 
     let sync_manager = Arc::new(SyncManager::new());
-    sync_manager.add_peer("libp2p_broadcast".to_string(), libp2p_sync_tx);
+    sync_manager.add_peer("libp2p_broadcast".to_string(), libp2p_sync_tx, TransportType::P2p);
     let sync_manager_daemon = Arc::clone(&sync_manager);
 
     // Start Pairing Manager
@@ -171,6 +172,9 @@ fn main() {
 
     info!("IPC Listener bound to {}", socket_name);
 
+    let sync_manager_ipc = Arc::clone(&sync_manager);
+    let relay_ipc = Arc::clone(&relay);
+
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
@@ -183,6 +187,7 @@ fn main() {
                                 let _ = stream.write_all(&resp_bytes);
                             }
                             IpcMessage::StartScan => {
+                                info!("IPC: Received StartScan request");
                                 {
                                     let mut list = discovered_devices.lock().unwrap();
                                     list.clear();
@@ -192,6 +197,7 @@ fn main() {
                                 let _ = stream.write_all(&resp_bytes);
                             }
                             IpcMessage::StopScan => {
+                                info!("IPC: Received StopScan request");
                                 mdns.stop_discovery();
                                 let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Scan stopped".to_string())).unwrap();
                                 let _ = stream.write_all(&resp_bytes);
@@ -265,7 +271,11 @@ fn main() {
                             IpcMessage::GetPairedDevices => {
                                 match store.get_paired_devices() {
                                     Ok(devices) => {
-                                        let resp_bytes = serde_json::to_vec(&IpcMessage::PairedDevicesResponse(devices)).unwrap();
+                                        let merged_devices: Vec<(String, String, Option<TransportType>)> = devices.into_iter().map(|(id, label)| {
+                                            let transport = sync_manager_ipc.get_peer_transport(&id);
+                                            (id, label, transport)
+                                        }).collect();
+                                        let resp_bytes = serde_json::to_vec(&IpcMessage::PairedDevicesResponse(merged_devices)).unwrap();
                                         let _ = stream.write_all(&resp_bytes);
                                     }
                                     Err(e) => {
@@ -282,6 +292,24 @@ fn main() {
                                     }
                                     Err(e) => {
                                         let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Error unpairing device: {}", e))).unwrap();
+                                        let _ = stream.write_all(&resp_bytes);
+                                    }
+                                }
+                            }
+                            IpcMessage::RevokeDevice { uuid } => {
+                                // 1. If we are initiating this (e.g. from UI), tell relay
+                                // (For simplicity, we always tell relay, it's idempotent)
+                                let _ = relay_ipc.revoke_device(uuid.clone());
+
+                                // 2. Unpair locally
+                                match store.remove_paired_device(&uuid) {
+                                    Ok(_) => {
+                                        sync_manager_ipc.remove_peer(&uuid);
+                                        let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Device revoked and unpaired".to_string())).unwrap();
+                                        let _ = stream.write_all(&resp_bytes);
+                                    }
+                                    Err(e) => {
+                                        let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Error removing revoked device: {}", e))).unwrap();
                                         let _ = stream.write_all(&resp_bytes);
                                     }
                                 }
@@ -342,8 +370,10 @@ fn main() {
 
 fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Option<usize>, store: Arc<Store>, last_written: Arc<Mutex<Option<String>>>, discovered_devices: Arc<Mutex<Vec<(String, String, String, String, u16)>>>, _active_pairing: Arc<Mutex<Option<ActivePairingState>>>, sync_manager: Arc<SyncManager>, pm: Arc<PairingManager>, last_processed_timestamp: Arc<Mutex<u64>>) {
     info!("Daemon logic thread started");
+    #[cfg(not(target_os = "android"))]
     use arboard::Clipboard;
     
+    #[cfg(not(target_os = "android"))]
     let mut clipboard = Clipboard::new().ok();
     
     let mut count = 0;
@@ -387,19 +417,22 @@ fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Opt
                             error!("Failed to store received clipboard event: {}", e);
                         }
 
-                        if let Some(ref mut cb) = clipboard {
-                            {
-                                let mut lw = last_written.lock().unwrap();
-                                *lw = Some(content.clone());
+                        #[cfg(not(target_os = "android"))]
+                        {
+                            if let Some(ref mut cb) = clipboard {
+                                {
+                                    let mut lw = last_written.lock().unwrap();
+                                    *lw = Some(content.clone());
+                                }
+                                if let Err(e) = cb.set_text(content) {
+                                    error!("Failed to write to clipboard: {}", e);
+                                    let mut lw = last_written.lock().unwrap();
+                                    *lw = None;
+                                }
+                            } else {
+                                clipboard = Clipboard::new().ok();
+                                error!("Clipboard not available in daemon loop");
                             }
-                            if let Err(e) = cb.set_text(content) {
-                                error!("Failed to write to clipboard: {}", e);
-                                let mut lw = last_written.lock().unwrap();
-                                *lw = None;
-                            }
-                        } else {
-                            clipboard = Clipboard::new().ok();
-                            error!("Clipboard not available in daemon loop");
                         }
                     } else {
                         info!("Ignoring outdated SetClipboard request from {}", source);
@@ -441,38 +474,45 @@ fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Opt
 }
 
 fn clipboard_watcher(tx: Sender<IpcMessage>, last_written: Arc<Mutex<Option<String>>>) {
-    use arboard::Clipboard;
-    
-    let mut clipboard = match Clipboard::new() {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Failed to initialize clipboard: {}", e);
-            return;
-        }
-    };
-
-    let mut last_content = clipboard.get_text().unwrap_or_default();
-    info!("Clipboard watcher initialized with initial content length: {}", last_content.len());
-
-    loop {
-        if let Ok(current_content) = clipboard.get_text() {
-            if current_content != last_content {
-                let mut lw = last_written.lock().unwrap();
-                if let Some(ref val) = *lw {
-                    if val == &current_content {
-                        info!("Ignoring clipboard change (self-triggered)");
-                        last_content = current_content;
-                        *lw = None;
-                        continue;
-                    }
-                }
-                
-                info!("Clipboard change detected");
-                last_content = current_content.clone();
-                let _ = tx.send(IpcMessage::ClipboardChanged { content: current_content, timestamp: now_ms() });
+    #[cfg(not(target_os = "android"))]
+    {
+        use arboard::Clipboard;
+        
+        let mut clipboard = match Clipboard::new() {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to initialize clipboard: {}", e);
+                return;
             }
+        };
+
+        let mut last_content = clipboard.get_text().unwrap_or_default();
+        info!("Clipboard watcher initialized with initial content length: {}", last_content.len());
+
+        loop {
+            if let Ok(current_content) = clipboard.get_text() {
+                if current_content != last_content {
+                    let mut lw = last_written.lock().unwrap();
+                    if let Some(ref val) = *lw {
+                        if val == &current_content {
+                            info!("Ignoring clipboard change (self-triggered)");
+                            last_content = current_content;
+                            *lw = None;
+                            continue;
+                        }
+                    }
+                    
+                    info!("Clipboard change detected");
+                    last_content = current_content.clone();
+                    let _ = tx.send(IpcMessage::ClipboardChanged { content: current_content, timestamp: now_ms() });
+                }
+            }
+            thread::sleep(Duration::from_secs(1));
         }
-        thread::sleep(Duration::from_secs(1));
+    }
+    #[cfg(target_os = "android")]
+    {
+        info!("Clipboard watcher not implemented for Android yet");
     }
 }
 

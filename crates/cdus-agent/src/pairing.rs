@@ -3,7 +3,7 @@ use std::net::{TcpListener, TcpStream, SocketAddr};
 use tracing::{info, error, warn};
 use std::sync::Arc;
 use flume::Sender;
-use cdus_common::{IpcMessage, SyncMessage};
+use cdus_common::{IpcMessage, SyncMessage, TransportType};
 use crate::store::Store;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -35,7 +35,7 @@ pub struct ActivePairingState {
 }
 
 pub struct SyncManager {
-    peers: Mutex<HashMap<String, Sender<SyncMessage>>>,
+    peers: Mutex<HashMap<String, (Sender<SyncMessage>, TransportType)>>,
 }
 
 impl SyncManager {
@@ -44,20 +44,31 @@ impl SyncManager {
             peers: Mutex::new(HashMap::new()),
         }
     }
+}
 
-    pub fn add_peer(&self, node_id: String, tx: Sender<SyncMessage>) {
+impl Default for SyncManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SyncManager {
+    #[tracing::instrument(skip(self, tx))]
+    pub fn add_peer(&self, node_id: String, tx: Sender<SyncMessage>, transport: TransportType) {
         let mut peers = self.peers.lock().unwrap();
-        peers.insert(node_id, tx);
+        peers.insert(node_id, (tx, transport));
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn remove_peer(&self, node_id: &str) {
         let mut peers = self.peers.lock().unwrap();
         peers.remove(node_id);
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn broadcast(&self, msg: SyncMessage) {
         let peers = self.peers.lock().unwrap();
-        for (id, tx) in peers.iter() {
+        for (id, (tx, _)) in peers.iter() {
             if let Err(e) = tx.send(msg.clone()) {
                 error!("Failed to send sync message to peer {}: {}", id, e);
             }
@@ -67,6 +78,11 @@ impl SyncManager {
     pub fn is_connected(&self, node_id: &str) -> bool {
         let peers = self.peers.lock().unwrap();
         peers.contains_key(node_id)
+    }
+
+    pub fn get_peer_transport(&self, node_id: &str) -> Option<TransportType> {
+        let peers = self.peers.lock().unwrap();
+        peers.get(node_id).map(|(_, t)| t.clone())
     }
 }
 
@@ -380,16 +396,21 @@ impl PairingManager {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn start_listener(&self) {
-        let addr = format!("0.0.0.0:{}", self.port);
-        let listener = match TcpListener::bind(&addr) {
-            Ok(l) => l,
-            Err(e) => {
-                error!("Failed to bind pairing listener on {}: {}", addr, e);
-                return;
-            }
-        };
+        use socket2::{Socket, Domain, Type, Protocol};
 
+        let addr: SocketAddr = format!("0.0.0.0:{}", self.port).parse().unwrap();
+
+        let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP)).expect("Failed to create socket");
+        socket.set_reuse_address(true).expect("Failed to set reuse_address");
+        #[cfg(not(windows))]
+        socket.set_reuse_port(true).ok(); // Best effort for reuse_port
+
+        socket.bind(&addr.into()).expect("Failed to bind socket");
+        socket.listen(128).expect("Failed to listen on socket");
+
+        let listener: TcpListener = socket.into();
         info!("Pairing listener active on {}", addr);
 
         for stream in listener.incoming() {
@@ -452,7 +473,7 @@ fn run_turn_sync_session(
     ipc_tx: Sender<IpcMessage>,
 ) -> Result<()> {
     let (tx, rx) = flume::unbounded::<SyncMessage>();
-    sync_manager.add_peer(node_id.clone(), tx);
+    sync_manager.add_peer(node_id.clone(), tx, TransportType::Relay);
 
     info!("TURN Sync session started for {} ({})", label, node_id);
 
@@ -814,7 +835,7 @@ fn run_sync_session(
     ipc_tx: Sender<IpcMessage>,
 ) -> Result<()> {
     let (tx, rx) = flume::unbounded::<SyncMessage>();
-    sync_manager.add_peer(node_id.clone(), tx);
+    sync_manager.add_peer(node_id.clone(), tx, TransportType::Lan);
 
     info!("Sync session started for {} ({}) over WebSocket", label, node_id);
 
@@ -909,8 +930,9 @@ mod tests {
         let sm = SyncManager::new();
         let (tx, rx) = flume::unbounded();
         
-        sm.add_peer("node1".to_string(), tx);
+        sm.add_peer("node1".to_string(), tx, TransportType::Lan);
         assert!(sm.is_connected("node1"));
+        assert_eq!(sm.get_peer_transport("node1"), Some(TransportType::Lan));
         
         sm.broadcast(SyncMessage::ClipboardUpdate { 
             content: "test".to_string(), 

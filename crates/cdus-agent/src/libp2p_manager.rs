@@ -4,14 +4,11 @@ use libp2p::{
     futures::StreamExt,
     gossipsub,
     identity,
-    mdns,
     noise,
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp,
     yamux,
     PeerId,
-    Swarm,
-    Multiaddr,
 };
 use std::sync::Arc;
 use std::thread;
@@ -24,7 +21,6 @@ use crate::store::Store;
 #[derive(NetworkBehaviour)]
 pub struct CdusBehaviour {
     pub gossipsub: gossipsub::Behaviour,
-    pub mdns: mdns::tokio::Behaviour,
     pub identify: libp2p::identify::Behaviour,
     pub dcutr: libp2p::dcutr::Behaviour,
     pub relay_client: libp2p::relay::client::Behaviour,
@@ -85,7 +81,8 @@ impl Libp2pManager {
                         yamux::Config::default,
                     ).expect("TCP config")
                     .with_quic()
-                    .with_behaviour(|key| {
+                    .with_relay_client(noise::Config::new, yamux::Config::default).expect("Relay client config")
+                    .with_behaviour(|key, relay_client| {
                         let gossipsub_config = gossipsub::ConfigBuilder::default()
                             .heartbeat_interval(Duration::from_secs(10))
                             .validation_mode(gossipsub::ValidationMode::Strict)
@@ -97,20 +94,12 @@ impl Libp2pManager {
                             gossipsub_config,
                         ).expect("Valid behaviour");
 
-                        let mdns = mdns::tokio::Behaviour::new(
-                            mdns::Config::default(),
-                            key.public().to_peer_id(),
-                        ).expect("Valid mdns");
-
                         let identify = libp2p::identify::Behaviour::new(
                             libp2p::identify::Config::new("/cdus/1.0.0".into(), key.public()),
                         );
 
-                        let (_relay_transport, relay_client) = libp2p::relay::client::new(key.public().to_peer_id());
-
                         CdusBehaviour {
                             gossipsub,
-                            mdns,
                             identify,
                             dcutr: libp2p::dcutr::Behaviour::new(key.public().to_peer_id()),
                             relay_client,
@@ -135,16 +124,6 @@ impl Libp2pManager {
                                 }
                                 SwarmEvent::Behaviour(event) => {
                                     match event {
-                                        CdusBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
-                                            for (peer_id, addr) in list {
-                                                let peer_id_str = peer_id.to_string();
-                                                // Only dial if paired
-                                                if let Ok(true) = store.is_device_paired(&peer_id_str) {
-                                                    info!("mDNS discovered paired libp2p peer: {} at {}. Dialing...", peer_id_str, addr);
-                                                    let _ = swarm.dial(addr);
-                                                }
-                                            }
-                                        }
                                         CdusBehaviourEvent::Gossipsub(gossipsub::Event::Message { propagation_source, message_id, message }) => {
                                             info!("Received gossipsub message {} from {}", message_id, propagation_source);
                                             if let Ok(sync_msg) = serde_json::from_slice::<SyncMessage>(&message.data) {
