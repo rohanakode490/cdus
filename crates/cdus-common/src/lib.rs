@@ -8,6 +8,13 @@ pub struct ClipboardEvent {
     pub timestamp: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+pub enum TransportType {
+    Lan,
+    P2p,
+    Relay,
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum IpcMessage {
     Ping,
@@ -39,8 +46,9 @@ pub enum IpcMessage {
         remote_label: String 
     },
     GetPairedDevices,
-    PairedDevicesResponse(Vec<(String, String)>),
+    PairedDevicesResponse(Vec<(String, String, Option<TransportType>)>),
     UnpairDevice { node_id: String },
+    RevokeDevice { uuid: String },
     RelayMessage { source_uuid: String, payload: Vec<u8> },
 }
 
