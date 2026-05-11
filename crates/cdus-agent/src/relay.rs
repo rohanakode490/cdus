@@ -128,7 +128,15 @@ impl RelayManager {
     }
 
     pub fn start_signaling_loop(&self, outgoing_rx: Receiver<SignalMessage>) {
-        let ws_url = self.relay_url.replace("http", "ws") + "/v1/signaling?uuid=" + &self.node_id;
+        let base_url = self.relay_url.trim().trim_end_matches('/');
+        let ws_url = if base_url.starts_with("https://") {
+            base_url.replace("https://", "wss://")
+        } else if base_url.starts_with("http://") {
+            base_url.replace("http://", "ws://")
+        } else {
+            format!("ws://{}", base_url)
+        } + "/v1/signaling?uuid=" + &self.node_id;
+
         let tx = self.tx.clone();
 
         info!("Starting background relay signaling loop for {}", ws_url);

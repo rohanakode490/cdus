@@ -35,6 +35,23 @@ impl Store {
             [],
         )?;
 
+        // Migration: Add 'source' column if it doesn't exist (for existing databases)
+        let has_source: bool = events_conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('events') WHERE name='source'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+
+        if !has_source {
+            info!("Migrating events table: adding 'source' column...");
+            events_conn.execute(
+                "ALTER TABLE events ADD COLUMN source TEXT NOT NULL DEFAULT 'Unknown'",
+                [],
+            )?;
+        }
+
         // State table for simple key-value settings
         state_conn.execute(
             "CREATE TABLE IF NOT EXISTS state (
