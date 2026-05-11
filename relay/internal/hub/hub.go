@@ -104,23 +104,25 @@ func (c *Client) writePump() {
 }
 
 type Hub struct {
-	clients    map[string]*Client
-	broadcast  chan domain.SignalMessage
-	register   chan *Client
-	unregister chan *Client
-	store      store.Store
-	logger     *slog.Logger
-	mu         sync.RWMutex
+	clients             map[string]*Client
+	broadcast           chan domain.SignalMessage
+	broadcastRevocation chan domain.RevocationEvent
+	register            chan *Client
+	unregister          chan *Client
+	store               store.Store
+	logger              *slog.Logger
+	mu                  sync.RWMutex
 }
 
 func NewHub(store store.Store, logger *slog.Logger) *Hub {
 	return &Hub{
-		broadcast:  make(chan domain.SignalMessage),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		clients:    make(map[string]*Client),
-		store:      store,
-		logger:     logger,
+		broadcast:           make(chan domain.SignalMessage, 256),
+		broadcastRevocation: make(chan domain.RevocationEvent, 256),
+		register:            make(chan *Client),
+		unregister:          make(chan *Client),
+		clients:             make(map[string]*Client),
+		store:               store,
+		logger:              logger,
 	}
 }
 
@@ -154,9 +156,35 @@ func (h *Hub) Run(ctx context.Context) {
 					h.mu.Unlock()
 				}
 			}
+		case rev := <-h.broadcastRevocation:
+			h.mu.RLock()
+			data, _ := json.Marshal(rev)
+			for _, client := range h.clients {
+				select {
+				case client.send <- data:
+				default:
+					// If client buffer is full, they'll miss it for now.
+					// In a real system, we'd ensure reliable delivery.
+				}
+			}
+			h.mu.RUnlock()
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+func (h *Hub) BroadcastRevocation(uuid string) {
+	h.broadcastRevocation <- domain.RevocationEvent{RevokedUUID: uuid}
+}
+
+func (h *Hub) DisconnectClient(uuid string) {
+	h.mu.RLock()
+	client, ok := h.clients[uuid]
+	h.mu.RUnlock()
+
+	if ok {
+		h.unregister <- client
 	}
 }
 

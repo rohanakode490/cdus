@@ -85,10 +85,38 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("POST /v1/register", s.handleRegister)
+	mux.HandleFunc("POST /v1/revoke", s.handleRevoke)
 	mux.HandleFunc("POST /v1/pairing/token", s.handleCreateToken)
 	mux.HandleFunc("GET /v1/signaling", s.handleSignaling)
 	mux.HandleFunc("GET /v1/turn", s.handleGetTurnCredentials)
 	return mux
+}
+
+func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UUID string `json:"uuid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if req.UUID == "" {
+		http.Error(w, "missing uuid", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.RevokeDevice(r.Context(), req.UUID); err != nil {
+		s.logger.Error("failed to revoke device", "error", err, "uuid", req.UUID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Broadcast to all clients and kick the revoked one
+	s.hub.BroadcastRevocation(req.UUID)
+	s.hub.DisconnectClient(req.UUID)
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {

@@ -293,3 +293,64 @@ func TestHandleGetTurnCredentials(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleRevoke(t *testing.T) {
+	tests := []struct {
+		name       string
+		reqBody    interface{}
+		expectedOk int
+	}{
+		{
+			name: "success",
+			reqBody: map[string]string{
+				"uuid": "device-1",
+			},
+			expectedOk: http.StatusOK,
+		},
+		{
+			name:       "invalid-json",
+			reqBody:    "not-json",
+			expectedOk: http.StatusBadRequest,
+		},
+		{
+			name:       "missing-uuid",
+			reqBody:    map[string]string{},
+			expectedOk: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ms := newMockStore()
+			logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+			h := hub.NewHub(ms, logger)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go h.Run(ctx)
+			srv := NewServer(ms, h, logger)
+
+			var body []byte
+			if s, ok := tt.reqBody.(string); ok {
+				body = []byte(s)
+			} else {
+				body, _ = json.Marshal(tt.reqBody)
+			}
+
+			req, _ := http.NewRequest("POST", "/v1/revoke", bytes.NewBuffer(body))
+			rr := httptest.NewRecorder()
+
+			srv.Routes().ServeHTTP(rr, req)
+
+			if rr.Code != tt.expectedOk {
+				t.Errorf("expected status %d, got %d", tt.expectedOk, rr.Code)
+			}
+
+			if tt.name == "success" {
+				revoked, _ := ms.IsDeviceRevoked(context.Background(), "device-1")
+				if !revoked {
+					t.Errorf("expected device to be revoked in store")
+				}
+			}
+		})
+	}
+}

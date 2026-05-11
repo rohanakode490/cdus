@@ -22,3 +22,8 @@ type SignalMessage struct {
 	TargetUUID string `json:"target_uuid"`
 	Payload    []byte `json:"payload"` // Opaque E2EE payload
 }
+
+// RevocationEvent is broadcast to all clients when a device is revoked.
+type RevocationEvent struct {
+	RevokedUUID string `json:"revoked_uuid"`
+}
