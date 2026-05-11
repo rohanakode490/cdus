@@ -266,7 +266,7 @@ window.addEventListener("DOMContentLoaded", () => {
     if (!pairedList) return;
     
     try {
-      const devices: [string, string][] = await invoke("get_paired_devices");
+      const devices: [string, string, string | null][] = await invoke("get_paired_devices");
       pairedDeviceIds = devices.map(([id]) => id);
       
       pairedList.innerHTML = "";
@@ -277,17 +277,22 @@ window.addEventListener("DOMContentLoaded", () => {
       }
 
       devicesEmpty?.classList.add("hidden");
-      devices.forEach(([id, name], index) => {
+      devices.forEach(([id, name, transport]) => {
         const row = document.createElement("div");
         row.className = "device-row";
-        const path = index % 2 === 0 ? "LAN" : "Relay";
+        
+        const isOnline = transport !== null;
+        const statusClass = isOnline ? "online" : "offline";
+        const statusText = isOnline ? "Online" : "Offline";
+        const transportText = transport || "";
+
         row.innerHTML = `
           <div class="device-info">
             <span class="device-name-label">${name}</span>
             <div class="device-status">
-              <span class="status-dot online"></span>
-              <span class="device-type-label">Online</span>
-              <span class="connection-path">${path}</span>
+              <span class="status-dot ${statusClass}"></span>
+              <span class="device-type-label">${statusText}</span>
+              ${isOnline ? `<span class="connection-path">${transportText}</span>` : ""}
             </div>
           </div>
           <button class="secondary-btn unpair-btn" data-id="${id}">Unpair</button>

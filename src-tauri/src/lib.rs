@@ -4,7 +4,7 @@ use tauri::{
     Manager,
 };
 
-use cdus_common::{IpcMessage, ClipboardEvent};
+use cdus_common::{IpcMessage, ClipboardEvent, TransportType};
 use interprocess::local_socket::LocalSocketStream;
 use std::io::{Read, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -178,7 +178,7 @@ async fn get_pairing_status() -> Result<(Option<String>, bool, bool, String), St
 }
 
 #[tauri::command]
-async fn get_paired_devices() -> Result<Vec<(String, String)>, String> {
+async fn get_paired_devices() -> Result<Vec<(String, String, Option<TransportType>)>, String> {
     let msg = IpcMessage::GetPairedDevices;
     match send_ipc_message(msg)? {
         IpcMessage::PairedDevicesResponse(devices) => Ok(devices),
