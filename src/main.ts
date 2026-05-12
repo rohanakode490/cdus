@@ -179,13 +179,14 @@ window.addEventListener("DOMContentLoaded", () => {
       }
 
       discoveryList.innerHTML = "";
-      availableDevices.forEach(([id, name, os, _ip, _port]) => {
+      availableDevices.forEach(([id, name, os, ip, port]) => {
         const row = document.createElement("div");
         row.className = "device-row";
+        const shortId = id.substring(0, 8);
         row.innerHTML = `
           <div class="device-info">
-            <span class="device-name-label">${name}</span>
-            <span class="device-type-label">${os}</span>
+            <span class="device-name-label">${name} <span class="device-id-tag">#${shortId}</span></span>
+            <span class="device-type-label">${os} • ${ip}:${port}</span>
           </div>
           <button class="primary-btn connect-btn" data-id="${id}">Connect</button>
         `;
@@ -324,14 +325,16 @@ window.addEventListener("DOMContentLoaded", () => {
     discoverySection?.classList.remove("hidden");
     document.querySelector("#no-discovery-hint")?.classList.add("hidden");
     
-    if (scanBtn.textContent === "Scanning...") {
+    if (scanBtn.classList.contains("scanning")) {
       await invoke("stop_scan");
       if (scanInterval) clearInterval(scanInterval);
-      scanBtn.textContent = "Scan for Devices";
+      scanBtn.classList.remove("scanning");
+      scanBtn.innerHTML = "Scan for Devices";
       return;
     }
 
-    scanBtn.textContent = "Scanning...";
+    scanBtn.classList.add("scanning");
+    scanBtn.innerHTML = "<div class=\"spinner\" style=\"width: 14px; height: 14px; border-width: 2px; margin-right: 8px; display: inline-block; vertical-align: middle;\"></div><span>Stop Scan</span>";
     discoveryList!.innerHTML = "<div class=\"scanning-indicator\"><div class=\"spinner\"></div><span>Scanning for nearby devices...</span></div>";
     
     try {
@@ -339,10 +342,11 @@ window.addEventListener("DOMContentLoaded", () => {
       scanInterval = setInterval(updateDiscoveryList, 2000);
       
       setTimeout(async () => {
-        if (scanBtn.textContent === "Scanning...") {
+        if (scanBtn.classList.contains("scanning")) {
           await invoke("stop_scan");
           if (scanInterval) clearInterval(scanInterval);
-          scanBtn.textContent = "Scan for Devices";
+          scanBtn.classList.remove("scanning");
+          scanBtn.innerHTML = "Scan for Devices";
           if (discoveryList?.innerHTML.includes("scanning-indicator")) {
             discoveryList.innerHTML = "";
             document.querySelector("#no-discovery-hint")?.classList.remove("hidden");
@@ -351,7 +355,8 @@ window.addEventListener("DOMContentLoaded", () => {
       }, 30000);
     } catch (err) {
       console.error("Failed to start scan:", err);
-      scanBtn.textContent = "Scan for Devices";
+      scanBtn.classList.remove("scanning");
+      scanBtn.innerHTML = "Scan for Devices";
     }
   });
 
@@ -401,14 +406,19 @@ window.addEventListener("DOMContentLoaded", () => {
     alert("File picker opened! (Mock)");
   });
 
-  // Refresh clipboard history every 5 seconds if visible
+  // Initial load of paired devices
+  renderPairedDevices();
+
+  // Periodic refresh for devices status and clipboard
   setInterval(() => {
+    const devicesView = document.querySelector("#view-devices");
+    if (devicesView?.classList.contains("active")) {
+      renderPairedDevices();
+    }
+    
     const clipboardView = document.querySelector("#view-clipboard");
     if (clipboardView?.classList.contains("active")) {
       renderClipboard();
     }
   }, 5000);
-
-  // Initial load of paired devices
-  renderPairedDevices();
 });

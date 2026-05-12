@@ -140,6 +140,16 @@ h3 {
   color: #333;
 }
 
+.device-id-tag {
+  font-size: 0.7rem;
+  color: #888;
+  font-weight: 400;
+  margin-left: 4px;
+  background: #f0f0f0;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
 .device-type-label {
   font-size: 0.8rem;
   color: #888;
