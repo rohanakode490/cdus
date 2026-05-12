@@ -29,6 +29,9 @@ import io.cdus.app.ui.screens.SettingsScreen
 import io.cdus.app.ui.theme.CdusandroidTheme
 
 import android.util.Log
+import android.content.Intent
+import android.os.Build
+import android.content.ClipboardManager
 import uniffi.cdus_ffi.greetFromRust
 import uniffi.cdus_ffi.initLogging
 import uniffi.cdus_ffi.initCore
@@ -38,6 +41,47 @@ import android.content.Context
 
 class MainActivity : ComponentActivity() {
     private var multicastLock: WifiManager.MulticastLock? = null
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            Log.d("CDUS", "Window gained focus, checking clipboard")
+            checkClipboard()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Still check here for robustness
+        checkClipboard()
+    }
+
+    private fun checkClipboard() {
+        try {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            if (clipboard.hasPrimaryClip()) {
+                val clipData = clipboard.primaryClip
+                if (clipData != null && clipData.itemCount > 0) {
+                    val content = clipData.getItemAt(0).text?.toString()
+                    if (content != null) {
+                        val sharedPref = getSharedPreferences("cdus_settings", Context.MODE_PRIVATE)
+                        if (sharedPref.getBoolean("clipboard_sync", false)) {
+                            // Only broadcast if it's new
+                            val lastHash = sharedPref.getString("last_clip_hash", "")
+                            val currentHash = content.hashCode().toString()
+                            if (currentHash != lastHash) {
+                                sharedPref.edit().putString("last_clip_hash", currentHash).apply()
+                                Log.i("CDUS", "New clipboard content detected on resume, broadcasting")
+                                uniffi.cdus_ffi.broadcastClipboard(content)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("CDUS", "Error checking clipboard on resume: ${e.message}")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,7 +96,8 @@ class MainActivity : ComponentActivity() {
 
         // Initialize core and register for mDNS
         val dataDir = filesDir.absolutePath
-        val identity = initCore(dataDir)
+        val deviceName = Build.MODEL
+        val identity = initCore(dataDir, deviceName)
         if (!identity.startsWith("error:")) {
             val parts = identity.split(":", limit = 2)
             if (parts.size >= 2) {
@@ -60,6 +105,13 @@ class MainActivity : ComponentActivity() {
                 val label = parts[1]
                 registerDevice(nodeId, label, 5200.toUShort())
                 Log.i("CDUS", "Device registered: $nodeId ($label)")
+                
+                // Start sync service if enabled
+                val sharedPref = getSharedPreferences("cdus_settings", Context.MODE_PRIVATE)
+                if (sharedPref.getBoolean("clipboard_sync", false)) {
+                    val intent = Intent(this, io.cdus.app.service.SyncService::class.java)
+                    androidx.core.content.ContextCompat.startForegroundService(this, intent)
+                }
             }
         } else {
             Log.e("CDUS", "Failed to init core: $identity")

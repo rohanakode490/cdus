@@ -6,7 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -14,29 +14,39 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-
-data class ClipboardItem(
-    val id: String,
-    val content: String,
-    val sourceDevice: String,
-    val timestamp: String
-)
-
-private val mockClipboardHistory = listOf(
-    ClipboardItem("1", "https://github.com/google/gemini-cli", "MacBook Pro", "2 min ago"),
-    ClipboardItem("2", "Gemini is a family of multimodal AI models.", "Linux Desktop", "15 min ago"),
-    ClipboardItem("3", "TODO: Buy milk and bread", "Pixel 7", "1 hour ago"),
-    ClipboardItem("4", "ssh user@192.168.1.10", "MacBook Pro", "3 hours ago"),
-    ClipboardItem("5", "package main\n\nfunc main() {\n\tprintln(\"Hello\")\n}", "Linux Desktop", "5 hours ago"),
-    ClipboardItem("6", "https://tauri.app/v2", "Pixel 7", "Yesterday"),
-    ClipboardItem("7", "Meeting at 3 PM today", "MacBook Pro", "Yesterday"),
-    ClipboardItem("8", "API_KEY=sk_test_placeholder_key_value", "Linux Desktop", "2 days ago"),
-    ClipboardItem("9", "Jetpack Compose Navigation Guide", "Pixel 7", "3 days ago"),
-    ClipboardItem("10", "Color(0xFF6200EE)", "MacBook Pro", "5 days ago")
-)
+import kotlinx.coroutines.*
+import com.google.accompanist.swiperefresh.SwipeRefresh
+import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
+import uniffi.cdus_ffi.getClipboardHistory
+import uniffi.cdus_ffi.ClipboardHistoryItem
 
 @Composable
 fun ClipboardScreen() {
+    var clipboardHistory by remember { mutableStateOf<List<ClipboardHistoryItem>>(emptyList()) }
+    var isRefreshing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    fun refreshHistory() {
+        scope.launch {
+            isRefreshing = true
+            val freshHistory = withContext(Dispatchers.IO) {
+                getClipboardHistory(50u)
+            }
+            delay(500)
+            clipboardHistory = freshHistory
+            isRefreshing = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            if (!isRefreshing) {
+                clipboardHistory = getClipboardHistory(50u)
+            }
+            delay(2000) // Poll every 2 seconds for updates
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -48,19 +58,31 @@ fun ClipboardScreen() {
             modifier = Modifier.padding(bottom = 16.dp)
         )
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+        SwipeRefresh(
+            state = rememberSwipeRefreshState(isRefreshing),
+            onRefresh = { refreshHistory() },
+            modifier = Modifier.fillMaxSize()
         ) {
-            items(mockClipboardHistory) { item ->
-                ClipboardListItem(item)
+            if (clipboardHistory.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(text = "No clipboard history yet.", color = MaterialTheme.colorScheme.outline)
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(clipboardHistory) { item ->
+                        ClipboardListItem(item)
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-fun ClipboardListItem(item: ClipboardItem) {
+fun ClipboardListItem(item: ClipboardHistoryItem) {
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
 
@@ -88,7 +110,7 @@ fun ClipboardListItem(item: ClipboardItem) {
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "from ${item.sourceDevice}",
+                    text = "from ${item.source}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.secondary
                 )
