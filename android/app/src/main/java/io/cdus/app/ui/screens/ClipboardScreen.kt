@@ -14,6 +14,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.*
 import com.google.accompanist.swiperefresh.SwipeRefresh
 import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
@@ -85,6 +89,19 @@ fun ClipboardScreen() {
 fun ClipboardListItem(item: ClipboardHistoryItem) {
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
+    
+    val displayTime = remember(item.timestamp) {
+        try {
+            // SQLite CURRENT_TIMESTAMP is "yyyy-MM-dd HH:mm:ss" in UTC
+            val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            val utcDateTime = LocalDateTime.parse(item.timestamp, formatter)
+            val zonedDateTime = utcDateTime.atZone(ZoneOffset.UTC)
+            val localDateTime = zonedDateTime.withZoneSameInstant(ZoneId.systemDefault())
+            localDateTime.format(DateTimeFormatter.ofPattern("MMM dd, HH:mm"))
+        } catch (e: Exception) {
+            item.timestamp
+        }
+    }
 
     Card(
         modifier = Modifier
@@ -115,7 +132,7 @@ fun ClipboardListItem(item: ClipboardHistoryItem) {
                     color = MaterialTheme.colorScheme.secondary
                 )
                 Text(
-                    text = item.timestamp,
+                    text = displayTime,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline
                 )
