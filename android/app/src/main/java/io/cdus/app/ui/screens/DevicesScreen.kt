@@ -24,32 +24,35 @@ import uniffi.cdus_ffi.confirmPairing
 import uniffi.cdus_ffi.cancelPairing
 
 import uniffi.cdus_ffi.clearDiscoveredDevices
+import uniffi.cdus_ffi.getPairedDevices
+import uniffi.cdus_ffi.unpairDevice
+import uniffi.cdus_ffi.PairedDevice
 
 @Composable
 fun DevicesScreen() {
     var isScanning by remember { mutableStateOf(false) }
-    var devices by remember { mutableStateOf(emptyList<DiscoveredDevice>()) }
+    var discoveredDevices by remember { mutableStateOf<List<DiscoveredDevice>>(emptyList()) }
+    var pairedDevices by remember { mutableStateOf<List<PairedDevice>>(emptyList()) }
     var pairingStatus by remember { mutableStateOf<PairingStatus?>(null) }
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(isScanning) {
         if (isScanning) {
             clearDiscoveredDevices()
-            devices = emptyList()
+            discoveredDevices = emptyList()
             startDiscovery()
             while (isActive) {
-                devices = getDiscoveredDevices()
+                discoveredDevices = getDiscoveredDevices()
                 delay(1000)
             }
         } else {
             stopDiscovery()
-            // Don't clear devices here, keep them visible
         }
     }
 
     LaunchedEffect(Unit) {
         while (isActive) {
             pairingStatus = getPairingStatus()
+            pairedDevices = getPairedDevices()
             delay(1000)
         }
     }
@@ -66,40 +69,119 @@ fun DevicesScreen() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .padding(16.dp)
     ) {
         Text(
-            text = "Device Discovery",
+            text = "Devices",
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        // Paired Devices Section
+        Text(
+            text = "Your Devices",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.secondary,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+
+        if (pairedDevices.isEmpty()) {
+            Text(
+                text = "No devices paired yet.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+        } else {
+            for (device in pairedDevices) {
+                PairedDeviceItem(
+                    device = device,
+                    onUnpairClick = { unpairDevice(device.nodeId) }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Discovery Section
+        Text(
+            text = "Discovery",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.secondary,
+            modifier = Modifier.padding(bottom = 8.dp)
         )
 
         Button(
             onClick = { isScanning = !isScanning },
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(if (isScanning) "Stop Scan" else "Start Scan")
+            if (isScanning) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Stop Scan")
+                }
+            } else {
+                Text("Start Scan")
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (isScanning && devices.isEmpty()) {
-            CircularProgressIndicator()
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("Scanning for devices...")
-        } else if (!isScanning && devices.isEmpty()) {
-            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                Text("No devices found. Tap Start Scan to search.")
+        if (isScanning && discoveredDevices.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
             }
+        } else if (!isScanning && discoveredDevices.isEmpty()) {
+            // Nothing to show
         } else {
             LazyColumn(modifier = Modifier.weight(1f)) {
-                items(devices) { device ->
+                // Filter out already paired devices from discovered list
+                val filteredDiscovered = discoveredDevices.filter { d ->
+                    pairedDevices.none { p -> p.nodeId == d.nodeId }
+                }
+                items(filteredDiscovered) { device ->
                     DeviceListItem(
                         device = device,
                         onConnectClick = { initiatePairing(device.nodeId) }
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun PairedDeviceItem(device: PairedDevice, onUnpairClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(12.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Computer,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(text = device.label, style = MaterialTheme.typography.bodyLarge)
+            }
+            TextButton(onClick = onUnpairClick) {
+                Text("Unpair", color = MaterialTheme.colorScheme.error)
             }
         }
     }
