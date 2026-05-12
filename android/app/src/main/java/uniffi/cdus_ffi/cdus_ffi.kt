@@ -653,6 +653,33 @@ internal open class UniffiForeignFutureStructVoid(
 internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
     fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructVoid.UniffiByValue,)
 }
+internal interface UniffiCallbackInterfaceClipboardListenerMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`content`: RustBuffer.ByValue,`source`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+@Structure.FieldOrder("onClipboardUpdate", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceClipboardListener(
+    @JvmField internal var `onClipboardUpdate`: UniffiCallbackInterfaceClipboardListenerMethod0? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `onClipboardUpdate`: UniffiCallbackInterfaceClipboardListenerMethod0? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceClipboardListener(`onClipboardUpdate`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceClipboardListener) {
+        `onClipboardUpdate` = other.`onClipboardUpdate`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
+}
+
+
+
+
+
+
+
+
 
 
 
@@ -749,17 +776,24 @@ internal interface UniffiLib : Library {
             .also { lib: UniffiLib ->
                 uniffiCheckContractApiVersion(lib)
                 uniffiCheckApiChecksums(lib)
+                uniffiCallbackInterfaceClipboardListener.register(lib)
                 }
         }
         
     }
 
+    fun uniffi_cdus_ffi_fn_init_callback_vtable_clipboardlistener(`vtable`: UniffiVTableCallbackInterfaceClipboardListener,
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_broadcast_clipboard(`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_cdus_ffi_fn_func_cancel_pairing(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_clear_discovered_devices(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_confirm_pairing(`accepted`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_fn_func_get_clipboard_history(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_discovered_devices(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_paired_devices(uniffi_out_err: UniffiRustCallStatus, 
@@ -768,13 +802,15 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_greet_from_rust(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_cdus_ffi_fn_func_init_core(`dataDir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_cdus_ffi_fn_func_init_core(`dataDir`: RustBuffer.ByValue,`deviceName`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_init_logging(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_initiate_pairing(`nodeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_register_device(`nodeId`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,`port`: Short,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_set_clipboard_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_start_discovery(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -894,11 +930,15 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_cdus_ffi_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_checksum_func_broadcast_clipboard(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_cancel_pairing(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_clear_discovered_devices(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_confirm_pairing(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_get_clipboard_history(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_discovered_devices(
     ): Short
@@ -916,11 +956,15 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_register_device(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_set_clipboard_listener(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_start_discovery(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_stop_discovery(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_unpair_device(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_method_clipboardlistener_on_clipboard_update(
     ): Short
     fun ffi_cdus_ffi_uniffi_contract_version(
     ): Int
@@ -939,6 +983,9 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_cdus_ffi_checksum_func_broadcast_clipboard() != 52173.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_cancel_pairing() != 27523.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -946,6 +993,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_confirm_pairing() != 36292.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_get_clipboard_history() != 8152.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_get_discovered_devices() != 33769.toShort()) {
@@ -960,7 +1010,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_greet_from_rust() != 12695.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_cdus_ffi_checksum_func_init_core() != 33318.toShort()) {
+    if (lib.uniffi_cdus_ffi_checksum_func_init_core() != 61803.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_init_logging() != 7289.toShort()) {
@@ -972,6 +1022,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_register_device() != 23243.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_set_clipboard_listener() != 63714.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_start_discovery() != 43924.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -979,6 +1032,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_unpair_device() != 29091.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_method_clipboardlistener_on_clipboard_update() != 1910.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1048,6 +1104,52 @@ public object FfiConverterUShort: FfiConverter<UShort, Short> {
 
     override fun write(value: UShort, buf: ByteBuffer) {
         buf.putShort(value.toShort())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterUInt: FfiConverter<UInt, Int> {
+    override fun lift(value: Int): UInt {
+        return value.toUInt()
+    }
+
+    override fun read(buf: ByteBuffer): UInt {
+        return lift(buf.getInt())
+    }
+
+    override fun lower(value: UInt): Int {
+        return value.toInt()
+    }
+
+    override fun allocationSize(value: UInt) = 4UL
+
+    override fun write(value: UInt, buf: ByteBuffer) {
+        buf.putInt(value.toInt())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterLong: FfiConverter<Long, Long> {
+    override fun lift(value: Long): Long {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Long {
+        return buf.getLong()
+    }
+
+    override fun lower(value: Long): Long {
+        return value
+    }
+
+    override fun allocationSize(value: Long) = 8UL
+
+    override fun write(value: Long, buf: ByteBuffer) {
+        buf.putLong(value)
     }
 }
 
@@ -1128,6 +1230,46 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
         val byteBuf = toUtf8(value)
         buf.putInt(byteBuf.limit())
         buf.put(byteBuf)
+    }
+}
+
+
+
+data class ClipboardHistoryItem (
+    var `id`: kotlin.Long, 
+    var `content`: kotlin.String, 
+    var `source`: kotlin.String, 
+    var `timestamp`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeClipboardHistoryItem: FfiConverterRustBuffer<ClipboardHistoryItem> {
+    override fun read(buf: ByteBuffer): ClipboardHistoryItem {
+        return ClipboardHistoryItem(
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ClipboardHistoryItem) = (
+            FfiConverterLong.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`content`) +
+            FfiConverterString.allocationSize(value.`source`) +
+            FfiConverterString.allocationSize(value.`timestamp`)
+    )
+
+    override fun write(value: ClipboardHistoryItem, buf: ByteBuffer) {
+            FfiConverterLong.write(value.`id`, buf)
+            FfiConverterString.write(value.`content`, buf)
+            FfiConverterString.write(value.`source`, buf)
+            FfiConverterString.write(value.`timestamp`, buf)
     }
 }
 
@@ -1250,6 +1392,91 @@ public object FfiConverterTypePairingStatus: FfiConverterRustBuffer<PairingStatu
 
 
 
+
+public interface ClipboardListener {
+    
+    fun `onClipboardUpdate`(`content`: kotlin.String, `source`: kotlin.String)
+    
+    companion object
+}
+
+// Magic number for the Rust proxy to call using the same mechanism as every other method,
+// to free the callback once it's dropped by Rust.
+internal const val IDX_CALLBACK_FREE = 0
+// Callback return codes
+internal const val UNIFFI_CALLBACK_SUCCESS = 0
+internal const val UNIFFI_CALLBACK_ERROR = 1
+internal const val UNIFFI_CALLBACK_UNEXPECTED_ERROR = 2
+
+/**
+ * @suppress
+ */
+public abstract class FfiConverterCallbackInterface<CallbackInterface: Any>: FfiConverter<CallbackInterface, Long> {
+    internal val handleMap = UniffiHandleMap<CallbackInterface>()
+
+    internal fun drop(handle: Long) {
+        handleMap.remove(handle)
+    }
+
+    override fun lift(value: Long): CallbackInterface {
+        return handleMap.get(value)
+    }
+
+    override fun read(buf: ByteBuffer) = lift(buf.getLong())
+
+    override fun lower(value: CallbackInterface) = handleMap.insert(value)
+
+    override fun allocationSize(value: CallbackInterface) = 8UL
+
+    override fun write(value: CallbackInterface, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceClipboardListener {
+    internal object `onClipboardUpdate`: UniffiCallbackInterfaceClipboardListenerMethod0 {
+        override fun callback(`uniffiHandle`: Long,`content`: RustBuffer.ByValue,`source`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeClipboardListener.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onClipboardUpdate`(
+                    FfiConverterString.lift(`content`),
+                    FfiConverterString.lift(`source`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeClipboardListener.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceClipboardListener.UniffiByValue(
+        `onClipboardUpdate`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_cdus_ffi_fn_init_callback_vtable_clipboardlistener(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypeClipboardListener: FfiConverterCallbackInterface<ClipboardListener>()
+
+
+
+
 /**
  * @suppress
  */
@@ -1275,6 +1502,34 @@ public object FfiConverterOptionalTypePairingStatus: FfiConverterRustBuffer<Pair
         } else {
             buf.put(1)
             FfiConverterTypePairingStatus.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeClipboardHistoryItem: FfiConverterRustBuffer<List<ClipboardHistoryItem>> {
+    override fun read(buf: ByteBuffer): List<ClipboardHistoryItem> {
+        val len = buf.getInt()
+        return List<ClipboardHistoryItem>(len) {
+            FfiConverterTypeClipboardHistoryItem.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ClipboardHistoryItem>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeClipboardHistoryItem.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ClipboardHistoryItem>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeClipboardHistoryItem.write(it, buf)
         }
     }
 }
@@ -1333,7 +1588,15 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
             FfiConverterTypePairedDevice.write(it, buf)
         }
     }
-} fun `cancelPairing`()
+} fun `broadcastClipboard`(`content`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_broadcast_clipboard(
+        FfiConverterString.lower(`content`),_status)
+}
+    
+    
+ fun `cancelPairing`()
         = 
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_cancel_pairing(
@@ -1356,6 +1619,15 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
         FfiConverterBoolean.lower(`accepted`),_status)
 }
     
+    
+ fun `getClipboardHistory`(`limit`: kotlin.UInt): List<ClipboardHistoryItem> {
+            return FfiConverterSequenceTypeClipboardHistoryItem.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_clipboard_history(
+        FfiConverterUInt.lower(`limit`),_status)
+}
+    )
+    }
     
  fun `getDiscoveredDevices`(): List<DiscoveredDevice> {
             return FfiConverterSequenceTypeDiscoveredDevice.lift(
@@ -1393,11 +1665,11 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     )
     }
     
- fun `initCore`(`dataDir`: kotlin.String): kotlin.String {
+ fun `initCore`(`dataDir`: kotlin.String, `deviceName`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_init_core(
-        FfiConverterString.lower(`dataDir`),_status)
+        FfiConverterString.lower(`dataDir`),FfiConverterString.lower(`deviceName`),_status)
 }
     )
     }
@@ -1423,6 +1695,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_register_device(
         FfiConverterString.lower(`nodeId`),FfiConverterString.lower(`label`),FfiConverterUShort.lower(`port`),_status)
+}
+    
+    
+ fun `setClipboardListener`(`listener`: ClipboardListener)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_set_clipboard_listener(
+        FfiConverterTypeClipboardListener.lower(`listener`),_status)
 }
     
     
