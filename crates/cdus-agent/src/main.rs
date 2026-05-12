@@ -118,6 +118,10 @@ fn main() {
     mdns.register_device(&node_id, &label, cli.port);
     let mdns = Arc::new(mdns);
 
+    // Auto-start discovery in background to find paired devices
+    info!("Starting background mDNS discovery for auto-reconnect...");
+    mdns.start_discovery(tx.clone());
+
     let sync_manager = Arc::new(SyncManager::new());
     sync_manager.add_peer("libp2p_broadcast".to_string(), libp2p_sync_tx, TransportType::P2p);
     let sync_manager_daemon = Arc::clone(&sync_manager);
@@ -460,6 +464,11 @@ fn daemon_loop(tx: Sender<IpcMessage>, rx: Receiver<IpcMessage>, iterations: Opt
                             }
                         }
                     }
+                }
+                IpcMessage::DeviceLost { node_id } => {
+                    let mut list = discovered_devices.lock().unwrap();
+                    list.retain(|(id, _, _, _, _)| !id.starts_with(&node_id));
+                    info!("Removed device from discovery list: {} (or prefix)", node_id);
                 }
                 IpcMessage::RelayMessage { source_uuid, payload } => {
                     pm.handle_relay_message(source_uuid, payload);

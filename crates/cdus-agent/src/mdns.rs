@@ -155,6 +155,8 @@ impl MdnsManager {
                                 }
                                 ServiceEvent::ServiceRemoved(ty, name) => {
                                     info!("mDNS service removed: {} (type: {})", name, ty);
+                                    // Instance name is the truncated node ID (32 chars)
+                                    let _ = tx.send(IpcMessage::DeviceLost { node_id: name });
                                 }
                                 ServiceEvent::SearchStarted(ty) => {
                                     info!("mDNS search started for type: {}", ty);

@@ -30,6 +30,7 @@ pub enum IpcMessage {
     StartScan,
     StopScan,
     DeviceDiscovered { node_id: String, label: String, os: String, ip: String, port: u16 },
+    DeviceLost { node_id: String },
     GetDiscovered,
     DiscoveredResponse(Vec<(String, String, String, String, u16)>),
     PairWith { node_id: String },
