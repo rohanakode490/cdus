@@ -735,6 +735,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -758,6 +762,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_get_discovered_devices(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_cdus_ffi_fn_func_get_paired_devices(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_pairing_status(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_greet_from_rust(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -773,6 +779,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_start_discovery(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_stop_discovery(uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_unpair_device(`nodeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun ffi_cdus_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -894,6 +902,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_discovered_devices(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_get_paired_devices(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_get_pairing_status(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_greet_from_rust(
@@ -909,6 +919,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_func_start_discovery(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_stop_discovery(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_unpair_device(
     ): Short
     fun ffi_cdus_ffi_uniffi_contract_version(
     ): Int
@@ -939,6 +951,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_get_discovered_devices() != 33769.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_get_paired_devices() != 8212.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_get_pairing_status() != 51352.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -961,6 +976,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_stop_discovery() != 49802.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_unpair_device() != 29091.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1159,6 +1177,38 @@ public object FfiConverterTypeDiscoveredDevice: FfiConverterRustBuffer<Discovere
 
 
 
+data class PairedDevice (
+    var `nodeId`: kotlin.String, 
+    var `label`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePairedDevice: FfiConverterRustBuffer<PairedDevice> {
+    override fun read(buf: ByteBuffer): PairedDevice {
+        return PairedDevice(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: PairedDevice) = (
+            FfiConverterString.allocationSize(value.`nodeId`) +
+            FfiConverterString.allocationSize(value.`label`)
+    )
+
+    override fun write(value: PairedDevice, buf: ByteBuffer) {
+            FfiConverterString.write(value.`nodeId`, buf)
+            FfiConverterString.write(value.`label`, buf)
+    }
+}
+
+
+
 data class PairingStatus (
     var `active`: kotlin.Boolean, 
     var `pin`: kotlin.String, 
@@ -1255,6 +1305,34 @@ public object FfiConverterSequenceTypeDiscoveredDevice: FfiConverterRustBuffer<L
             FfiConverterTypeDiscoveredDevice.write(it, buf)
         }
     }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<PairedDevice>> {
+    override fun read(buf: ByteBuffer): List<PairedDevice> {
+        val len = buf.getInt()
+        return List<PairedDevice>(len) {
+            FfiConverterTypePairedDevice.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<PairedDevice>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypePairedDevice.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<PairedDevice>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypePairedDevice.write(it, buf)
+        }
+    }
 } fun `cancelPairing`()
         = 
     uniffiRustCall() { _status ->
@@ -1283,6 +1361,15 @@ public object FfiConverterSequenceTypeDiscoveredDevice: FfiConverterRustBuffer<L
             return FfiConverterSequenceTypeDiscoveredDevice.lift(
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_discovered_devices(
+        _status)
+}
+    )
+    }
+    
+ fun `getPairedDevices`(): List<PairedDevice> {
+            return FfiConverterSequenceTypePairedDevice.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_paired_devices(
         _status)
 }
     )
@@ -1352,6 +1439,14 @@ public object FfiConverterSequenceTypeDiscoveredDevice: FfiConverterRustBuffer<L
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_stop_discovery(
         _status)
+}
+    
+    
+ fun `unpairDevice`(`nodeId`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_unpair_device(
+        FfiConverterString.lower(`nodeId`),_status)
 }
     
     
