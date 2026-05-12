@@ -29,6 +29,26 @@ pub struct DiscoveredDevice {
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
+pub struct ClipboardHistoryItem {
+    pub id: i64,
+    pub content: String,
+    pub source: String,
+    pub timestamp: String,
+}
+
+#[uniffi::export(callback_interface)]
+pub trait ClipboardListener: Send + Sync {
+    fn on_clipboard_update(&self, content: String, source: String);
+}
+
+static CLIPBOARD_LISTENER: Lazy<Mutex<Option<Box<dyn ClipboardListener>>>> = Lazy::new(|| Mutex::new(None));
+
+#[uniffi::export]
+pub fn set_clipboard_listener(listener: Box<dyn ClipboardListener>) {
+    *CLIPBOARD_LISTENER.lock().unwrap() = Some(listener);
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
 pub struct PairingStatus {
     pub active: bool,
     pub pin: String,
@@ -60,7 +80,7 @@ static STORE: Lazy<Mutex<Option<Arc<cdus_agent::store::Store>>>> = Lazy::new(|| 
 });
 
 #[uniffi::export]
-pub fn init_core(data_dir: String) -> String {
+pub fn init_core(data_dir: String, device_name: String) -> String {
     let path = std::path::Path::new(&data_dir);
     if let Err(e) = std::fs::create_dir_all(path) {
         return format!("error:Failed to create directory: {}", e);
@@ -70,6 +90,12 @@ pub fn init_core(data_dir: String) -> String {
         Ok(store) => {
             let store = Arc::new(store);
             *STORE.lock().unwrap() = Some(Arc::clone(&store));
+            
+            // Set device name if provided
+            if !device_name.is_empty() {
+                let _ = store.set_state("device_name", &device_name);
+            }
+
             match store.get_or_create_identity(path) {
                 Ok((node_id, private_key)) => {
                     *LOCAL_NODE_ID.lock().unwrap() = node_id.clone();
@@ -109,10 +135,19 @@ pub fn init_core(data_dir: String) -> String {
                     
                     *PAIRING_MANAGER.lock().unwrap() = Some(pm);
                     
-                    // Background thread to drain messages (could be expanded to handle them)
+                    // Background thread to drain messages and notify listener
                     std::thread::spawn(move || {
                         while let Ok(msg) = rx.recv() {
-                            info!("FFI Core: Received IPC message: {:?}", msg);
+                            match msg {
+                                cdus_common::IpcMessage::SetClipboard { content, source, .. } => {
+                                    if let Some(listener) = CLIPBOARD_LISTENER.lock().unwrap().as_ref() {
+                                        listener.on_clipboard_update(content, source);
+                                    }
+                                }
+                                _ => {
+                                    info!("FFI Core: Received IPC message: {:?}", msg);
+                                }
+                            }
                         }
                     });
 
@@ -122,6 +157,53 @@ pub fn init_core(data_dir: String) -> String {
             }
         }
         Err(e) => format!("error:Failed to init store: {}", e),
+    }
+}
+
+#[uniffi::export]
+pub fn get_clipboard_history(limit: u32) -> Vec<ClipboardHistoryItem> {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        match store.get_recent_events(limit) {
+            Ok(events) => events.into_iter()
+                .map(|e| ClipboardHistoryItem {
+                    id: e.id,
+                    content: e.content,
+                    source: e.source,
+                    timestamp: e.timestamp,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    }
+}
+
+#[uniffi::export]
+pub fn broadcast_clipboard(content: String) {
+    info!("FFI: broadcast_clipboard called (len={})", content.len());
+    if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        // Save to local store first
+        if let Some(store) = STORE.lock().unwrap().as_ref() {
+            if let Err(e) = store.append_event(content.as_bytes(), "Local") {
+                error!("FFI: Failed to append local event to store: {}", e);
+            } else {
+                info!("FFI: Appended local clipboard event to store");
+            }
+        }
+
+        pm.sync_manager.broadcast(cdus_common::SyncMessage::ClipboardUpdate {
+            content,
+            timestamp,
+        });
+        info!("FFI: Broadcasted clipboard update to connected peers");
+    } else {
+        warn!("FFI: broadcast_clipboard called but PAIRING_MANAGER is None");
     }
 }
 

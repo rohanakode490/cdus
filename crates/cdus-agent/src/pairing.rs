@@ -93,7 +93,7 @@ pub struct PairingManager {
     private_key: Vec<u8>,
     port: u16,
     active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
-    sync_manager: Arc<SyncManager>,
+    pub sync_manager: Arc<SyncManager>,
     relay_manager: Arc<RelayManager>,
     turn_manager: Arc<TurnManager>,
     pending_turn_sessions: Mutex<HashMap<String, TurnConnection>>,
