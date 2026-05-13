@@ -25,5 +25,7 @@ dist-ssr
 target/
 docs/
 agent-workspace
-test_*.py
 GEMINI.md
+
+# Android JNI binaries
+android/app/src/main/jniLibs/**/*.so
