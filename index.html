@@ -76,6 +76,33 @@
             </div>
           </div>
         </div>
+
+        <!-- File Transfer Modal -->
+        <div id="file-transfer-modal" class="modal hidden">
+          <div class="modal-content">
+            <h3>Incoming File</h3>
+            <div class="file-details">
+              <span id="incoming-file-name" class="file-name">filename.zip</span>
+              <span id="incoming-file-size" class="file-size">12.5 MB</span>
+              <span id="incoming-file-source" class="file-source">from Rahul's Phone</span>
+            </div>
+            <div class="modal-actions">
+              <button id="file-reject-btn" class="secondary-btn">Decline</button>
+              <button id="file-accept-btn" class="primary-btn">Accept</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Transfer Progress Toast -->
+        <div id="transfer-progress-toast" class="toast hidden">
+          <div class="toast-content">
+            <span id="transfer-label">Sending file...</span>
+            <div class="progress-bar-container">
+              <div id="transfer-progress-bar" class="progress-bar" style="width: 0%;"></div>
+            </div>
+            <span id="transfer-percent">0%</span>
+          </div>
+        </div>
         <div id="view-clipboard" class="view">
           <h2>Clipboard</h2>
           <div id="clipboard-list"></div>
@@ -84,8 +111,7 @@
         <div id="view-files" class="view">
           <h2>Files</h2>
           <div class="empty-state-container">
-            <p class="empty-state">No recent file transfers. Start by sending a file to another device.</p>
-            <button id="send-file-btn" class="primary-btn">Send File</button>
+            <p class="empty-state">No recent file transfers. Use the <b>Devices</b> tab to send a file to a specific device.</p>
           </div>
         </div>
         <div id="view-settings" class="view">

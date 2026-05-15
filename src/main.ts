@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 
 async function renderClipboard() {
   const listContainer = document.querySelector("#clipboard-list");
@@ -286,21 +288,29 @@ window.addEventListener("DOMContentLoaded", () => {
         const statusClass = isOnline ? "online" : "offline";
         const statusText = isOnline ? "Online" : "Offline";
         const transportText = transport || "";
+        const shortId = id.substring(0, 8);
 
         row.innerHTML = `
           <div class="device-info">
-            <span class="device-name-label">${name}</span>
+            <span class="device-name-label">${name} <span class="device-id-tag">#${shortId}</span></span>
             <div class="device-status">
               <span class="status-dot ${statusClass}"></span>
               <span class="device-type-label">${statusText}</span>
               ${isOnline ? `<span class="connection-path">${transportText}</span>` : ""}
             </div>
           </div>
-          <button class="secondary-btn unpair-btn" data-id="${id}">Unpair</button>
+          <div class="device-actions">
+            ${isOnline ? `<button class="primary-btn send-file-btn" data-id="${id}">Send File</button>` : ""}
+            <button class="secondary-btn unpair-btn" data-id="${id}">Unpair</button>
+          </div>
         `;
 
         row.querySelector(".unpair-btn")?.addEventListener("click", () => {
           unpairDevice(id);
+        });
+
+        row.querySelector(".send-file-btn")?.addEventListener("click", () => {
+          initiateFileSend(id);
         });
 
         pairedList.appendChild(row);
@@ -310,6 +320,28 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  async function initiateFileSend(nodeId: string) {
+    if (nodeId === "unknown") {
+      alert("Error: This device was paired using an older version of CDUS and is missing a valid Node ID.\n\nPlease click 'Unpair' for this device, then re-pair it to enable file transfers.");
+      return;
+    }
+
+    try {
+      const selected = await open({
+        multiple: false,
+        directory: false,
+      });
+
+      if (selected) {
+        const path = selected as string;
+        await invoke("send_file", { nodeId, path });
+        showProgressToast(`Sending file to ${nodeId}...`);
+      }
+    } catch (err) {
+      console.error("Failed to initiate file send:", err);
+      alert("Failed to open file picker or initiate transfer.");
+    }
+  }
   async function unpairDevice(id: string) {
     if (confirm("Are you sure you want to unpair this device?")) {
       try {
@@ -400,11 +432,89 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // --- End Q2 Real Logic ---
+  // --- Q4 File Transfer Logic ---
 
-  document.querySelector("#send-file-btn")?.addEventListener("click", () => {
-    alert("File picker opened! (Mock)");
+  const fileTransferModal = document.querySelector("#file-transfer-modal");
+  const fileAcceptBtn = document.querySelector("#file-accept-btn");
+  const fileRejectBtn = document.querySelector("#file-reject-btn");
+  const progressToast = document.querySelector("#transfer-progress-toast");
+  const progressBar = document.querySelector("#transfer-progress-bar") as HTMLElement;
+  const progressPercent = document.querySelector("#transfer-percent");
+  const progressLabel = document.querySelector("#transfer-label");
+
+  let currentIncomingFileHash = "";
+
+  function showProgressToast(label: string) {
+    if (!progressToast) return;
+    progressToast.classList.remove("hidden");
+    if (progressLabel) progressLabel.textContent = label;
+    if (progressBar) progressBar.style.width = "0%";
+    if (progressPercent) progressPercent.textContent = "0%";
+  }
+
+  function updateProgress(percent: number) {
+    if (progressBar) progressBar.style.width = `${percent}%`;
+    if (progressPercent) progressPercent.textContent = `${Math.round(percent)}%`;
+  }
+
+  function hideProgressToast() {
+    progressToast?.classList.add("hidden");
+  }
+
+  listen("incoming-file-request", (event: any) => {
+    const [nodeId, manifest] = event.payload;
+    currentIncomingFileHash = manifest.file_hash;
+    
+    if (fileTransferModal) {
+      const nameEl = document.querySelector("#incoming-file-name");
+      const sizeEl = document.querySelector("#incoming-file-size");
+      const sourceEl = document.querySelector("#incoming-file-source");
+      
+      if (nameEl) nameEl.textContent = manifest.file_name;
+      if (sizeEl) sizeEl.textContent = `${(manifest.total_size / 1024 / 1024).toFixed(2)} MB`;
+      if (sourceEl) sourceEl.textContent = `from ${nodeId}`;
+      
+      fileTransferModal.classList.remove("hidden");
+    }
   });
+
+  fileAcceptBtn?.addEventListener("click", async () => {
+    if (currentIncomingFileHash) {
+      await invoke("accept_file_transfer", { fileHash: currentIncomingFileHash });
+      fileTransferModal?.classList.add("hidden");
+      showProgressToast("Downloading file...");
+    }
+  });
+
+  fileRejectBtn?.addEventListener("click", async () => {
+    if (currentIncomingFileHash) {
+      await invoke("reject_file_transfer", { fileHash: currentIncomingFileHash });
+      fileTransferModal?.classList.add("hidden");
+    }
+  });
+
+  listen("file-transfer-progress", (event: any) => {
+    const [_hash, progress] = event.payload;
+    updateProgress(progress);
+  });
+
+  listen("file-transfer-complete", (_event: any) => {
+    if (progressLabel) progressLabel.textContent = "Transfer complete!";
+    updateProgress(100);
+    setTimeout(hideProgressToast, 3000);
+  });
+
+  listen("file-transfer-error", (event: any) => {
+    const [_hash, error] = event.payload;
+    alert(`Transfer failed: ${error}`);
+    hideProgressToast();
+  });
+
+  listen("clipboard-updated", (_event: any) => {
+    renderClipboard();
+  });
+
+  // --- End Q4 File Transfer Logic ---
 
   // Initial load of paired devices
   renderPairedDevices();
