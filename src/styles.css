@@ -537,3 +537,71 @@ input[type="text"] {
     color: #fff;
   }
 }
+
+/* File Transfer Styles */
+.file-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 25px;
+}
+
+.file-name {
+  font-weight: 700;
+  font-size: 1.2rem;
+  word-break: break-all;
+}
+
+.file-size {
+  color: #888;
+  font-size: 0.9rem;
+}
+
+.file-source {
+  font-style: italic;
+  color: #24c8db;
+}
+
+.toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background-color: #333;
+  color: white;
+  padding: 16px 20px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  z-index: 1100;
+  min-width: 250px;
+}
+
+.toast-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.progress-bar-container {
+  width: 100%;
+  height: 6px;
+  background-color: #555;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background-color: #24c8db;
+  transition: width 0.3s ease;
+}
+
+#transfer-percent {
+  align-self: flex-end;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.send-file-btn {
+  margin-top: 0 !important;
+  margin-left: 8px;
+}

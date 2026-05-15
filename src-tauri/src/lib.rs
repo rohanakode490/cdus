@@ -1,22 +1,25 @@
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    Manager,
+    Emitter, Manager,
 };
 
-use cdus_common::{IpcMessage, ClipboardEvent, TransportType};
+use cdus_common::{ClipboardEvent, IpcMessage, TransportType};
 use interprocess::local_socket::LocalSocketStream;
 use std::io::{Read, Write};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::thread;
 use std::sync::Mutex;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 struct AppState {
     last_synced: Mutex<Option<SystemTime>>,
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn get_socket_path() -> String {
@@ -33,7 +36,7 @@ fn send_ipc_message(msg: IpcMessage) -> Result<IpcMessage, String> {
 
     let mut buffer = Vec::new();
     stream.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
-    
+
     if buffer.is_empty() {
         return Err("Agent closed connection without response".to_string());
     }
@@ -66,12 +69,12 @@ fn ping_agent() -> Result<String, String> {
 
 #[tauri::command]
 fn set_clipboard(content: String) -> Result<String, String> {
-    let msg = IpcMessage::SetClipboard { 
-        content, 
-        timestamp: now_ms(), 
-        source: "Local".to_string() 
+    let msg = IpcMessage::SetClipboard {
+        content,
+        timestamp: now_ms(),
+        source: "Local".to_string(),
     };
-    
+
     match send_ipc_message(msg)? {
         IpcMessage::Log(msg) => Ok(msg),
         response => Ok(format!("{:?}", response)),
@@ -79,9 +82,12 @@ fn set_clipboard(content: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn get_clipboard_history(state: tauri::State<'_, AppState>, limit: u32) -> Result<Vec<ClipboardEvent>, String> {
+fn get_clipboard_history(
+    state: tauri::State<'_, AppState>,
+    limit: u32,
+) -> Result<Vec<ClipboardEvent>, String> {
     let msg = IpcMessage::GetHistory { limit };
-    
+
     match send_ipc_message(msg)? {
         IpcMessage::HistoryResponse(history) => {
             if !history.is_empty() {
@@ -89,7 +95,7 @@ fn get_clipboard_history(state: tauri::State<'_, AppState>, limit: u32) -> Resul
                 *ls = Some(SystemTime::now());
             }
             Ok(history)
-        },
+        }
         IpcMessage::Log(err) => Err(err),
         _ => Err("Unexpected response from agent".to_string()),
     }
@@ -172,7 +178,12 @@ async fn confirm_pairing(accepted: bool) -> Result<String, String> {
 async fn get_pairing_status() -> Result<(Option<String>, bool, bool, String), String> {
     let msg = IpcMessage::GetPairingStatus;
     match send_ipc_message(msg)? {
-        IpcMessage::PairingStatusResponse { pin, active, is_initiator, remote_label } => Ok((pin, active, is_initiator, remote_label)),
+        IpcMessage::PairingStatusResponse {
+            pin,
+            active,
+            is_initiator,
+            remote_label,
+        } => Ok((pin, active, is_initiator, remote_label)),
         _ => Err("Unexpected response from agent".to_string()),
     }
 }
@@ -195,16 +206,47 @@ async fn unpair_device(node_id: String) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+async fn send_file(node_id: String, path: String) -> Result<String, String> {
+    let msg = IpcMessage::SendFile { node_id, path };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn accept_file_transfer(file_hash: String) -> Result<String, String> {
+    let msg = IpcMessage::AcceptFileTransfer { file_hash };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn reject_file_transfer(file_hash: String) -> Result<String, String> {
+    let msg = IpcMessage::RejectFileTransfer { file_hash };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(AppState { last_synced: Mutex::new(None) })
+        .manage(AppState {
+            last_synced: Mutex::new(None),
+        })
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let status_i = MenuItem::with_id(app, "status", "Status: Checking...", false, None::<&str>)?;
+            let status_i =
+                MenuItem::with_id(app, "status", "Status: Checking...", false, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
-            
+
             let menu = Menu::with_items(app, &[&status_i, &separator, &quit_i])?;
 
             let tray = TrayIconBuilder::new()
@@ -232,14 +274,14 @@ pub fn run() {
                     "Status: Offline (Agent Disconnected)"
                 };
                 let _ = status_handle.set_text(label);
-                
+
                 // Update tooltip
                 let state = app_handle.state::<AppState>();
                 let last_synced = {
                     let ls = state.last_synced.lock().unwrap();
                     *ls
                 };
-                
+
                 let tooltip = match last_synced {
                     Some(time) => {
                         let elapsed = time.elapsed().unwrap_or(Duration::from_secs(0)).as_secs();
@@ -252,16 +294,74 @@ pub fn run() {
                     None => "CDUS - No sync yet".to_string(),
                 };
                 let _ = tray_handle.set_tooltip(Some(tooltip));
-                
+
                 thread::sleep(Duration::from_secs(5));
+            });
+
+            // Agent Event Stream Listener
+            let app_handle_events = app.handle().clone();
+            thread::spawn(move || loop {
+                if let Ok(mut stream) = LocalSocketStream::connect(get_socket_path()) {
+                    let msg = IpcMessage::ListenEvents;
+                    if let Ok(bytes) = serde_json::to_vec(&msg) {
+                        if let Ok(_) = stream.write_all(&bytes) {
+                            use std::io::BufRead;
+                            use std::io::BufReader;
+                            let reader = BufReader::new(stream);
+                            for line in reader.lines() {
+                                if let Ok(line) = line {
+                                    if let Ok(event) = serde_json::from_str::<IpcMessage>(&line) {
+                                        match event {
+                                            IpcMessage::IncomingFileRequest {
+                                                node_id,
+                                                manifest,
+                                            } => {
+                                                let _ = app_handle_events.emit(
+                                                    "incoming-file-request",
+                                                    (node_id, manifest),
+                                                );
+                                            }
+                                            IpcMessage::FileTransferProgress {
+                                                file_hash,
+                                                progress,
+                                            } => {
+                                                let _ = app_handle_events.emit(
+                                                    "file-transfer-progress",
+                                                    (file_hash, progress),
+                                                );
+                                            }
+                                            IpcMessage::FileTransferComplete { file_hash } => {
+                                                let _ = app_handle_events
+                                                    .emit("file-transfer-complete", file_hash);
+                                            }
+                                            IpcMessage::FileTransferError { file_hash, error } => {
+                                                let _ = app_handle_events.emit(
+                                                    "file-transfer-error",
+                                                    (file_hash, error),
+                                                );
+                                            }
+                                            IpcMessage::ClipboardChanged { content, .. }
+                                            | IpcMessage::SetClipboard { content, .. } => {
+                                                let _ = app_handle_events
+                                                    .emit("clipboard-updated", content);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                thread::sleep(Duration::from_secs(2));
             });
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet, 
-            ping_agent, 
-            set_clipboard, 
+            greet,
+            ping_agent,
+            set_clipboard,
             get_clipboard_history,
             get_state,
             set_state,
@@ -273,7 +373,10 @@ pub fn run() {
             confirm_pairing,
             get_pairing_status,
             get_paired_devices,
-            unpair_device
+            unpair_device,
+            send_file,
+            accept_file_transfer,
+            reject_file_transfer
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
