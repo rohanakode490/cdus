@@ -1,8 +1,8 @@
-use rusqlite::{Connection, Result, OptionalExtension};
-use std::path::Path;
-use tracing::info;
 use cdus_common::ClipboardEvent;
+use rusqlite::{Connection, OptionalExtension, Result};
+use std::path::Path;
 use std::sync::Mutex;
+use tracing::info;
 
 pub struct Store {
     pub events_conn: Mutex<Connection>,
@@ -70,7 +70,6 @@ impl Store {
             [],
         )?;
 
-
         Ok(Store {
             events_conn: Mutex::new(events_conn),
             state_conn: Mutex::new(state_conn),
@@ -79,12 +78,14 @@ impl Store {
 
     pub fn append_event(&self, payload: &[u8], source: &str) -> Result<String> {
         let conn = self.events_conn.lock().unwrap();
-        
-        let last_hash: Option<String> = conn.query_row(
-            "SELECT hash FROM events ORDER BY id DESC LIMIT 1",
-            [],
-            |row| row.get(0),
-        ).optional()?;
+
+        let last_hash: Option<String> = conn
+            .query_row(
+                "SELECT hash FROM events ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
 
         let mut hasher = blake3::Hasher::new();
         if let Some(prev_hash_str) = last_hash {
@@ -107,16 +108,17 @@ impl Store {
 
     pub fn get_recent_events(&self, limit: u32) -> Result<Vec<ClipboardEvent>> {
         let conn = self.events_conn.lock().unwrap();
-        
+
         let mut stmt = conn.prepare(
-            "SELECT id, payload, source, timestamp FROM events ORDER BY id DESC LIMIT ?"
+            "SELECT id, payload, source, timestamp FROM events ORDER BY id DESC LIMIT ?",
         )?;
-        
+
         let event_iter = stmt.query_map([limit], |row| {
             let payload: Vec<u8> = row.get(1)?;
             Ok(ClipboardEvent {
                 id: row.get(0)?,
-                content: String::from_utf8(payload).unwrap_or_else(|_| "[invalid utf8]".to_string()),
+                content: String::from_utf8(payload)
+                    .unwrap_or_else(|_| "[invalid utf8]".to_string()),
                 source: row.get(2)?,
                 timestamp: row.get(3)?,
             })
@@ -140,46 +142,53 @@ impl Store {
 
     pub fn get_state(&self, key: &str) -> Result<Option<String>> {
         let conn = self.state_conn.lock().unwrap();
-        conn.query_row(
-            "SELECT value FROM state WHERE key = ?",
-            [key],
-            |row| row.get(0),
-        ).optional()
+        conn.query_row("SELECT value FROM state WHERE key = ?", [key], |row| {
+            row.get(0)
+        })
+        .optional()
     }
 
-    pub fn get_or_create_identity(&self, data_dir: &std::path::Path) -> anyhow::Result<(String, Vec<u8>)> {
+    pub fn get_or_create_identity(
+        &self,
+        data_dir: &std::path::Path,
+    ) -> anyhow::Result<(String, Vec<u8>)> {
         use keyring::Entry;
-        use snow::{Builder, params::NoiseParams};
+        use snow::{params::NoiseParams, Builder};
 
         let params: NoiseParams = "Noise_XX_25519_ChaChaPoly_BLAKE2s".parse()?;
         let builder = Builder::new(params.clone());
 
         // Create a unique service name for the keychain based on the data directory
-        let dir_hash = blake3::hash(data_dir.to_string_lossy().as_bytes()).to_hex().to_string();
+        let dir_hash = blake3::hash(data_dir.to_string_lossy().as_bytes())
+            .to_hex()
+            .to_string();
         let service_name = format!("com.cdus.agent.{}", &dir_hash[..8]);
 
         if let Some(existing_id) = self.get_state("node_id")? {
             let entry = Entry::new(&service_name, "private_key")?;
             if let Ok(priv_key_hex) = entry.get_password() {
                 if let Ok(priv_bytes) = hex::decode(priv_key_hex) {
-                    // VERIFY: Does existing_id match the public key of these priv_bytes?
-                    // We generate a keypair from the private key to get the corresponding public key.
-                    let mut temp_builder = Builder::new(params);
+                    if self.get_state("id_migrated_v3")?.is_some() {
+                        // Check if it's actually a valid PeerId string (Base58)
+                        if existing_id.parse::<libp2p::PeerId>().is_ok() {
+                            return Ok((existing_id, priv_bytes));
+                        }
+                    }
+
+                    // Attempt to migrate existing hex ID to PeerId
+                    let mut temp_builder = Builder::new(params.clone());
                     temp_builder = temp_builder.local_private_key(&priv_bytes);
-                    
-                    // Since snow doesn't easily expose deriving public from private without building,
-                    // we use a trick: any Noise handshake will have the local static key.
                     if let Ok(_handshake) = temp_builder.build_initiator() {
-                        // In snow 0.9, we can't easily get the local static key back out of HandshakeState.
-                        // However, we KNOW the public key is correct if we generated it ourselves.
-                        // For legacy migration, we'll just check if the ID is 64 hex chars (32 bytes).
-                        // If it's a blake3 hash (also 64 chars), we might collide, so let's be safer.
-                        if existing_id.len() == 64 && !existing_id.starts_with("0000") { // Crude check
-                            // If it's already a hex string of correct length, we'll assume it's fine for now
-                            // OR we could regenerate once to be absolutely sure.
-                            // Let's force a migration by checking a flag.
-                            if self.get_state("id_migrated_v2")?.is_some() {
-                                return Ok((existing_id, priv_bytes));
+                        // In ed25519-dalek 2.0+, from_bytes returns SigningKey directly
+                        if let Ok(bytes) = priv_bytes.clone().try_into() {
+                            let signing_key = ed25519_dalek::SigningKey::from_bytes(&bytes);
+                            let pub_bytes = signing_key.verifying_key().to_bytes().to_vec();
+                            let pub_hex = hex::encode(&pub_bytes);
+                            if let Ok(node_id) = crate::utils::hex_to_peer_id(&pub_hex) {
+                                info!("Migrating hex node_id to PeerId: {}", node_id);
+                                self.set_state("node_id", &node_id)?;
+                                self.set_state("id_migrated_v3", "true")?;
+                                return Ok((node_id, priv_bytes));
                             }
                         }
                     }
@@ -188,19 +197,23 @@ impl Store {
         }
 
         info!("Generating fresh Noise identity for {}...", service_name);
-        
-        let keypair = builder.generate_keypair()?;
-        let priv_bytes = keypair.private;
-        let pub_bytes = keypair.public;
-        let node_id = hex::encode(&pub_bytes);
-        
+
+        let mut rng = rand::rngs::OsRng;
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
+        let priv_bytes = signing_key.to_bytes().to_vec();
+        let pub_bytes = signing_key.verifying_key().to_bytes().to_vec();
+        let pub_hex = hex::encode(&pub_bytes);
+        let node_id = crate::utils::hex_to_peer_id(&pub_hex)?;
+
         self.set_state("node_id", &node_id)?;
-        self.set_state("id_migrated_v2", "true")?;
+        self.set_state("id_migrated_v3", "true")?; // Bump version to v3
         let entry = Entry::new(&service_name, "private_key")?;
         entry.set_password(&hex::encode(&priv_bytes))?;
-        
+
         if self.get_state("device_name")?.is_none() {
-            let hostname = gethostname::gethostname().into_string().unwrap_or_else(|_| "Unknown Device".to_string());
+            let hostname = gethostname::gethostname()
+                .into_string()
+                .unwrap_or_else(|_| "Unknown Device".to_string());
             self.set_state("device_name", &format!("{} ({})", hostname, &dir_hash[..4]))?;
         }
 
@@ -218,19 +231,15 @@ impl Store {
 
     pub fn remove_paired_device(&self, node_id: &str) -> Result<()> {
         let conn = self.state_conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM paired_devices WHERE node_id = ?",
-            [node_id],
-        )?;
+        conn.execute("DELETE FROM paired_devices WHERE node_id = ?", [node_id])?;
         Ok(())
     }
 
     pub fn get_paired_devices(&self) -> Result<Vec<(String, String)>> {
         let conn = self.state_conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT node_id, label FROM paired_devices")?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
+        let mut stmt =
+            conn.prepare("SELECT node_id, label FROM paired_devices WHERE node_id != 'unknown'")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
 
         let mut devices = Vec::new();
         for row in rows {
