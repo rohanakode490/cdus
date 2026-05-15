@@ -1,29 +1,27 @@
+use crate::store::Store;
 use anyhow::Result;
+use cdus_common::{IpcMessage, SyncMessage, TransferProgress};
 use flume::{Receiver, Sender};
 use libp2p::{
     futures::StreamExt,
-    gossipsub,
-    identity,
-    noise,
+    gossipsub, identity, noise, request_response,
     swarm::{NetworkBehaviour, SwarmEvent},
-    tcp,
-    yamux,
-    PeerId,
+    tcp, yamux, PeerId,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tokio::runtime::Runtime;
 use tracing::{error, info, warn};
-use cdus_common::{SyncMessage, IpcMessage};
-use crate::store::Store;
 
 #[derive(NetworkBehaviour)]
 pub struct CdusBehaviour {
     pub gossipsub: gossipsub::Behaviour,
+    pub mdns: libp2p::mdns::tokio::Behaviour,
     pub identify: libp2p::identify::Behaviour,
     pub dcutr: libp2p::dcutr::Behaviour,
     pub relay_client: libp2p::relay::client::Behaviour,
+    pub request_response: request_response::json::Behaviour<SyncMessage, SyncMessage>,
 }
 
 pub struct Libp2pManager {
@@ -33,20 +31,37 @@ pub struct Libp2pManager {
     tx: Sender<IpcMessage>,
     sync_tx: Sender<SyncMessage>,
     sync_rx: Receiver<SyncMessage>,
+    request_tx: Sender<(PeerId, SyncMessage)>,
+    request_rx: Receiver<(PeerId, SyncMessage)>,
     store: Arc<Store>,
+    active_transfers: Arc<
+        Mutex<std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>>,
+    >,
+    received_manifests: Arc<Mutex<std::collections::HashMap<String, TransferProgress>>>,
 }
 
 impl Libp2pManager {
-    pub fn new(priv_bytes: Vec<u8>, tx: Sender<IpcMessage>, store: Arc<Store>) -> Result<Self> {
+    pub fn new(
+        priv_bytes: Vec<u8>,
+        tx: Sender<IpcMessage>,
+        store: Arc<Store>,
+        active_transfers: Arc<
+            Mutex<
+                std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>,
+            >,
+        >,
+        received_manifests: Arc<Mutex<std::collections::HashMap<String, TransferProgress>>>,
+    ) -> Result<Self> {
         let mut key_bytes = priv_bytes;
         let keypair = identity::Keypair::ed25519_from_bytes(&mut key_bytes)?;
         let peer_id = PeerId::from(keypair.public());
-        
+
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?;
-            
+
         let (sync_tx, sync_rx) = flume::unbounded();
+        let (request_tx, request_rx) = flume::unbounded();
 
         Ok(Self {
             peer_id,
@@ -55,7 +70,11 @@ impl Libp2pManager {
             tx,
             sync_tx,
             sync_rx,
+            request_tx,
+            request_rx,
             store,
+            active_transfers,
+            received_manifests,
         })
     }
 
@@ -63,14 +82,26 @@ impl Libp2pManager {
         self.sync_tx.clone()
     }
 
+    pub fn get_request_tx(&self) -> Sender<(PeerId, SyncMessage)> {
+        self.request_tx.clone()
+    }
+
     pub fn start(&self) {
         let runtime = Arc::clone(&self.runtime);
         let keypair = self.keypair.clone();
         let tx = self.tx.clone();
         let sync_rx = self.sync_rx.clone();
+        let request_rx = self.request_rx.clone();
         let store = Arc::clone(&self.store);
+        let active_transfers: Arc<
+            Mutex<
+                std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>,
+            >,
+        > = Arc::clone(&self.active_transfers);
+        let _received_manifests: Arc<Mutex<std::collections::HashMap<String, TransferProgress>>> =
+            Arc::clone(&self.received_manifests);
         let peer_id = self.peer_id;
-        
+
         thread::spawn(move || {
             runtime.block_on(async {
                 let mut swarm = libp2p::SwarmBuilder::with_existing_identity(keypair)
@@ -88,7 +119,7 @@ impl Libp2pManager {
                             .validation_mode(gossipsub::ValidationMode::Strict)
                             .build()
                             .expect("Valid config");
-                        
+
                         let gossipsub = gossipsub::Behaviour::new(
                             gossipsub::MessageAuthenticity::Signed(key.clone()),
                             gossipsub_config,
@@ -98,11 +129,26 @@ impl Libp2pManager {
                             libp2p::identify::Config::new("/cdus/1.0.0".into(), key.public()),
                         );
 
+                        let request_response = request_response::json::Behaviour::new(
+                            [(
+                                libp2p::StreamProtocol::new("/cdus/file-transfer/1.0.0"),
+                                request_response::ProtocolSupport::Full,
+                            )],
+                            request_response::Config::default(),
+                        );
+
+                        let mdns = libp2p::mdns::tokio::Behaviour::new(
+                            libp2p::mdns::Config::default(),
+                            key.public().to_peer_id(),
+                        ).expect("Valid mdns behaviour");
+
                         CdusBehaviour {
                             gossipsub,
+                            mdns,
                             identify,
                             dcutr: libp2p::dcutr::Behaviour::new(key.public().to_peer_id()),
                             relay_client,
+                            request_response,
                         }
                     }).expect("Behaviour config")
                     .build();
@@ -124,22 +170,83 @@ impl Libp2pManager {
                                 }
                                 SwarmEvent::Behaviour(event) => {
                                     match event {
-                                        CdusBehaviourEvent::Gossipsub(gossipsub::Event::Message { propagation_source, message_id, message }) => {
-                                            info!("Received gossipsub message {} from {}", message_id, propagation_source);
+                                        CdusBehaviourEvent::Mdns(libp2p::mdns::Event::Discovered(list)) => {
+                                            for (peer_id, multiaddr) in list {
+                                                info!("mDNS discovered libp2p peer: {} at {}", peer_id, multiaddr);
+                                                let _ = swarm.dial(multiaddr.clone());
+                                                swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                                            }
+                                        }
+                                        CdusBehaviourEvent::Mdns(libp2p::mdns::Event::Expired(list)) => {
+                                            for (peer_id, multiaddr) in list {
+                                                info!("mDNS peer expired: {} at {}", peer_id, multiaddr);
+                                                swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
+                                            }
+                                        }
+                                        CdusBehaviourEvent::Gossipsub(gossipsub::Event::Message { propagation_source, message, .. }) => {
                                             if let Ok(sync_msg) = serde_json::from_slice::<SyncMessage>(&message.data) {
                                                 // Verify peer is paired
                                                 if let Ok(true) = store.is_device_paired(&propagation_source.to_string()) {
                                                     match sync_msg {
                                                         SyncMessage::ClipboardUpdate { content, timestamp } => {
-                                                            let _ = tx.send(IpcMessage::SetClipboard { 
-                                                                content, 
-                                                                timestamp, 
+                                                            let _ = tx.send(IpcMessage::SetClipboard {
+                                                                content,
+                                                                timestamp,
                                                                 source: format!("libp2p:{}", propagation_source)
                                                             });
                                                         }
+                                                        SyncMessage::FileTransferRequest(manifest) => {
+                                                            let _ = tx.send(IpcMessage::IncomingFileRequest {
+                                                                node_id: propagation_source.to_string(),
+                                                                manifest,
+                                                            });
+                                                        }
+                                                        _ => {}
                                                     }
                                                 } else {
                                                     warn!("Received gossipsub message from unpaired peer {}", propagation_source);
+                                                }
+                                            }
+                                        }
+                                        CdusBehaviourEvent::RequestResponse(request_response::Event::Message { peer: _, message, .. }) => {
+                                            match message {
+                                                request_response::Message::Request { request, channel, .. } => {
+                                                    match request {
+                                                        SyncMessage::ChunkRequest { file_hash, chunk_hash } => {
+                                                            info!("Received ChunkRequest for {} / {}", file_hash, chunk_hash);
+                                                            let transfer_info = {
+                                                                let at = active_transfers.lock().unwrap();
+                                                                at.get(&file_hash).cloned()
+                                                            };
+
+                                                            if let Some((path, manifest)) = transfer_info {
+                                                                if let Some(chunk) = manifest.chunks.iter().find(|c| c.hash == chunk_hash) {
+                                                                    match crate::file_transfer::get_chunk(&path, chunk.offset, chunk.size) {
+                                                                        Ok(data) => {
+                                                                            let response = SyncMessage::ChunkResponse {
+                                                                                file_hash: file_hash.clone(),
+                                                                                chunk_hash: chunk_hash.clone(),
+                                                                                data
+                                                                            };
+                                                                            let _ = swarm.behaviour_mut().request_response.send_response(channel, response);
+                                                                        }
+                                                                        Err(e) => {
+                                                                            error!("Failed to read chunk: {}", e);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        _ => {}
+                                                    }
+                                                }
+                                                request_response::Message::Response { response, .. } => {
+                                                    match response {
+                                                        SyncMessage::ChunkResponse { file_hash, chunk_hash, data } => {
+                                                            let _ = tx.send(IpcMessage::ChunkReceived { file_hash, chunk_hash, data });
+                                                        }
+                                                        _ => {}
+                                                    }
                                                 }
                                             }
                                         }
@@ -154,8 +261,17 @@ impl Libp2pManager {
                                 if let Ok(data) = serde_json::to_vec(&sync_msg) {
                                     if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), data) {
                                         error!("Gossipsub publish failed: {}", e);
+                                        let _ = tx.send(IpcMessage::FileTransferError {
+                                            file_hash: "broadcast".to_string(),
+                                            error: format!("Network error: {}. Make sure devices are on the same WiFi and paired.", e)
+                                        });
                                     }
                                 }
+                            }
+                        }
+                        req = request_rx.recv_async() => {
+                            if let Ok((peer, sync_msg)) = req {
+                                swarm.behaviour_mut().request_response.send_request(&peer, sync_msg);
                             }
                         }
                     }
