@@ -37,8 +37,10 @@ base64 = "0.22"
 tokio = { version = "1.36", features = ["rt", "net", "time", "sync", "macros"] }
 turn = "0.7"
 webrtc-util = "0.8"
-libp2p = { version = "0.56", features = ["tcp", "quic", "mdns", "noise", "yamux", "dcutr", "identify", "ping", "relay", "kad", "tokio", "gossipsub", "cbor", "macros"] }
+libp2p = { version = "0.56", features = ["tcp", "quic", "mdns", "noise", "yamux", "dcutr", "identify", "ping", "relay", "kad", "tokio", "gossipsub", "cbor", "macros", "json", "request-response"] }
 socket2 = "0.5.10"
+fastcdc = "4.0.1"
+once_cell = "1.21.4"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 arboard = "3.4"
