@@ -27,6 +27,12 @@ import uniffi.cdus_ffi.clearDiscoveredDevices
 import uniffi.cdus_ffi.getPairedDevices
 import uniffi.cdus_ffi.unpairDevice
 import uniffi.cdus_ffi.PairedDevice
+import uniffi.cdus_ffi.sendFile
+import io.cdus.app.utils.FileUtils
+import io.cdus.app.utils.UIUtils
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
 
 @Composable
 fun DevicesScreen() {
@@ -34,6 +40,23 @@ fun DevicesScreen() {
     var discoveredDevices by remember { mutableStateOf<List<DiscoveredDevice>>(emptyList()) }
     var pairedDevices by remember { mutableStateOf<List<PairedDevice>>(emptyList()) }
     var pairingStatus by remember { mutableStateOf<PairingStatus?>(null) }
+    
+    val context = LocalContext.current
+    var selectedDeviceForFile by remember { mutableStateOf<String?>(null) }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: android.net.Uri? ->
+        uri?.let {
+            val deviceId = selectedDeviceForFile ?: return@let
+            val path = FileUtils.copyUriToLocal(context, it)
+            if (path != null) {
+                sendFile(deviceId, path)
+                // Show a snackbar or toast
+            }
+        }
+        selectedDeviceForFile = null
+    }
 
     LaunchedEffect(isScanning) {
         if (isScanning) {
@@ -96,7 +119,11 @@ fun DevicesScreen() {
             for (device in pairedDevices) {
                 PairedDeviceItem(
                     device = device,
-                    onUnpairClick = { unpairDevice(device.nodeId) }
+                    onUnpairClick = { unpairDevice(device.nodeId) },
+                    onSendFileClick = {
+                        selectedDeviceForFile = device.nodeId
+                        filePickerLauncher.launch("*/*")
+                    }
                 )
             }
         }
@@ -156,7 +183,7 @@ fun DevicesScreen() {
 }
 
 @Composable
-fun PairedDeviceItem(device: PairedDevice, onUnpairClick: () -> Unit) {
+fun PairedDeviceItem(device: PairedDevice, onUnpairClick: () -> Unit, onSendFileClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -178,10 +205,18 @@ fun PairedDeviceItem(device: PairedDevice, onUnpairClick: () -> Unit) {
                     tint = MaterialTheme.colorScheme.primary
                 )
                 Spacer(modifier = Modifier.width(12.dp))
-                Text(text = device.label, style = MaterialTheme.typography.bodyLarge)
+                Column {
+                    Text(text = UIUtils.formatDeviceLabel(device.label), style = MaterialTheme.typography.bodyLarge)
+                    Text(text = "#${device.nodeId.take(8)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+                }
             }
-            TextButton(onClick = onUnpairClick) {
-                Text("Unpair", color = MaterialTheme.colorScheme.error)
+            Row {
+                TextButton(onClick = onSendFileClick) {
+                    Text("Send File")
+                }
+                TextButton(onClick = onUnpairClick) {
+                    Text("Unpair", color = MaterialTheme.colorScheme.error)
+                }
             }
         }
     }
@@ -210,8 +245,8 @@ fun DeviceListItem(device: DiscoveredDevice, onConnectClick: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.width(16.dp))
                 Column {
-                    Text(text = device.label, style = MaterialTheme.typography.bodyLarge)
-                    Text(text = "${device.os} • ${device.ip}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+                    Text(text = UIUtils.formatDeviceLabel(device.label), style = MaterialTheme.typography.bodyLarge)
+                    Text(text = "#${device.nodeId.take(8)} • ${device.os} • ${device.ip}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
                 }
             }
             Button(onClick = onConnectClick) {
@@ -230,7 +265,7 @@ fun PairingDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(text = "Pair with ${status.remoteLabel}") },
+        title = { Text(text = "Pair with ${UIUtils.formatDeviceLabel(status.remoteLabel)}") },
         text = {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                 Text(text = "Verify this PIN matches the other device:")

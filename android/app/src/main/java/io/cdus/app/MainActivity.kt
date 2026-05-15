@@ -28,7 +28,6 @@ import io.cdus.app.ui.screens.FilesScreen
 import io.cdus.app.ui.screens.SettingsScreen
 import io.cdus.app.ui.theme.CdusandroidTheme
 
-import android.util.Log
 import android.content.Intent
 import android.os.Build
 import android.content.ClipboardManager
@@ -39,13 +38,21 @@ import uniffi.cdus_ffi.registerDevice
 import android.net.wifi.WifiManager
 import android.content.Context
 
+import io.cdus.app.utils.FileUtils
+import io.cdus.app.utils.Logger
+import io.cdus.app.ui.components.DevicePickerDialog
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+
 class MainActivity : ComponentActivity() {
     private var multicastLock: WifiManager.MulticastLock? = null
+    private var sharedFilePath by mutableStateOf<String?>(null)
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
-            Log.d("CDUS", "Window gained focus, checking clipboard")
+            Logger.d("Window gained focus, checking clipboard")
             checkClipboard()
         }
     }
@@ -71,7 +78,7 @@ class MainActivity : ComponentActivity() {
                             val currentHash = content.hashCode().toString()
                             if (currentHash != lastHash) {
                                 sharedPref.edit().putString("last_clip_hash", currentHash).apply()
-                                Log.i("CDUS", "New clipboard content detected on resume, broadcasting")
+                                Logger.i("New clipboard content detected on resume, broadcasting")
                                 uniffi.cdus_ffi.broadcastClipboard(content)
                             }
                         }
@@ -79,7 +86,41 @@ class MainActivity : ComponentActivity() {
                 }
             }
         } catch (e: Exception) {
-            Log.e("CDUS", "Error checking clipboard on resume: ${e.message}")
+            Logger.e("Error checking clipboard on resume: ${e.message}")
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        if (intent?.action == Intent.ACTION_SEND) {
+            if ("text/plain" == intent.type) {
+                intent.getStringExtra(Intent.EXTRA_TEXT)?.let { text ->
+                    Logger.i("Shared text received: $text")
+                    // Pre-fill or broadcast directly
+                    uniffi.cdus_ffi.broadcastClipboard(text)
+                }
+            } else {
+                val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, android.net.Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                }
+
+                uri?.let { fileUri ->
+                    Logger.i("Shared file URI received: $fileUri")
+                    val path = FileUtils.copyUriToLocal(this, fileUri)
+                    if (path != null) {
+                        Logger.i("File copied to: $path")
+                        sharedFilePath = path
+                    }
+                }
+            }
         }
     }
 
@@ -104,7 +145,7 @@ class MainActivity : ComponentActivity() {
                 val nodeId = parts[0]
                 val label = parts[1]
                 registerDevice(nodeId, label, 5200.toUShort())
-                Log.i("CDUS", "Device registered: $nodeId ($label)")
+                Logger.i("Device registered: $nodeId ($label)")
                 
                 // Start sync service if enabled
                 val sharedPref = getSharedPreferences("cdus_settings", Context.MODE_PRIVATE)
@@ -114,16 +155,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
         } else {
-            Log.e("CDUS", "Failed to init core: $identity")
+            Logger.e("Failed to init core: $identity")
         }
+
+        handleIntent(intent)
         
         val greeting = greetFromRust("Android")
-        Log.d("CDUS", "Rust says: $greeting")
+        Logger.d("Rust says: $greeting")
         
         enableEdgeToEdge()
         setContent {
             CdusandroidTheme {
-                MainScreen()
+                MainScreen(
+                    sharedFilePath = sharedFilePath,
+                    onFileSent = { sharedFilePath = null }
+                )
             }
         }
     }
@@ -139,8 +185,19 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun MainScreen() {
+fun MainScreen(sharedFilePath: String?, onFileSent: () -> Unit) {
     val navController = rememberNavController()
+    
+    if (sharedFilePath != null) {
+        DevicePickerDialog(
+            onDeviceSelected = { nodeId ->
+                uniffi.cdus_ffi.sendFile(nodeId, sharedFilePath)
+                onFileSent()
+            },
+            onDismiss = onFileSent
+        )
+    }
+
     Scaffold(
         bottomBar = {
             NavigationBar {

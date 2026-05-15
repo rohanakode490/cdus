@@ -656,6 +656,18 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 internal interface UniffiCallbackInterfaceClipboardListenerMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`content`: RustBuffer.ByValue,`source`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
+internal interface UniffiCallbackInterfaceFileTransferListenerMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`nodeId`: RustBuffer.ByValue,`manifest`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFileTransferListenerMethod1 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`fileHash`: RustBuffer.ByValue,`progress`: Float,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFileTransferListenerMethod2 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`fileHash`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFileTransferListenerMethod3 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`fileHash`: RustBuffer.ByValue,`error`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
 @Structure.FieldOrder("onClipboardUpdate", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceClipboardListener(
     @JvmField internal var `onClipboardUpdate`: UniffiCallbackInterfaceClipboardListenerMethod0? = null,
@@ -672,6 +684,44 @@ internal open class UniffiVTableCallbackInterfaceClipboardListener(
     }
 
 }
+@Structure.FieldOrder("onIncomingRequest", "onTransferProgress", "onTransferComplete", "onTransferError", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceFileTransferListener(
+    @JvmField internal var `onIncomingRequest`: UniffiCallbackInterfaceFileTransferListenerMethod0? = null,
+    @JvmField internal var `onTransferProgress`: UniffiCallbackInterfaceFileTransferListenerMethod1? = null,
+    @JvmField internal var `onTransferComplete`: UniffiCallbackInterfaceFileTransferListenerMethod2? = null,
+    @JvmField internal var `onTransferError`: UniffiCallbackInterfaceFileTransferListenerMethod3? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `onIncomingRequest`: UniffiCallbackInterfaceFileTransferListenerMethod0? = null,
+        `onTransferProgress`: UniffiCallbackInterfaceFileTransferListenerMethod1? = null,
+        `onTransferComplete`: UniffiCallbackInterfaceFileTransferListenerMethod2? = null,
+        `onTransferError`: UniffiCallbackInterfaceFileTransferListenerMethod3? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceFileTransferListener(`onIncomingRequest`,`onTransferProgress`,`onTransferComplete`,`onTransferError`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceFileTransferListener) {
+        `onIncomingRequest` = other.`onIncomingRequest`
+        `onTransferProgress` = other.`onTransferProgress`
+        `onTransferComplete` = other.`onTransferComplete`
+        `onTransferError` = other.`onTransferError`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -777,12 +827,17 @@ internal interface UniffiLib : Library {
                 uniffiCheckContractApiVersion(lib)
                 uniffiCheckApiChecksums(lib)
                 uniffiCallbackInterfaceClipboardListener.register(lib)
+                uniffiCallbackInterfaceFileTransferListener.register(lib)
                 }
         }
         
     }
 
     fun uniffi_cdus_ffi_fn_init_callback_vtable_clipboardlistener(`vtable`: UniffiVTableCallbackInterfaceClipboardListener,
+    ): Unit
+    fun uniffi_cdus_ffi_fn_init_callback_vtable_filetransferlistener(`vtable`: UniffiVTableCallbackInterfaceFileTransferListener,
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_accept_file_transfer(`fileHash`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_broadcast_clipboard(`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -810,7 +865,13 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_register_device(`nodeId`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,`port`: Short,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_fn_func_reject_file_transfer(`fileHash`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_send_file(`nodeId`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_cdus_ffi_fn_func_set_clipboard_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_set_file_transfer_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_start_discovery(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -930,6 +991,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_cdus_ffi_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_checksum_func_accept_file_transfer(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_broadcast_clipboard(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_cancel_pairing(
@@ -956,7 +1019,13 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_register_device(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_reject_file_transfer(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_send_file(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_set_clipboard_listener(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_set_file_transfer_listener(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_start_discovery(
     ): Short
@@ -965,6 +1034,14 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_func_unpair_device(
     ): Short
     fun uniffi_cdus_ffi_checksum_method_clipboardlistener_on_clipboard_update(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_incoming_request(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_transfer_progress(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_transfer_complete(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_transfer_error(
     ): Short
     fun ffi_cdus_ffi_uniffi_contract_version(
     ): Int
@@ -983,6 +1060,9 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_cdus_ffi_checksum_func_accept_file_transfer() != 57015.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_broadcast_clipboard() != 52173.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1022,7 +1102,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_register_device() != 23243.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_reject_file_transfer() != 49834.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_send_file() != 7051.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_set_clipboard_listener() != 63714.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_set_file_transfer_listener() != 44860.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_start_discovery() != 43924.toShort()) {
@@ -1035,6 +1124,18 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_method_clipboardlistener_on_clipboard_update() != 1910.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_incoming_request() != 55590.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_transfer_progress() != 7204.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_transfer_complete() != 4713.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_transfer_error() != 26624.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1133,6 +1234,29 @@ public object FfiConverterUInt: FfiConverter<UInt, Int> {
 /**
  * @suppress
  */
+public object FfiConverterULong: FfiConverter<ULong, Long> {
+    override fun lift(value: Long): ULong {
+        return value.toULong()
+    }
+
+    override fun read(buf: ByteBuffer): ULong {
+        return lift(buf.getLong())
+    }
+
+    override fun lower(value: ULong): Long {
+        return value.toLong()
+    }
+
+    override fun allocationSize(value: ULong) = 8UL
+
+    override fun write(value: ULong, buf: ByteBuffer) {
+        buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterLong: FfiConverter<Long, Long> {
     override fun lift(value: Long): Long {
         return value
@@ -1150,6 +1274,29 @@ public object FfiConverterLong: FfiConverter<Long, Long> {
 
     override fun write(value: Long, buf: ByteBuffer) {
         buf.putLong(value)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterFloat: FfiConverter<Float, Float> {
+    override fun lift(value: Float): Float {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Float {
+        return buf.getFloat()
+    }
+
+    override fun lower(value: Float): Float {
+        return value
+    }
+
+    override fun allocationSize(value: Float) = 4UL
+
+    override fun write(value: Float, buf: ByteBuffer) {
+        buf.putFloat(value)
     }
 }
 
@@ -1319,6 +1466,82 @@ public object FfiConverterTypeDiscoveredDevice: FfiConverterRustBuffer<Discovere
 
 
 
+data class FileChunk (
+    var `hash`: kotlin.String, 
+    var `offset`: kotlin.ULong, 
+    var `size`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFileChunk: FfiConverterRustBuffer<FileChunk> {
+    override fun read(buf: ByteBuffer): FileChunk {
+        return FileChunk(
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FileChunk) = (
+            FfiConverterString.allocationSize(value.`hash`) +
+            FfiConverterULong.allocationSize(value.`offset`) +
+            FfiConverterUInt.allocationSize(value.`size`)
+    )
+
+    override fun write(value: FileChunk, buf: ByteBuffer) {
+            FfiConverterString.write(value.`hash`, buf)
+            FfiConverterULong.write(value.`offset`, buf)
+            FfiConverterUInt.write(value.`size`, buf)
+    }
+}
+
+
+
+data class FileManifest (
+    var `fileHash`: kotlin.String, 
+    var `fileName`: kotlin.String, 
+    var `totalSize`: kotlin.ULong, 
+    var `chunks`: List<FileChunk>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFileManifest: FfiConverterRustBuffer<FileManifest> {
+    override fun read(buf: ByteBuffer): FileManifest {
+        return FileManifest(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterSequenceTypeFileChunk.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FileManifest) = (
+            FfiConverterString.allocationSize(value.`fileHash`) +
+            FfiConverterString.allocationSize(value.`fileName`) +
+            FfiConverterULong.allocationSize(value.`totalSize`) +
+            FfiConverterSequenceTypeFileChunk.allocationSize(value.`chunks`)
+    )
+
+    override fun write(value: FileManifest, buf: ByteBuffer) {
+            FfiConverterString.write(value.`fileHash`, buf)
+            FfiConverterString.write(value.`fileName`, buf)
+            FfiConverterULong.write(value.`totalSize`, buf)
+            FfiConverterSequenceTypeFileChunk.write(value.`chunks`, buf)
+    }
+}
+
+
+
 data class PairedDevice (
     var `nodeId`: kotlin.String, 
     var `label`: kotlin.String
@@ -1477,6 +1700,107 @@ public object FfiConverterTypeClipboardListener: FfiConverterCallbackInterface<C
 
 
 
+
+public interface FileTransferListener {
+    
+    fun `onIncomingRequest`(`nodeId`: kotlin.String, `manifest`: FileManifest)
+    
+    fun `onTransferProgress`(`fileHash`: kotlin.String, `progress`: kotlin.Float)
+    
+    fun `onTransferComplete`(`fileHash`: kotlin.String)
+    
+    fun `onTransferError`(`fileHash`: kotlin.String, `error`: kotlin.String)
+    
+    companion object
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceFileTransferListener {
+    internal object `onIncomingRequest`: UniffiCallbackInterfaceFileTransferListenerMethod0 {
+        override fun callback(`uniffiHandle`: Long,`nodeId`: RustBuffer.ByValue,`manifest`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFileTransferListener.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onIncomingRequest`(
+                    FfiConverterString.lift(`nodeId`),
+                    FfiConverterTypeFileManifest.lift(`manifest`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+    internal object `onTransferProgress`: UniffiCallbackInterfaceFileTransferListenerMethod1 {
+        override fun callback(`uniffiHandle`: Long,`fileHash`: RustBuffer.ByValue,`progress`: Float,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFileTransferListener.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onTransferProgress`(
+                    FfiConverterString.lift(`fileHash`),
+                    FfiConverterFloat.lift(`progress`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+    internal object `onTransferComplete`: UniffiCallbackInterfaceFileTransferListenerMethod2 {
+        override fun callback(`uniffiHandle`: Long,`fileHash`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFileTransferListener.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onTransferComplete`(
+                    FfiConverterString.lift(`fileHash`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+    internal object `onTransferError`: UniffiCallbackInterfaceFileTransferListenerMethod3 {
+        override fun callback(`uniffiHandle`: Long,`fileHash`: RustBuffer.ByValue,`error`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFileTransferListener.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onTransferError`(
+                    FfiConverterString.lift(`fileHash`),
+                    FfiConverterString.lift(`error`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeFileTransferListener.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceFileTransferListener.UniffiByValue(
+        `onIncomingRequest`,
+        `onTransferProgress`,
+        `onTransferComplete`,
+        `onTransferError`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_cdus_ffi_fn_init_callback_vtable_filetransferlistener(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypeFileTransferListener: FfiConverterCallbackInterface<FileTransferListener>()
+
+
+
+
 /**
  * @suppress
  */
@@ -1568,6 +1892,34 @@ public object FfiConverterSequenceTypeDiscoveredDevice: FfiConverterRustBuffer<L
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeFileChunk: FfiConverterRustBuffer<List<FileChunk>> {
+    override fun read(buf: ByteBuffer): List<FileChunk> {
+        val len = buf.getInt()
+        return List<FileChunk>(len) {
+            FfiConverterTypeFileChunk.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FileChunk>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFileChunk.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FileChunk>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFileChunk.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<PairedDevice>> {
     override fun read(buf: ByteBuffer): List<PairedDevice> {
         val len = buf.getInt()
@@ -1588,7 +1940,15 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
             FfiConverterTypePairedDevice.write(it, buf)
         }
     }
-} fun `broadcastClipboard`(`content`: kotlin.String)
+} fun `acceptFileTransfer`(`fileHash`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_accept_file_transfer(
+        FfiConverterString.lower(`fileHash`),_status)
+}
+    
+    
+ fun `broadcastClipboard`(`content`: kotlin.String)
         = 
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_broadcast_clipboard(
@@ -1698,11 +2058,35 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
 }
     
     
+ fun `rejectFileTransfer`(`fileHash`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_reject_file_transfer(
+        FfiConverterString.lower(`fileHash`),_status)
+}
+    
+    
+ fun `sendFile`(`nodeId`: kotlin.String, `path`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_send_file(
+        FfiConverterString.lower(`nodeId`),FfiConverterString.lower(`path`),_status)
+}
+    
+    
  fun `setClipboardListener`(`listener`: ClipboardListener)
         = 
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_set_clipboard_listener(
         FfiConverterTypeClipboardListener.lower(`listener`),_status)
+}
+    
+    
+ fun `setFileTransferListener`(`listener`: FileTransferListener)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_set_file_transfer_listener(
+        FfiConverterTypeFileTransferListener.lower(`listener`),_status)
 }
     
     
