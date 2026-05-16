@@ -2,6 +2,33 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 
+// --- State Management ---
+let pairedDeviceIds: string[] = [];
+let scanInterval: any = null;
+let pairingInterval: any = null;
+let currentPairingDevice: any = null;
+const transfers = new Map<string, any>();
+let currentIncomingFileHash = "";
+
+// --- UI Elements (initialized in DOMContentLoaded) ---
+let fileTransferModal: Element | null = null;
+let fileAcceptBtn: Element | null = null;
+let fileRejectBtn: Element | null = null;
+let progressToast: Element | null = null;
+let progressBar: HTMLElement | null = null;
+let progressPercent: Element | null = null;
+let progressLabel: Element | null = null;
+let pairedList: Element | null = null;
+let devicesEmpty: Element | null = null;
+let discoveryList: Element | null = null;
+let discoverySection: Element | null = null;
+let scanBtn: Element | null = null;
+let pairingModal: Element | null = null;
+let cancelPairingBtn: Element | null = null;
+let confirmPairingBtn: HTMLButtonElement | null = null;
+
+// --- Helper Functions ---
+
 async function renderClipboard() {
   const listContainer = document.querySelector("#clipboard-list");
   const emptyState = document.querySelector("#clipboard-empty");
@@ -68,7 +95,284 @@ async function loadSettings() {
   }
 }
 
+function renderFiles() {
+  const listContainer = document.querySelector("#files-list");
+  const emptyState = document.querySelector("#files-empty");
+  if (!listContainer) return;
+
+  const transferList = Array.from(transfers.values()).reverse();
+  
+  if (transferList.length === 0) {
+    listContainer.innerHTML = "";
+    emptyState?.classList.remove("hidden");
+    return;
+  }
+
+  emptyState?.classList.add("hidden");
+  listContainer.innerHTML = "";
+
+  transferList.forEach((transfer) => {
+    const itemEl = document.createElement("div");
+    itemEl.className = `file-transfer-item ${transfer.status}`;
+    
+    let statusIcon = "↓";
+    if (transfer.direction === "outgoing") statusIcon = "↑";
+    if (transfer.status === "complete") statusIcon = "✓";
+    if (transfer.status === "error") statusIcon = "!";
+
+    itemEl.innerHTML = `
+      <div class="transfer-icon">${statusIcon}</div>
+      <div class="transfer-details">
+        <div class="transfer-row">
+          <span class="file-name">${transfer.fileName}</span>
+          <span class="transfer-status-text">${transfer.status}</span>
+        </div>
+        <div class="progress-bar-container small">
+          <div class="progress-bar" style="width: ${transfer.progress}%"></div>
+        </div>
+        <div class="transfer-meta">
+          <span>${transfer.direction === "incoming" ? "from" : "to"} ${transfer.nodeId}</span>
+          <span>${transfer.progress}%</span>
+        </div>
+      </div>
+    `;
+    listContainer.appendChild(itemEl);
+  });
+}
+
+function showProgressToast(label: string) {
+  if (!progressToast) return;
+  progressToast.classList.remove("hidden");
+  if (progressLabel) progressLabel.textContent = label;
+  if (progressBar) progressBar.style.width = "0%";
+  if (progressPercent) progressPercent.textContent = "0%";
+}
+
+function updateProgress(percent: number) {
+  if (progressBar) progressBar.style.width = `${percent}%`;
+  if (progressPercent) progressPercent.textContent = `${Math.round(percent)}%`;
+}
+
+function hideProgressToast() {
+  progressToast?.classList.add("hidden");
+}
+
+async function renderPairedDevices() {
+  if (!pairedList) return;
+  
+  try {
+    const devices: [string, string, string | null][] = await invoke("get_paired_devices");
+    pairedDeviceIds = devices.map(([id]) => id);
+    
+    pairedList.innerHTML = "";
+    
+    if (devices.length === 0) {
+      devicesEmpty?.classList.remove("hidden");
+      return;
+    }
+
+    devicesEmpty?.classList.add("hidden");
+    devices.forEach(([id, name, transport]) => {
+      const row = document.createElement("div");
+      row.className = "device-row";
+      
+      const isOnline = transport !== null;
+      const statusClass = isOnline ? "online" : "offline";
+      const statusText = isOnline ? "Online" : "Offline";
+      const transportText = transport || "";
+      const shortId = id.substring(0, 8);
+
+      row.innerHTML = `
+        <div class="device-info">
+          <span class="device-name-label">${name} <span class="device-id-tag">#${shortId}</span></span>
+          <div class="device-status">
+            <span class="status-dot ${statusClass}"></span>
+            <span class="device-type-label">${statusText}</span>
+            ${isOnline ? `<span class="connection-path">${transportText}</span>` : ""}
+          </div>
+        </div>
+        <div class="device-actions">
+          ${isOnline ? `<button class="primary-btn send-file-btn" data-id="${id}">Send File</button>` : ""}
+          <button class="secondary-btn unpair-btn" data-id="${id}">Unpair</button>
+        </div>
+      `;
+
+      row.querySelector(".unpair-btn")?.addEventListener("click", () => {
+        unpairDevice(id);
+      });
+
+      row.querySelector(".send-file-btn")?.addEventListener("click", () => {
+        initiateFileSend(id);
+      });
+
+      pairedList.appendChild(row);
+    });
+  } catch (err) {
+    console.error("Failed to render paired devices:", err);
+  }
+}
+
+async function unpairDevice(id: string) {
+  if (confirm("Are you sure you want to unpair this device?")) {
+    try {
+      await invoke("unpair_device", { nodeId: id });
+      renderPairedDevices();
+    } catch (err) {
+      console.error("Failed to unpair device:", err);
+    }
+  }
+}
+
+async function initiateFileSend(nodeId: string) {
+  if (nodeId === "unknown") {
+    alert("Error: This device was paired using an older version of CDUS and is missing a valid Node ID.\n\nPlease click 'Unpair' for this device, then re-pair it to enable file transfers.");
+    return;
+  }
+
+  try {
+    const selected = await open({
+      multiple: false,
+      directory: false,
+    });
+
+    if (selected) {
+      const path = selected as string;
+      const fileName = path.split(/[/\\]/).pop() || "file";
+      
+      const tempId = `outgoing-${Date.now()}`;
+      transfers.set(tempId, {
+          fileHash: tempId,
+          fileName: fileName,
+          nodeId: nodeId,
+          progress: 0,
+          status: "preparing",
+          direction: "outgoing"
+      });
+      renderFiles();
+
+      await invoke("send_file", { nodeId, path });
+      showProgressToast(`Sending file to ${nodeId}...`);
+    }
+  } catch (err) {
+    console.error("Failed to initiate file send:", err);
+    alert("Failed to open file picker or initiate transfer.");
+  }
+}
+
+async function updateDiscoveryList() {
+  if (!discoveryList) return;
+  
+  try {
+    const discovered: [string, string, string, string, number][] = await invoke("get_discovered_devices");
+    const selfNodeId: string | null = await invoke("get_state", { key: "node_id" });
+
+    const availableDevices = discovered.filter(([id]) => !pairedDeviceIds.includes(id) && id !== selfNodeId);
+    
+    if (availableDevices.length === 0) {
+      return;
+    }
+
+    discoveryList.innerHTML = "";
+    availableDevices.forEach(([id, name, os, ip, port]) => {
+      const row = document.createElement("div");
+      row.className = "device-row";
+      const shortId = id.substring(0, 8);
+      row.innerHTML = `
+        <div class="device-info">
+          <span class="device-name-label">${name} <span class="device-id-tag">#${shortId}</span></span>
+          <span class="device-type-label">${os} • ${ip}:${port}</span>
+        </div>
+        <button class="primary-btn connect-btn" data-id="${id}">Connect</button>
+      `;
+      
+      row.querySelector(".connect-btn")?.addEventListener("click", async () => {
+        try {
+          await invoke("pair_with", { nodeId: id });
+        } catch (err) {
+          console.error("Failed to initiate pairing:", err);
+          alert("Failed to connect to device.");
+        }
+      });
+      
+      discoveryList.appendChild(row);
+    });
+  } catch (err) {
+    console.error("Failed to fetch discovered devices:", err);
+  }
+}
+
+async function startPairingPoll() {
+  if (pairingInterval) clearInterval(pairingInterval);
+  
+  pairingInterval = setInterval(async () => {
+    try {
+      const [pin, active, _isInitiator, _remoteLabel]: [string | null, boolean, boolean, string] = await invoke("get_pairing_status");
+      if (pin) {
+        const digits = document.querySelectorAll(".pin-digit");
+        digits.forEach((el, i) => {
+          el.textContent = pin[i];
+        });
+      }
+      if (!active && pairingInterval) {
+        clearInterval(pairingInterval);
+        pairingModal?.classList.add("hidden");
+        renderPairedDevices();
+      }
+    } catch (err) {
+      console.error("Error polling pairing status:", err);
+    }
+  }, 1000);
+}
+
+function showPairingModal(device: any, isInitiator: boolean) {
+  if (!pairingModal) return;
+  currentPairingDevice = device;
+  pairingModal.classList.remove("hidden");
+  
+  const modalTitle = pairingModal.querySelector("h3");
+  const modalDesc = pairingModal.querySelector("p");
+  const confirmBtn = document.querySelector("#pairing-confirm-btn") as HTMLButtonElement;
+
+  if (confirmBtn) {
+    confirmBtn.style.setProperty("display", "block", "important");
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = "Confirm PIN Matches";
+  }
+
+  if (isInitiator) {
+    if (modalTitle) modalTitle.textContent = "Confirm Pairing";
+    if (modalDesc) modalDesc.textContent = `Please verify that the PIN below matches on ${device.name}. Click Confirm once you have verified it.`;
+  } else {
+    if (modalTitle) modalTitle.textContent = "Incoming Pairing Request";
+    if (modalDesc) modalDesc.textContent = `Device ${device.name} wants to pair. Please verify that the PIN below matches on their screen.`;
+  }
+  
+  const digits = document.querySelectorAll(".pin-digit");
+  digits.forEach((el) => {
+    el.textContent = "?";
+  });
+}
+
+// --- Main Application Lifecycle ---
+
 window.addEventListener("DOMContentLoaded", () => {
+  // Initialize UI Element references
+  fileTransferModal = document.querySelector("#file-transfer-modal");
+  fileAcceptBtn = document.querySelector("#file-accept-btn");
+  fileRejectBtn = document.querySelector("#file-reject-btn");
+  progressToast = document.querySelector("#transfer-progress-toast");
+  progressBar = document.querySelector("#transfer-progress-bar") as HTMLElement;
+  progressPercent = document.querySelector("#transfer-percent");
+  progressLabel = document.querySelector("#transfer-label");
+  pairedList = document.querySelector("#paired-list");
+  devicesEmpty = document.querySelector("#devices-empty");
+  discoveryList = document.querySelector("#discovery-list");
+  discoverySection = document.querySelector("#discovery-section");
+  scanBtn = document.querySelector("#scan-btn");
+  pairingModal = document.querySelector("#pairing-modal");
+  cancelPairingBtn = document.querySelector("#pairing-cancel-btn");
+  confirmPairingBtn = document.querySelector("#pairing-confirm-btn") as HTMLButtonElement;
+
   loadSettings();
   const navItems = document.querySelectorAll(".nav-item");
   const views = document.querySelectorAll(".view");
@@ -89,9 +393,10 @@ window.addEventListener("DOMContentLoaded", () => {
 
       if (targetViewId === "clipboard") {
         renderClipboard();
-      }
-      if (targetViewId === "devices") {
+      } else if (targetViewId === "devices") {
         renderPairedDevices();
+      } else if (targetViewId === "files") {
+        renderFiles();
       }
     });
   });
@@ -99,9 +404,10 @@ window.addEventListener("DOMContentLoaded", () => {
   const activeView = document.querySelector(".view.active");
   if (activeView?.id === "view-clipboard") {
     renderClipboard();
-  }
-  if (activeView?.id === "view-devices") {
+  } else if (activeView?.id === "view-devices") {
     renderPairedDevices();
+  } else if (activeView?.id === "view-files") {
+    renderFiles();
   }
 
   const limitSlider = document.querySelector("#clipboard-limit") as HTMLInputElement;
@@ -128,236 +434,12 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // --- Q2 Discovery & Pairing Real Logic ---
-  
-  const scanBtn = document.querySelector("#scan-btn");
-  const discoverySection = document.querySelector("#discovery-section");
-  const discoveryList = document.querySelector("#discovery-list");
-  const pairingModal = document.querySelector("#pairing-modal");
-  const cancelPairingBtn = document.querySelector("#pairing-cancel-btn");
-  const confirmPairingBtn = document.querySelector("#pairing-confirm-btn");
-  const pairedList = document.querySelector("#paired-list");
-  const devicesEmpty = document.querySelector("#devices-empty");
-
-  // Local state
-  let pairedDeviceIds: string[] = [];
-  let scanInterval: any = null;
-  let pairingInterval: any = null;
-  let currentPairingDevice: any = null;
-
-  // Background check for incoming pairing requests
-  setInterval(async () => {
-    // Only poll if modal is NOT already open
-    if (pairingModal?.classList.contains("hidden")) {
-      try {
-        const [pin, active, isInitiator, remoteLabel]: [string | null, boolean, boolean, string] = await invoke("get_pairing_status");
-        if (active && pin) {
-          console.log("Detected active pairing state. isInitiator:", isInitiator);
-          showPairingModal({ id: "remote", name: remoteLabel, os: "Unknown" }, isInitiator);
-          const digits = document.querySelectorAll(".pin-digit");
-          digits.forEach((el, i) => {
-            el.textContent = pin[i];
-          });
-          startPairingPoll();
-        }
-      } catch (err) {
-        // Silently ignore background poll errors
-      }
-    }
-  }, 1000);
-
-  async function updateDiscoveryList() {
-    if (!discoveryList) return;
-    
-    try {
-      const discovered: [string, string, string, string, number][] = await invoke("get_discovered_devices");
-      const selfNodeId: string | null = await invoke("get_state", { key: "node_id" });
-
-      // Filter out already paired devices AND self
-      const availableDevices = discovered.filter(([id]) => !pairedDeviceIds.includes(id) && id !== selfNodeId);
-      
-      if (availableDevices.length === 0) {
-        return;
-      }
-
-      discoveryList.innerHTML = "";
-      availableDevices.forEach(([id, name, os, ip, port]) => {
-        const row = document.createElement("div");
-        row.className = "device-row";
-        const shortId = id.substring(0, 8);
-        row.innerHTML = `
-          <div class="device-info">
-            <span class="device-name-label">${name} <span class="device-id-tag">#${shortId}</span></span>
-            <span class="device-type-label">${os} • ${ip}:${port}</span>
-          </div>
-          <button class="primary-btn connect-btn" data-id="${id}">Connect</button>
-        `;
-        
-        row.querySelector(".connect-btn")?.addEventListener("click", async () => {
-          try {
-            await invoke("pair_with", { nodeId: id });
-            // Note: Modal will be shown by background poll once agent updates state
-          } catch (err) {
-            console.error("Failed to initiate pairing:", err);
-            alert("Failed to connect to device.");
-          }
-        });
-        
-        discoveryList.appendChild(row);
-      });
-    } catch (err) {
-      console.error("Failed to fetch discovered devices:", err);
-    }
-  }
-
-  async function startPairingPoll() {
-    if (pairingInterval) clearInterval(pairingInterval);
-    
-    pairingInterval = setInterval(async () => {
-      try {
-        const [pin, active, _isInitiator, _remoteLabel]: [string | null, boolean, boolean, string] = await invoke("get_pairing_status");
-        if (pin) {
-          const digits = document.querySelectorAll(".pin-digit");
-          digits.forEach((el, i) => {
-            el.textContent = pin[i];
-          });
-        }
-        if (!active && pairingInterval) {
-          clearInterval(pairingInterval);
-          pairingModal?.classList.add("hidden");
-          renderPairedDevices(); // Refresh list to show success
-        }
-      } catch (err) {
-        console.error("Error polling pairing status:", err);
-      }
-    }, 1000);
-  }
-
-  function showPairingModal(device: any, isInitiator: boolean) {
-    if (!pairingModal) return;
-    currentPairingDevice = device;
-    pairingModal.classList.remove("hidden");
-    
-    const modalTitle = pairingModal.querySelector("h3");
-    const modalDesc = pairingModal.querySelector("p");
-    const confirmBtn = document.querySelector("#pairing-confirm-btn") as HTMLButtonElement;
-
-    if (confirmBtn) {
-      confirmBtn.style.setProperty("display", "block", "important");
-      confirmBtn.disabled = false;
-      confirmBtn.textContent = "Confirm PIN Matches";
-    }
-
-    if (isInitiator) {
-      console.log("UI: Acting as Initiator. Both sides must confirm.");
-      if (modalTitle) modalTitle.textContent = "Confirm Pairing";
-      if (modalDesc) modalDesc.textContent = `Please verify that the PIN below matches on ${device.name}. Click Confirm once you have verified it.`;
-    } else {
-      console.log("UI: Acting as Responder. Both sides must confirm.");
-      if (modalTitle) modalTitle.textContent = "Incoming Pairing Request";
-      if (modalDesc) modalDesc.textContent = `Device ${device.name} wants to pair. Please verify that the PIN below matches on their screen.`;
-    }
-    
-    // Placeholder while waiting for real PIN from agent
-    const digits = document.querySelectorAll(".pin-digit");
-    digits.forEach((el) => {
-      el.textContent = "?";
-    });
-  }
-
-  async function renderPairedDevices() {
-    if (!pairedList) return;
-    
-    try {
-      const devices: [string, string, string | null][] = await invoke("get_paired_devices");
-      pairedDeviceIds = devices.map(([id]) => id);
-      
-      pairedList.innerHTML = "";
-      
-      if (devices.length === 0) {
-        devicesEmpty?.classList.remove("hidden");
-        return;
-      }
-
-      devicesEmpty?.classList.add("hidden");
-      devices.forEach(([id, name, transport]) => {
-        const row = document.createElement("div");
-        row.className = "device-row";
-        
-        const isOnline = transport !== null;
-        const statusClass = isOnline ? "online" : "offline";
-        const statusText = isOnline ? "Online" : "Offline";
-        const transportText = transport || "";
-        const shortId = id.substring(0, 8);
-
-        row.innerHTML = `
-          <div class="device-info">
-            <span class="device-name-label">${name} <span class="device-id-tag">#${shortId}</span></span>
-            <div class="device-status">
-              <span class="status-dot ${statusClass}"></span>
-              <span class="device-type-label">${statusText}</span>
-              ${isOnline ? `<span class="connection-path">${transportText}</span>` : ""}
-            </div>
-          </div>
-          <div class="device-actions">
-            ${isOnline ? `<button class="primary-btn send-file-btn" data-id="${id}">Send File</button>` : ""}
-            <button class="secondary-btn unpair-btn" data-id="${id}">Unpair</button>
-          </div>
-        `;
-
-        row.querySelector(".unpair-btn")?.addEventListener("click", () => {
-          unpairDevice(id);
-        });
-
-        row.querySelector(".send-file-btn")?.addEventListener("click", () => {
-          initiateFileSend(id);
-        });
-
-        pairedList.appendChild(row);
-      });
-    } catch (err) {
-      console.error("Failed to render paired devices:", err);
-    }
-  }
-
-  async function initiateFileSend(nodeId: string) {
-    if (nodeId === "unknown") {
-      alert("Error: This device was paired using an older version of CDUS and is missing a valid Node ID.\n\nPlease click 'Unpair' for this device, then re-pair it to enable file transfers.");
-      return;
-    }
-
-    try {
-      const selected = await open({
-        multiple: false,
-        directory: false,
-      });
-
-      if (selected) {
-        const path = selected as string;
-        await invoke("send_file", { nodeId, path });
-        showProgressToast(`Sending file to ${nodeId}...`);
-      }
-    } catch (err) {
-      console.error("Failed to initiate file send:", err);
-      alert("Failed to open file picker or initiate transfer.");
-    }
-  }
-  async function unpairDevice(id: string) {
-    if (confirm("Are you sure you want to unpair this device?")) {
-      try {
-        await invoke("unpair_device", { nodeId: id });
-        renderPairedDevices();
-      } catch (err) {
-        console.error("Failed to unpair device:", err);
-      }
-    }
-  }
-
+  // --- Scan Button Logic ---
   scanBtn?.addEventListener("click", async () => {
     discoverySection?.classList.remove("hidden");
     document.querySelector("#no-discovery-hint")?.classList.add("hidden");
     
-    if (scanBtn.classList.contains("scanning")) {
+    if (scanBtn?.classList.contains("scanning")) {
       await invoke("stop_scan");
       if (scanInterval) clearInterval(scanInterval);
       scanBtn.classList.remove("scanning");
@@ -365,8 +447,8 @@ window.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    scanBtn.classList.add("scanning");
-    scanBtn.innerHTML = "<div class=\"spinner\" style=\"width: 14px; height: 14px; border-width: 2px; margin-right: 8px; display: inline-block; vertical-align: middle;\"></div><span>Stop Scan</span>";
+    scanBtn?.classList.add("scanning");
+    scanBtn!.innerHTML = "<div class=\"spinner\" style=\"width: 14px; height: 14px; border-width: 2px; margin-right: 8px; display: inline-block; vertical-align: middle;\"></div><span>Stop Scan</span>";
     discoveryList!.innerHTML = "<div class=\"scanning-indicator\"><div class=\"spinner\"></div><span>Scanning for nearby devices...</span></div>";
     
     try {
@@ -374,7 +456,7 @@ window.addEventListener("DOMContentLoaded", () => {
       scanInterval = setInterval(updateDiscoveryList, 2000);
       
       setTimeout(async () => {
-        if (scanBtn.classList.contains("scanning")) {
+        if (scanBtn?.classList.contains("scanning")) {
           await invoke("stop_scan");
           if (scanInterval) clearInterval(scanInterval);
           scanBtn.classList.remove("scanning");
@@ -387,8 +469,8 @@ window.addEventListener("DOMContentLoaded", () => {
       }, 30000);
     } catch (err) {
       console.error("Failed to start scan:", err);
-      scanBtn.classList.remove("scanning");
-      scanBtn.innerHTML = "Scan for Devices";
+      scanBtn?.classList.remove("scanning");
+      scanBtn!.innerHTML = "Scan for Devices";
     }
   });
 
@@ -406,65 +488,98 @@ window.addEventListener("DOMContentLoaded", () => {
   confirmPairingBtn?.addEventListener("click", async () => {
     if (currentPairingDevice) {
       try {
-        confirmPairingBtn.disabled = true;
-        confirmPairingBtn.textContent = "Waiting for other device...";
+        confirmPairingBtn!.disabled = true;
+        confirmPairingBtn!.textContent = "Waiting for other device...";
         await invoke("confirm_pairing", { accepted: true });
-        // UI will be closed by startPairingPoll when active becomes false
       } catch (err) {
         console.error("Failed to confirm pairing on agent:", err);
         alert("Failed to confirm pairing.");
-        confirmPairingBtn.disabled = false;
-        confirmPairingBtn.textContent = "Confirm PIN Matches";
+        confirmPairingBtn!.disabled = false;
+        confirmPairingBtn!.textContent = "Confirm PIN Matches";
       }
     }
   });
 
   document.querySelector("#manual-connect-btn")?.addEventListener("click", async () => {
-    const ip = (document.querySelector("#manual-ip") as HTMLInputElement).value;
-    const port = parseInt((document.querySelector("#manual-port") as HTMLInputElement).value);
+    const ipInput = document.querySelector("#manual-ip") as HTMLInputElement;
+    const portInput = document.querySelector("#manual-port") as HTMLInputElement;
+    const ip = ipInput.value;
+    const port = parseInt(portInput.value);
     
     try {
       await invoke("manual_pair", { ip, port });
-      // Modal will be shown by background poll
     } catch (err) {
       console.error("Manual pairing failed:", err);
       alert("Failed to connect to IP.");
     }
   });
 
-  // --- Q4 File Transfer Logic ---
+  // --- File Transfer Listeners ---
 
-  const fileTransferModal = document.querySelector("#file-transfer-modal");
-  const fileAcceptBtn = document.querySelector("#file-accept-btn");
-  const fileRejectBtn = document.querySelector("#file-reject-btn");
-  const progressToast = document.querySelector("#transfer-progress-toast");
-  const progressBar = document.querySelector("#transfer-progress-bar") as HTMLElement;
-  const progressPercent = document.querySelector("#transfer-percent");
-  const progressLabel = document.querySelector("#transfer-label");
+  fileAcceptBtn?.addEventListener("click", async () => {
+    if (currentIncomingFileHash) {
+      await invoke("accept_file_transfer", { fileHash: currentIncomingFileHash });
+      fileTransferModal?.classList.add("hidden");
+      
+      const transfer = transfers.get(currentIncomingFileHash);
+      if (transfer) {
+        transfer.status = "downloading";
+        renderFiles();
+      }
+      
+      showProgressToast("Downloading file...");
+    }
+  });
 
-  let currentIncomingFileHash = "";
+  fileRejectBtn?.addEventListener("click", async () => {
+    if (currentIncomingFileHash) {
+      await invoke("reject_file_transfer", { fileHash: currentIncomingFileHash });
+      fileTransferModal?.classList.add("hidden");
+      
+      const transfer = transfers.get(currentIncomingFileHash);
+      if (transfer) {
+        transfer.status = "rejected";
+        renderFiles();
+      }
+    }
+  });
 
-  function showProgressToast(label: string) {
-    if (!progressToast) return;
-    progressToast.classList.remove("hidden");
-    if (progressLabel) progressLabel.textContent = label;
-    if (progressBar) progressBar.style.width = "0%";
-    if (progressPercent) progressPercent.textContent = "0%";
-  }
+  // --- Background Polling & Events ---
 
-  function updateProgress(percent: number) {
-    if (progressBar) progressBar.style.width = `${percent}%`;
-    if (progressPercent) progressPercent.textContent = `${Math.round(percent)}%`;
-  }
+  // Pairing Poll
+  setInterval(async () => {
+    if (pairingModal?.classList.contains("hidden")) {
+      try {
+        const status: [string | null, boolean, boolean, string] = await invoke("get_pairing_status");
+        const [pin, active, isInitiator, remoteLabel] = status;
+        if (active && pin) {
+          showPairingModal({ id: "remote", name: remoteLabel, os: "Unknown" }, isInitiator);
+          const digits = document.querySelectorAll(".pin-digit");
+          digits.forEach((el, i) => {
+            el.textContent = pin[i];
+          });
+          startPairingPoll();
+        }
+      } catch (err) { }
+    }
+  }, 1000);
 
-  function hideProgressToast() {
-    progressToast?.classList.add("hidden");
-  }
-
+  // Agent Event Stream
   listen("incoming-file-request", (event: any) => {
+    console.log("UI: Received incoming-file-request", event.payload);
     const [nodeId, manifest] = event.payload;
     currentIncomingFileHash = manifest.file_hash;
     
+    transfers.set(manifest.file_hash, {
+      fileHash: manifest.file_hash,
+      fileName: manifest.file_name,
+      nodeId: nodeId,
+      progress: 0,
+      status: "pending",
+      direction: "incoming"
+    });
+    renderFiles();
+
     if (fileTransferModal) {
       const nameEl = document.querySelector("#incoming-file-name");
       const sizeEl = document.querySelector("#incoming-file-size");
@@ -478,48 +593,53 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  fileAcceptBtn?.addEventListener("click", async () => {
-    if (currentIncomingFileHash) {
-      await invoke("accept_file_transfer", { fileHash: currentIncomingFileHash });
-      fileTransferModal?.classList.add("hidden");
-      showProgressToast("Downloading file...");
-    }
-  });
-
-  fileRejectBtn?.addEventListener("click", async () => {
-    if (currentIncomingFileHash) {
-      await invoke("reject_file_transfer", { fileHash: currentIncomingFileHash });
-      fileTransferModal?.classList.add("hidden");
-    }
-  });
-
   listen("file-transfer-progress", (event: any) => {
-    const [_hash, progress] = event.payload;
+    const [fileHash, progress] = event.payload;
     updateProgress(progress);
+    
+    const transfer = transfers.get(fileHash);
+    if (transfer) {
+      transfer.progress = Math.round(progress);
+      if (transfer.status === "pending" || transfer.status === "preparing") transfer.status = "active";
+      renderFiles();
+    }
   });
 
-  listen("file-transfer-complete", (_event: any) => {
+  listen("file-transfer-complete", (event: any) => {
+    const fileHash = event.payload;
     if (progressLabel) progressLabel.textContent = "Transfer complete!";
     updateProgress(100);
     setTimeout(hideProgressToast, 3000);
+    
+    const transfer = transfers.get(fileHash);
+    if (transfer) {
+      transfer.progress = 100;
+      transfer.status = "complete";
+      renderFiles();
+    }
   });
 
   listen("file-transfer-error", (event: any) => {
-    const [_hash, error] = event.payload;
+    const [fileHash, error] = event.payload;
     alert(`Transfer failed: ${error}`);
     hideProgressToast();
+    
+    const transfer = transfers.get(fileHash);
+    if (transfer) {
+      transfer.status = "error";
+      transfer.error = error;
+      renderFiles();
+    }
   });
 
   listen("clipboard-updated", (_event: any) => {
     renderClipboard();
   });
 
-  // --- End Q4 File Transfer Logic ---
-
-  // Initial load of paired devices
+  // Initial load
   renderPairedDevices();
 
-  // Periodic refresh for devices status and clipboard
+  // Periodic Refresh
   setInterval(() => {
     const devicesView = document.querySelector("#view-devices");
     if (devicesView?.classList.contains("active")) {

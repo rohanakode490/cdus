@@ -52,7 +52,7 @@ fun DevicesScreen() {
             val path = FileUtils.copyUriToLocal(context, it)
             if (path != null) {
                 sendFile(deviceId, path)
-                // Show a snackbar or toast
+                android.widget.Toast.makeText(context, "Sending file...", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
         selectedDeviceForFile = null
