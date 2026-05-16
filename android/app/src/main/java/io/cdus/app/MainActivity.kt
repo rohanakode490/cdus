@@ -147,12 +147,10 @@ class MainActivity : ComponentActivity() {
                 registerDevice(nodeId, label, 5200.toUShort())
                 Logger.i("Device registered: $nodeId ($label)")
                 
-                // Start sync service if enabled
-                val sharedPref = getSharedPreferences("cdus_settings", Context.MODE_PRIVATE)
-                if (sharedPref.getBoolean("clipboard_sync", false)) {
-                    val intent = Intent(this, io.cdus.app.service.SyncService::class.java)
-                    androidx.core.content.ContextCompat.startForegroundService(this, intent)
-                }
+                // Start sync service if enabled (always start for now to handle file transfers)
+                val intent = Intent(this, io.cdus.app.service.SyncService::class.java)
+                androidx.core.content.ContextCompat.startForegroundService(this, intent)
+                Logger.i("SyncService start requested")
             }
         } else {
             Logger.e("Failed to init core: $identity")

@@ -58,6 +58,7 @@ pub trait ClipboardListener: Send + Sync {
 #[uniffi::export(callback_interface)]
 pub trait FileTransferListener: Send + Sync {
     fn on_incoming_request(&self, node_id: String, manifest: FileManifest);
+    fn on_outgoing_transfer_started(&self, manifest: FileManifest);
     fn on_transfer_progress(&self, file_hash: String, progress: f32);
     fn on_transfer_complete(&self, file_hash: String);
     fn on_transfer_error(&self, file_hash: String, error: String);
@@ -225,6 +226,27 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                                 manifest.file_hash.clone(),
                                                 (std::path::PathBuf::from(path), manifest.clone()),
                                             );
+
+                                            if let Some(listener) =
+                                                FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
+                                            {
+                                                let ffi_manifest = FileManifest {
+                                                    file_hash: manifest.file_hash.clone(),
+                                                    file_name: manifest.file_name.clone(),
+                                                    total_size: manifest.total_size,
+                                                    chunks: manifest
+                                                        .chunks
+                                                        .iter()
+                                                        .map(|c| FileChunk {
+                                                            hash: c.hash.clone(),
+                                                            offset: c.offset,
+                                                            size: c.size,
+                                                        })
+                                                        .collect(),
+                                                };
+                                                listener.on_outgoing_transfer_started(ffi_manifest);
+                                            }
+
                                             let _ = libp2p_request_tx.send((
                                                 peer_id,
                                                 cdus_common::SyncMessage::FileTransferRequest(
@@ -346,6 +368,19 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                     node_id,
                                     manifest,
                                 } => {
+                                    let file_hash = manifest.file_hash.clone();
+                                    {
+                                        let mut rm = RECEIVED_MANIFESTS.lock().unwrap();
+                                        rm.insert(
+                                            file_hash.clone(),
+                                            cdus_common::TransferProgress {
+                                                node_id: node_id.clone(),
+                                                manifest: manifest.clone(),
+                                                completed_hashes: std::collections::HashSet::new(),
+                                            },
+                                        );
+                                    }
+
                                     if let Some(listener) =
                                         FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
                                     {
