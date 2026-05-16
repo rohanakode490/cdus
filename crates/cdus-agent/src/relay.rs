@@ -1,13 +1,13 @@
 use anyhow::Result;
 use base64::{engine::general_purpose, Engine as _};
+use cdus_common::IpcMessage;
+use flume::{Receiver, Sender};
 use serde::{Deserialize, Serialize};
 use std::thread;
 use std::time::Duration;
 use tracing::{error, info};
-use tungstenite::{connect, Message, stream::MaybeTlsStream};
+use tungstenite::{connect, stream::MaybeTlsStream, Message};
 use ureq;
-use flume::{Sender, Receiver};
-use cdus_common::IpcMessage;
 
 #[derive(Serialize)]
 struct RegisterRequest {
@@ -49,30 +49,41 @@ pub struct RelayManager {
 }
 
 impl RelayManager {
-    pub fn new(node_id: String, relay_url: String, tx: Sender<IpcMessage>) -> (Self, Receiver<SignalMessage>) {
+    pub fn new(
+        node_id: String,
+        relay_url: String,
+        tx: Sender<IpcMessage>,
+    ) -> (Self, Receiver<SignalMessage>) {
         let (outgoing_tx, outgoing_rx) = flume::unbounded();
-        (Self {
-            node_id,
-            relay_url,
-            tx,
-            outgoing_tx,
-        }, outgoing_rx)
+        (
+            Self {
+                node_id,
+                relay_url,
+                tx,
+                outgoing_tx,
+            },
+            outgoing_rx,
+        )
     }
 
     pub fn get_turn_credentials(&self) -> Result<TurnCredentials> {
         let url = format!("{}/v1/turn?uuid={}", self.relay_url, self.node_id);
         info!("Fetching TURN credentials from relay at {}...", url);
 
-        let resp = ureq::get(&url)
-            .call()?;
+        let resp = ureq::get(&url).call()?;
 
         if resp.status() == 200 {
             let creds: TurnCredentials = resp.into_json()?;
             Ok(creds)
         } else {
-            let err_msg = resp.into_string().unwrap_or_else(|_| "Unknown error".to_string());
+            let err_msg = resp
+                .into_string()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             error!("Failed to fetch TURN credentials: {}", err_msg);
-            Err(anyhow::anyhow!("Failed to fetch TURN credentials: {}", err_msg))
+            Err(anyhow::anyhow!(
+                "Failed to fetch TURN credentials: {}",
+                err_msg
+            ))
         }
     }
 
@@ -83,7 +94,9 @@ impl RelayManager {
             target_uuid,
             payload: b64_payload,
         };
-        self.outgoing_tx.send(msg).map_err(|e| anyhow::anyhow!("Failed to queue signaling message: {}", e))
+        self.outgoing_tx
+            .send(msg)
+            .map_err(|e| anyhow::anyhow!("Failed to queue signaling message: {}", e))
     }
 
     #[tracing::instrument(skip(self))]
@@ -95,14 +108,15 @@ impl RelayManager {
         };
 
         info!("Registering device with relay at {}...", url);
-        let resp = ureq::post(&url)
-            .send_json(&req)?;
+        let resp = ureq::post(&url).send_json(&req)?;
 
         if resp.status() == 201 || resp.status() == 200 {
             info!("Device registered successfully.");
             Ok(())
         } else {
-            let err_msg = resp.into_string().unwrap_or_else(|_| "Unknown error".to_string());
+            let err_msg = resp
+                .into_string()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             error!("Failed to register device: {}", err_msg);
             Err(anyhow::anyhow!("Registration failed: {}", err_msg))
         }
@@ -114,14 +128,15 @@ impl RelayManager {
         let req = serde_json::json!({ "uuid": uuid });
 
         info!("Revoking device {} with relay at {}...", uuid, url);
-        let resp = ureq::post(&url)
-            .send_json(&req)?;
+        let resp = ureq::post(&url).send_json(&req)?;
 
         if resp.status() == 200 {
             info!("Device {} revoked successfully.", uuid);
             Ok(())
         } else {
-            let err_msg = resp.into_string().unwrap_or_else(|_| "Unknown error".to_string());
+            let err_msg = resp
+                .into_string()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             error!("Failed to revoke device: {}", err_msg);
             Err(anyhow::anyhow!("Revocation failed: {}", err_msg))
         }
@@ -135,7 +150,8 @@ impl RelayManager {
             base_url.replace("http://", "ws://")
         } else {
             format!("ws://{}", base_url)
-        } + "/v1/signaling?uuid=" + &self.node_id;
+        } + "/v1/signaling?uuid="
+            + &self.node_id;
 
         let tx = self.tx.clone();
 
@@ -147,7 +163,7 @@ impl RelayManager {
                 match connect(&ws_url) {
                     Ok((mut socket, _response)) => {
                         info!("Relay: Connected successfully.");
-                        
+
                         // Set read timeout
                         if let MaybeTlsStream::Plain(s) = socket.get_mut() {
                             let _ = s.set_read_timeout(Some(Duration::from_millis(100)));
@@ -164,15 +180,17 @@ impl RelayManager {
                                     };
 
                                     if let Some(data) = data {
-                                        if let Ok(incoming) = serde_json::from_slice::<RelayIncomingMessage>(&data) {
+                                        if let Ok(incoming) =
+                                            serde_json::from_slice::<RelayIncomingMessage>(&data)
+                                        {
                                             match incoming {
                                                 RelayIncomingMessage::Signal(signal) => {
                                                     match general_purpose::STANDARD.decode(&signal.payload) {
                                                         Ok(decoded_payload) => {
                                                             info!("Relay: Received message from {} ({} bytes)", signal.source_uuid, decoded_payload.len());
-                                                            let _ = tx.send(IpcMessage::RelayMessage { 
-                                                                source_uuid: signal.source_uuid, 
-                                                                payload: decoded_payload 
+                                                            let _ = tx.send(IpcMessage::RelayMessage {
+                                                                source_uuid: signal.source_uuid,
+                                                                payload: decoded_payload
                                                             });
                                                         }
                                                         Err(e) => error!("Relay: Failed to decode base64 from {}: {}", signal.source_uuid, e),
@@ -188,7 +206,9 @@ impl RelayManager {
                                 }
                                 Err(e) => {
                                     if let tungstenite::Error::Io(io_err) = &e {
-                                        if io_err.kind() == std::io::ErrorKind::WouldBlock || io_err.kind() == std::io::ErrorKind::TimedOut {
+                                        if io_err.kind() == std::io::ErrorKind::WouldBlock
+                                            || io_err.kind() == std::io::ErrorKind::TimedOut
+                                        {
                                             // Normal timeout, continue
                                         } else {
                                             error!("Relay: Connection lost (IO error: {})", e);
@@ -233,7 +253,7 @@ mod tests {
         let server = MockServer::start();
         let node_id = "test-node".to_string();
         let (tx, _) = flume::unbounded();
-        
+
         let relay = RelayManager {
             node_id: node_id.clone(),
             relay_url: server.base_url(),
@@ -252,7 +272,7 @@ mod tests {
 
         let creds = relay.get_turn_credentials().unwrap();
         mock.assert();
-        
+
         assert_eq!(creds.username, "user");
         assert_eq!(creds.password, "pass");
         assert_eq!(creds.urls[0], "turn:localhost:3478");

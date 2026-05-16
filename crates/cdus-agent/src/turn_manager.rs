@@ -1,3 +1,4 @@
+use crate::relay::TurnCredentials;
 use anyhow::Result;
 use flume::{Receiver, Sender};
 use std::net::SocketAddr;
@@ -8,11 +9,10 @@ use tokio::runtime::Runtime;
 use tracing::{error, info, warn};
 use turn::client::{Client, ClientConfig};
 use webrtc_util::conn::Conn;
-use crate::relay::TurnCredentials;
 
 pub struct TurnConnection {
     pub local_relayed_addr: SocketAddr,
-    pub tx: Sender<Vec<u8>>, // Send to this to send over TURN
+    pub tx: Sender<Vec<u8>>,   // Send to this to send over TURN
     pub rx: Receiver<Vec<u8>>, // Receive from this to get data from TURN
 }
 
@@ -25,7 +25,7 @@ impl TurnManager {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        
+
         Ok(Self {
             runtime: Arc::new(runtime),
         })
@@ -38,7 +38,7 @@ impl TurnManager {
     ) -> Result<(TurnConnection, thread::JoinHandle<()>)> {
         let (to_turn_tx, to_turn_rx) = flume::unbounded::<Vec<u8>>();
         let (from_turn_tx, from_turn_rx) = flume::unbounded::<Vec<u8>>();
-        
+
         let runtime = Arc::clone(&self.runtime);
         let (ready_tx, ready_rx) = flume::bounded::<SocketAddr>(1);
 
@@ -54,7 +54,7 @@ impl TurnManager {
 
                 // Simple parsing of turn:host:port
                 let server_addr = creds.urls[0].replace("turn:", "");
-                
+
                 let config = ClientConfig {
                     stun_serv_addr: server_addr.clone(),
                     turn_serv_addr: server_addr,
@@ -146,13 +146,14 @@ impl TurnManager {
 
         // Wait for allocation to be ready
         match ready_rx.recv_timeout(std::time::Duration::from_secs(10)) {
-            Ok(relayed_addr) => {
-                Ok((TurnConnection {
+            Ok(relayed_addr) => Ok((
+                TurnConnection {
                     local_relayed_addr: relayed_addr,
                     tx: to_turn_tx,
                     rx: from_turn_rx,
-                }, handle))
-            }
+                },
+                handle,
+            )),
             Err(_) => Err(anyhow::anyhow!("TURN allocation timed out")),
         }
     }
