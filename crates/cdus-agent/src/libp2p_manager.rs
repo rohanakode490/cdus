@@ -201,6 +201,12 @@ impl Libp2pManager {
                                                                 manifest,
                                                             });
                                                         }
+                                                        SyncMessage::FileTransferAccepted { file_hash } => {
+                                                            let _ = tx.send(IpcMessage::AcceptFileTransfer { file_hash });
+                                                        }
+                                                        SyncMessage::FileTransferRejected { file_hash } => {
+                                                            let _ = tx.send(IpcMessage::RejectFileTransfer { file_hash });
+                                                        }
                                                         _ => {}
                                                     }
                                                 } else {
@@ -208,10 +214,31 @@ impl Libp2pManager {
                                                 }
                                             }
                                         }
-                                        CdusBehaviourEvent::RequestResponse(request_response::Event::Message { peer: _, message, .. }) => {
+                                        CdusBehaviourEvent::RequestResponse(request_response::Event::Message { peer, message, .. }) => {
                                             match message {
                                                 request_response::Message::Request { request, channel, .. } => {
                                                     match request {
+                                                        SyncMessage::FileTransferRequest(manifest) => {
+                                                            info!("Libp2p: Received direct FileTransferRequest for {}", manifest.file_name);
+                                                            let _ = tx.send(IpcMessage::IncomingFileRequest {
+                                                                node_id: peer.to_string(),
+                                                                manifest,
+                                                            });
+                                                            let response = SyncMessage::FileTransferAccepted { file_hash: "ack".to_string() };
+                                                            let _ = swarm.behaviour_mut().request_response.send_response(channel, response);
+                                                        }
+                                                        SyncMessage::FileTransferAccepted { file_hash } => {
+                                                            info!("Libp2p: Received direct FileTransferAccepted for {}", file_hash);
+                                                            let _ = tx.send(IpcMessage::AcceptFileTransfer { file_hash });
+                                                            let response = SyncMessage::FileTransferAccepted { file_hash: "ack".to_string() };
+                                                            let _ = swarm.behaviour_mut().request_response.send_response(channel, response);
+                                                        }
+                                                        SyncMessage::FileTransferRejected { file_hash } => {
+                                                            info!("Libp2p: Received direct FileTransferRejected for {}", file_hash);
+                                                            let _ = tx.send(IpcMessage::RejectFileTransfer { file_hash });
+                                                            let response = SyncMessage::FileTransferAccepted { file_hash: "ack".to_string() };
+                                                            let _ = swarm.behaviour_mut().request_response.send_response(channel, response);
+                                                        }
                                                         SyncMessage::ChunkRequest { file_hash, chunk_hash } => {
                                                             info!("Received ChunkRequest for {} / {}", file_hash, chunk_hash);
                                                             let transfer_info = {
@@ -229,6 +256,7 @@ impl Libp2pManager {
                                                                                 data
                                                                             };
                                                                             let _ = swarm.behaviour_mut().request_response.send_response(channel, response);
+                                                                            let _ = tx.send(IpcMessage::ChunkServed { file_hash, chunk_hash });
                                                                         }
                                                                         Err(e) => {
                                                                             error!("Failed to read chunk: {}", e);

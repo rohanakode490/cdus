@@ -123,6 +123,10 @@ pub enum IpcMessage {
         chunk_hash: String,
         data: Vec<u8>,
     },
+    ChunkServed {
+        file_hash: String,
+        chunk_hash: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]

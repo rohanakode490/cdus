@@ -674,7 +674,24 @@ fn run_turn_sync_session(
                                     source: label.clone(),
                                 });
                             }
-                            _ => {}
+                            SyncMessage::FileTransferRequest(manifest) => {
+                                info!("Received file transfer request from peer {} via TURN: {}", label, manifest.file_name);
+                                let _ = ipc_tx.send(IpcMessage::IncomingFileRequest {
+                                    node_id: node_id.clone(),
+                                    manifest,
+                                });
+                            }
+                            SyncMessage::FileTransferAccepted { file_hash } => {
+                                info!("Peer {} accepted file transfer via TURN: {}", label, file_hash);
+                                let _ = ipc_tx.send(IpcMessage::AcceptFileTransfer { file_hash });
+                            }
+                            SyncMessage::FileTransferRejected { file_hash } => {
+                                info!("Peer {} rejected file transfer via TURN: {}", label, file_hash);
+                                let _ = ipc_tx.send(IpcMessage::RejectFileTransfer { file_hash });
+                            }
+                            _ => {
+                                warn!("Received unhandled sync message from peer {} via TURN: {:?}", label, msg);
+                            }
                         }
                     }
                 }
@@ -1271,7 +1288,24 @@ fn run_sync_session(
                                 source: label.clone(),
                             });
                         }
-                        _ => {}
+                        SyncMessage::FileTransferRequest(manifest) => {
+                            info!("Received file transfer request from peer {}: {}", label, manifest.file_name);
+                            let _ = ipc_tx.send(IpcMessage::IncomingFileRequest {
+                                node_id: node_id.clone(),
+                                manifest,
+                            });
+                        }
+                        SyncMessage::FileTransferAccepted { file_hash } => {
+                            info!("Peer {} accepted file transfer: {}", label, file_hash);
+                            let _ = ipc_tx.send(IpcMessage::AcceptFileTransfer { file_hash });
+                        }
+                        SyncMessage::FileTransferRejected { file_hash } => {
+                            info!("Peer {} rejected file transfer: {}", label, file_hash);
+                            let _ = ipc_tx.send(IpcMessage::RejectFileTransfer { file_hash });
+                        }
+                        _ => {
+                            warn!("Received unhandled sync message from peer {}: {:?}", label, msg);
+                        }
                     }
                 }
             }
