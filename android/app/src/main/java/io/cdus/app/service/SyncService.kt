@@ -97,6 +97,18 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         notificationManager.notify(FILE_NOTIFICATION_ID, notification)
     }
 
+    override fun onOutgoingTransferStarted(manifest: FileManifest) {
+        Logger.i("Outgoing file transfer started: ${manifest.fileName}")
+        FileTransferManager.updateTransfer(
+            FileTransferInfo(
+                fileHash = manifest.fileHash,
+                fileName = manifest.fileName,
+                progress = 0f,
+                status = TransferStatus.OUTGOING
+            )
+        )
+    }
+
     override fun onTransferProgress(fileHash: String, progress: Float) {
         Logger.d("Transfer progress for $fileHash: $progress%")
         FileTransferManager.updateProgress(fileHash, progress)

@@ -109,9 +109,16 @@
           <p class="empty-state hidden" id="clipboard-empty">Clipboard history is empty.</p>
         </div>
         <div id="view-files" class="view">
-          <h2>Files</h2>
-          <div class="empty-state-container">
-            <p class="empty-state">No recent file transfers. Use the <b>Devices</b> tab to send a file to a specific device.</p>
+          <div class="header-with-action">
+            <h2>File Transfers</h2>
+            <p class="setting-hint">Recent and active transfers across your devices.</p>
+          </div>
+          
+          <div id="files-list-container">
+            <div id="files-list"></div>
+            <div id="files-empty" class="empty-state-container">
+              <p class="empty-state">No recent file transfers. Use the <b>Devices</b> tab to send a file to a specific device.</p>
+            </div>
           </div>
         </div>
         <div id="view-settings" class="view">
