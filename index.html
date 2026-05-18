@@ -43,8 +43,8 @@
           <div id="manual-connect-section" class="card">
             <h3>Manual Connect</h3>
             <div class="manual-connect-row">
-              <input type="text" id="manual-ip" placeholder="127.0.0.1" value="127.0.0.1" />
-              <input type="number" id="manual-port" placeholder="5200" value="5200" style="width: 80px;" />
+              <input type="text" id="manual-ip" placeholder="IP Address (e.g. 192.168.1.10)" />
+              <input type="number" id="manual-port" placeholder="5200" style="width: 80px;" />
               <button id="manual-connect-btn" class="secondary-btn">Connect</button>
             </div>
             <p class="setting-hint">Use this if mDNS discovery is not working on your network.</p>
@@ -96,11 +96,17 @@
         <!-- Transfer Progress Toast -->
         <div id="transfer-progress-toast" class="toast hidden">
           <div class="toast-content">
-            <span id="transfer-label">Sending file...</span>
+            <div class="toast-header">
+              <span id="transfer-label">Sending file...</span>
+              <button id="close-progress-toast" class="close-btn">&times;</button>
+            </div>
             <div class="progress-bar-container">
               <div id="transfer-progress-bar" class="progress-bar" style="width: 0%;"></div>
             </div>
-            <span id="transfer-percent">0%</span>
+            <div class="toast-footer">
+              <span id="transfer-filename" class="toast-filename">file_name.zip</span>
+              <span id="transfer-percent">0%</span>
+            </div>
           </div>
         </div>
         <div id="view-clipboard" class="view">
@@ -110,8 +116,11 @@
         </div>
         <div id="view-files" class="view">
           <div class="header-with-action">
-            <h2>File Transfers</h2>
-            <p class="setting-hint">Recent and active transfers across your devices.</p>
+            <div class="header-main">
+              <h2>File Transfers</h2>
+              <p class="setting-hint">Recent and active transfers across your devices.</p>
+            </div>
+            <button id="clear-finished-btn" class="text-btn">Clear Finished</button>
           </div>
           
           <div id="files-list-container">

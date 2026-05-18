@@ -724,6 +724,7 @@ fn run_turn_sync_session(
     }
 
     sync_manager.remove_peer(&node_id);
+    let _ = ipc_tx.send(IpcMessage::PeerDisconnected { node_id });
     Ok(())
 }
 
@@ -1329,6 +1330,7 @@ fn run_sync_session(
     }
 
     sync_manager.remove_peer(&node_id);
+    let _ = ipc_tx.send(IpcMessage::PeerDisconnected { node_id });
     Ok(())
 }
 

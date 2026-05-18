@@ -156,7 +156,6 @@ impl Store {
         use snow::{params::NoiseParams, Builder};
 
         let params: NoiseParams = "Noise_XX_25519_ChaChaPoly_BLAKE2s".parse()?;
-        let builder = Builder::new(params.clone());
 
         // Create a unique service name for the keychain based on the data directory
         let dir_hash = blake3::hash(data_dir.to_string_lossy().as_bytes())

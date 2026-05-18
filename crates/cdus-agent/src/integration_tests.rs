@@ -718,12 +718,14 @@ mod tests {
 
         // Router thread to forward SyncMessages and ChunkRequests
         let id1_r = id1.clone();
+        let id2_r = id2.clone();
         let tx1_r = tx1.clone();
         let tx2_r = tx2.clone();
         let at1_r = Arc::clone(&at1);
+        let at2_r = Arc::clone(&at2);
         thread::spawn(move || {
             loop {
-                // Agent 1 -> Agent 2
+                // Agent 1 -> Agent 2 (SyncManager legacy)
                 if let Ok(msg) = sync_rx2.try_recv() {
                     match msg {
                         SyncMessage::FileTransferRequest(m) => {
@@ -737,7 +739,45 @@ mod tests {
                         _ => {}
                     }
                 }
-                // Agent 2 -> Agent 1
+                // Agent 1 -> Agent 2 (Direct libp2p)
+                if let Ok((_peer, msg)) = req_rx1.try_recv() {
+                    match msg {
+                        SyncMessage::FileTransferRequest(m) => {
+                            tx2_r
+                                .send(IpcMessage::IncomingFileRequest {
+                                    node_id: id1_r.clone(),
+                                    manifest: m,
+                                })
+                                .unwrap();
+                        }
+                        SyncMessage::ChunkRequest { file_hash, chunk_hash } => {
+                            // Agent 2 -> Agent 1 chunk request
+                             let info = at1_r.lock().unwrap().get(&file_hash).cloned();
+                            if let Some((path, manifest)) = info {
+                                if let Some(chunk) =
+                                    manifest.chunks.iter().find(|c| c.hash == chunk_hash)
+                                {
+                                    let data = crate::file_transfer::get_chunk(
+                                        &path,
+                                        chunk.offset,
+                                        chunk.size,
+                                    )
+                                    .unwrap();
+                                    tx2_r
+                                        .send(IpcMessage::ChunkReceived {
+                                            file_hash,
+                                            chunk_hash,
+                                            data,
+                                        })
+                                        .unwrap();
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Agent 2 -> Agent 1 (SyncManager legacy)
                 if let Ok(msg) = sync_rx1.try_recv() {
                     match msg {
                         SyncMessage::FileTransferAccepted { file_hash } => {
@@ -748,13 +788,15 @@ mod tests {
                         _ => {}
                     }
                 }
-                // Chunk requests from Agent 2 to Agent 1
+                // Agent 2 -> Agent 1 (Direct libp2p)
                 if let Ok((_peer, msg)) = req_rx2.try_recv() {
                     match msg {
-                        SyncMessage::ChunkRequest {
-                            file_hash,
-                            chunk_hash,
-                        } => {
+                        SyncMessage::FileTransferAccepted { file_hash } => {
+                            tx1_r
+                                .send(IpcMessage::AcceptFileTransfer { file_hash })
+                                .unwrap();
+                        }
+                        SyncMessage::ChunkRequest { file_hash, chunk_hash } => {
                             let info = at1_r.lock().unwrap().get(&file_hash).cloned();
                             if let Some((path, manifest)) = info {
                                 if let Some(chunk) =
@@ -836,5 +878,91 @@ mod tests {
             completed,
             "File transfer should have completed successfully and matched content"
         );
+    }
+
+    #[test]
+    fn test_paired_device_discovery_filtering() {
+        let dir = tempdir().unwrap();
+        let store = Arc::new(Store::init(dir.path()).unwrap());
+        let (tx, rx) = flume::unbounded();
+        let (tx_event, rx_event) = flume::unbounded();
+
+        // Subscribe to events
+        {
+            let mut bus = crate::EVENT_BUS.lock().unwrap();
+            bus.push(tx_event);
+        }
+
+        let id = "test_node_id".to_string();
+        let label = "Test Device".to_string();
+
+        // 1. Add device as paired
+        store.add_paired_device(&id, &label).unwrap();
+
+        let lw = Arc::new(Mutex::new(None));
+        let dd = Arc::new(Mutex::new(Vec::new()));
+        let ap = Arc::new(Mutex::new(None));
+        let sm = Arc::new(SyncManager::new());
+        let tm = Arc::new(TurnManager::new().unwrap());
+        let (relay, _) = RelayManager::new(
+            "local".to_string(),
+            "http://localhost".to_string(),
+            tx.clone(),
+        );
+        let pm = Arc::new(PairingManager::new(
+            Arc::clone(&store),
+            tx.clone(),
+            "local".to_string(),
+            vec![],
+            0,
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::new(relay),
+            tm,
+        ));
+        let lpt = Arc::new(Mutex::new(0u64));
+        let at = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let rm = Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+        // 2. Simulate discovery of the ALREADY PAIRED device
+        tx.send(IpcMessage::DeviceDiscovered {
+            node_id: id.clone(),
+            label: label.clone(),
+            os: "Linux".to_string(),
+            ip: "127.0.0.1".to_string(),
+            port: 5200,
+        })
+        .unwrap();
+
+        // Run daemon loop
+        crate::daemon_loop(
+            tx.clone(),
+            rx,
+            Some(1),
+            Arc::clone(&store),
+            lw,
+            Arc::clone(&dd),
+            ap,
+            sm,
+            pm,
+            lpt,
+            None,
+            at,
+            rm,
+        );
+
+        // 3. Verify it's NOT in discovered_devices list
+        let discovered = dd.lock().unwrap();
+        assert!(
+            !discovered.iter().any(|(node_id, _, _, _, _)| node_id == &id),
+            "Paired device should not be added to discovered list"
+        );
+
+        // 4. Verify no DeviceDiscovered event was broadcasted
+        while let Ok(msg) = rx_event.try_recv() {
+            if let IpcMessage::DeviceDiscovered { node_id, .. } = msg {
+                assert_ne!(node_id, id, "Paired device discovery should not be broadcasted");
+            }
+        }
     }
 }

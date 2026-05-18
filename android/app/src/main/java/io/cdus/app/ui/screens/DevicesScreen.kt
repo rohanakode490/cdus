@@ -75,7 +75,9 @@ fun DevicesScreen() {
     LaunchedEffect(Unit) {
         while (isActive) {
             pairingStatus = getPairingStatus()
-            pairedDevices = getPairedDevices()
+            val devices = getPairedDevices()
+            pairedDevices = devices
+            io.cdus.app.data.DeviceManager.updateLabels(devices)
             delay(1000)
         }
     }
@@ -207,12 +209,31 @@ fun PairedDeviceItem(device: PairedDevice, onUnpairClick: () -> Unit, onSendFile
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(text = UIUtils.formatDeviceLabel(device.label), style = MaterialTheme.typography.bodyLarge)
-                    Text(text = "#${device.nodeId.take(8)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(
+                            modifier = Modifier.size(8.dp),
+                            shape = androidx.compose.foundation.shape.CircleShape,
+                            color = if (device.isOnline) androidx.compose.ui.graphics.Color.Green else androidx.compose.ui.graphics.Color.Gray
+                        ) {}
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (device.isOnline) "Online" else "Offline",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (device.isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                        )
+                        Text(text = " • #${device.nodeId.take(8)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+                    }
                 }
             }
             Row {
-                TextButton(onClick = onSendFileClick) {
-                    Text("Send File")
+                if (device.isOnline) {
+                    TextButton(onClick = onSendFileClick) {
+                        Text("Send File")
+                    }
+                } else {
+                    TextButton(onClick = { initiatePairing(device.nodeId) }) {
+                        Text("Connect")
+                    }
                 }
                 TextButton(onClick = onUnpairClick) {
                     Text("Unpair", color = MaterialTheme.colorScheme.error)
@@ -246,7 +267,7 @@ fun DeviceListItem(device: DiscoveredDevice, onConnectClick: () -> Unit) {
                 Spacer(modifier = Modifier.width(16.dp))
                 Column {
                     Text(text = UIUtils.formatDeviceLabel(device.label), style = MaterialTheme.typography.bodyLarge)
-                    Text(text = "#${device.nodeId.take(8)} • ${device.os} • ${device.ip}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+                    Text(text = "#${device.nodeId.take(8)} • ${device.os}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
                 }
             }
             Button(onClick = onConnectClick) {
