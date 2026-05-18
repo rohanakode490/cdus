@@ -7,7 +7,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 /// Generates a manifest for a file using Content-Defined Chunking (FastCDC).
-pub fn generate_manifest(path: &Path) -> Result<FileManifest> {
+pub fn generate_manifest<F>(path: &Path, progress_callback: F) -> Result<FileManifest> 
+where F: Fn(f32) {
     let mut file = File::open(path)?;
     let file_name = path
         .file_name()
@@ -21,35 +22,44 @@ pub fn generate_manifest(path: &Path) -> Result<FileManifest> {
     // Pass 1: Total file hash for integrity verification
     let mut hasher = blake3::Hasher::new();
     let mut buffer = [0u8; 65536];
+    let mut read_bytes = 0u64;
+    
+    progress_callback(0.0);
+    
     loop {
         let n = file.read(&mut buffer)?;
         if n == 0 {
             break;
         }
         hasher.update(&buffer[..n]);
+        read_bytes += n as u64;
+        
+        // Report up to 50%
+        if total_size > 0 {
+            let p = (read_bytes as f32 / total_size as f32) * 50.0;
+            progress_callback(p);
+        }
     }
     let file_hash = hasher.finalize().to_string();
+    progress_callback(50.0);
 
     // Pass 2: Chunking and chunk hashes
-    // We use StreamCDC to avoid loading the entire file into memory.
-    // We open a separate file handle for the chunker to keep the read positions independent,
-    // though we could also seek.
     let chunker_file = File::open(path)?;
 
-    // Constraints (Avg 1MB chunks)
-    let min_size = 128 * 1024; // 128 KB
-    let avg_size = 1024 * 1024; // 1 MB
-    let max_size = 4 * 1024 * 1024; // 4 MB
+    // Constraints for better progress granularity (Avg 64KB chunks)
+    let min_size = 16 * 1024; // 16 KB
+    let avg_size = 64 * 1024; // 64 KB
+    let max_size = 128 * 1024; // 128 KB
 
     let chunker = StreamCDC::new(chunker_file, min_size, avg_size, max_size);
 
+
     let mut data_file = File::open(path)?;
     let mut chunks = Vec::new();
+    let mut chunked_bytes = 0u64;
 
     for chunk_res in chunker {
         let chunk = chunk_res?;
-        // Since we are reading sequentially, data_file should already be at chunk.offset
-        // but we verify or seek to be safe.
         let current_pos = data_file.stream_position()?;
         if current_pos != chunk.offset as u64 {
             data_file.seek(SeekFrom::Start(chunk.offset as u64))?;
@@ -64,7 +74,15 @@ pub fn generate_manifest(path: &Path) -> Result<FileManifest> {
             offset: chunk.offset as u64,
             size: chunk.length as u32,
         });
+        
+        chunked_bytes += chunk.length as u64;
+        if total_size > 0 {
+            let p = 50.0 + (chunked_bytes as f32 / total_size as f32) * 50.0;
+            progress_callback(p);
+        }
     }
+
+    progress_callback(100.0);
 
     Ok(FileManifest {
         file_hash,
@@ -103,6 +121,22 @@ mod tests {
         // Verify total size from chunks
         let chunks_total: u64 = manifest.chunks.iter().map(|c| c.size as u64).sum();
         assert_eq!(chunks_total, 5 * 1024 * 1024);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_chunk_granularity() -> Result<()> {
+        let mut tmp_file = NamedTempFile::new()?;
+        let data = vec![0u8; 10 * 1024 * 1024]; // 10MB
+        tmp_file.write_all(&data)?;
+
+        let manifest = generate_manifest(tmp_file.path())?;
+        println!("Chunks for 10MB: {}", manifest.chunks.len());
+        
+        // With 64KB avg size, we expect around 160 chunks.
+        // Even with low entropy (zeros), max_size 128KB ensures at least 80 chunks.
+        assert!(manifest.chunks.len() >= 80, "Should have at least 80 chunks for 10MB to provide granular progress");
 
         Ok(())
     }

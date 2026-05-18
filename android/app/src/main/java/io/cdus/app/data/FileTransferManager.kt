@@ -3,7 +3,7 @@ package io.cdus.app.data
 import androidx.compose.runtime.mutableStateMapOf
 
 enum class TransferStatus {
-    INCOMING, OUTGOING, DOWNLOADING, COMPLETE, ERROR, REJECTED
+    INCOMING, OUTGOING, DOWNLOADING, COMPLETE, ERROR, REJECTED, HASHING
 }
 
 data class FileTransferInfo(
@@ -19,6 +19,14 @@ object FileTransferManager {
 
     fun updateTransfer(info: FileTransferInfo) {
         transfers[info.fileHash] = info
+    }
+
+    fun linkPathToHash(path: String, fileHash: String) {
+        val current = transfers[path]
+        if (current != null) {
+            transfers.remove(path)
+            transfers[fileHash] = current.copy(fileHash = fileHash)
+        }
     }
 
     fun updateProgress(fileHash: String, progress: Float) {
@@ -41,5 +49,14 @@ object FileTransferManager {
         if (current != null) {
             transfers[fileHash] = current.copy(status = TransferStatus.ERROR, error = error)
         }
+    }
+
+    fun removeTransfer(fileHash: String) {
+        transfers.remove(fileHash)
+    }
+
+    fun clearFinished() {
+        val toRemove = transfers.filter { it.value.status == TransferStatus.COMPLETE || it.value.status == TransferStatus.ERROR || it.value.status == TransferStatus.REJECTED }.keys
+        toRemove.forEach { transfers.remove(it) }
     }
 }

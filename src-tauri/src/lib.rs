@@ -340,10 +340,20 @@ pub fn run() {
                                                     (file_hash, error),
                                                 );
                                             }
+                                            IpcMessage::ManifestProgress { path, progress } => {
+                                                let _ = app_handle_events.emit(
+                                                    "manifest-progress",
+                                                    serde_json::json!({ "path": path, "progress": progress }),
+                                                );
+                                            }
                                             IpcMessage::ClipboardChanged { content, .. }
                                             | IpcMessage::SetClipboard { content, .. } => {
                                                 let _ = app_handle_events
                                                     .emit("clipboard-updated", content);
+                                            }
+                                            IpcMessage::PeerDisconnected { node_id } => {
+                                                let _ = app_handle_events
+                                                    .emit("peer-disconnected", node_id);
                                             }
                                             _ => {}
                                         }

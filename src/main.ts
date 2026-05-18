@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 
 // --- State Management ---
 let pairedDeviceIds: string[] = [];
+const deviceLabels = new Map<string, string>();
 let scanInterval: any = null;
 let pairingInterval: any = null;
 let currentPairingDevice: any = null;
@@ -18,6 +19,8 @@ let progressToast: Element | null = null;
 let progressBar: HTMLElement | null = null;
 let progressPercent: Element | null = null;
 let progressLabel: Element | null = null;
+let progressFilename: Element | null = null;
+let closeProgressBtn: Element | null = null;
 let pairedList: Element | null = null;
 let devicesEmpty: Element | null = null;
 let discoveryList: Element | null = null;
@@ -125,25 +128,37 @@ function renderFiles() {
       <div class="transfer-details">
         <div class="transfer-row">
           <span class="file-name">${transfer.fileName}</span>
-          <span class="transfer-status-text">${transfer.status}</span>
+          <span class="transfer-status-text ${transfer.status === "error" ? "error-text" : ""}">${transfer.status}</span>
         </div>
+        ${transfer.status === "error" ? `<div class="error-message">${transfer.error || "Unknown error"}</div>` : ""}
         <div class="progress-bar-container small">
           <div class="progress-bar" style="width: ${transfer.progress}%"></div>
         </div>
         <div class="transfer-meta">
           <span>${transfer.direction === "incoming" ? "from" : "to"} ${transfer.nodeId}</span>
           <span>${transfer.progress}%</span>
+          ${transfer.status === "error" || transfer.status === "complete" ? `<button class="text-btn dismiss-btn" data-hash="${transfer.fileHash}">Dismiss</button>` : ""}
         </div>
       </div>
     `;
+
+    itemEl.querySelector(".dismiss-btn")?.addEventListener("click", () => {
+      transfers.delete(transfer.fileHash);
+      renderFiles();
+    });
     listContainer.appendChild(itemEl);
   });
 }
 
-function showProgressToast(label: string) {
+function getDeviceLabel(nodeId: string): string {
+  return deviceLabels.get(nodeId) || nodeId.substring(0, 8);
+}
+
+function showProgressToast(label: string, filename: string = "") {
   if (!progressToast) return;
   progressToast.classList.remove("hidden");
   if (progressLabel) progressLabel.textContent = label;
+  if (progressFilename) progressFilename.textContent = filename || "File";
   if (progressBar) progressBar.style.width = "0%";
   if (progressPercent) progressPercent.textContent = "0%";
 }
@@ -163,6 +178,10 @@ async function renderPairedDevices() {
   try {
     const devices: [string, string, string | null][] = await invoke("get_paired_devices");
     pairedDeviceIds = devices.map(([id]) => id);
+    
+    // Update labels map
+    deviceLabels.clear();
+    devices.forEach(([id, label]) => deviceLabels.set(id, label));
     
     pairedList.innerHTML = "";
     
@@ -192,13 +211,23 @@ async function renderPairedDevices() {
           </div>
         </div>
         <div class="device-actions">
-          ${isOnline ? `<button class="primary-btn send-file-btn" data-id="${id}">Send File</button>` : ""}
+          ${isOnline ? `<button class="primary-btn send-file-btn" data-id="${id}">Send File</button>` : `<button class="primary-btn connect-btn" data-id="${id}">Connect</button>`}
           <button class="secondary-btn unpair-btn" data-id="${id}">Unpair</button>
         </div>
       `;
 
       row.querySelector(".unpair-btn")?.addEventListener("click", () => {
         unpairDevice(id);
+      });
+
+      row.querySelector(".connect-btn")?.addEventListener("click", async () => {
+        try {
+          await invoke("pair_with", { nodeId: id });
+          alert("Connection attempt started...");
+        } catch (err) {
+          console.error("Failed to initiate connection:", err);
+          alert("Failed to initiate connection.");
+        }
       });
 
       row.querySelector(".send-file-btn")?.addEventListener("click", () => {
@@ -239,9 +268,8 @@ async function initiateFileSend(nodeId: string) {
       const path = selected as string;
       const fileName = path.split(/[/\\]/).pop() || "file";
       
-      const tempId = `outgoing-${Date.now()}`;
-      transfers.set(tempId, {
-          fileHash: tempId,
+      transfers.set(path, {
+          fileHash: path,
           fileName: fileName,
           nodeId: nodeId,
           progress: 0,
@@ -251,7 +279,7 @@ async function initiateFileSend(nodeId: string) {
       renderFiles();
 
       await invoke("send_file", { nodeId, path });
-      showProgressToast(`Sending file to ${nodeId}...`);
+      showProgressToast(`Sending file to ${getDeviceLabel(nodeId)}...`, fileName);
     }
   } catch (err) {
     console.error("Failed to initiate file send:", err);
@@ -280,7 +308,7 @@ async function updateDiscoveryList() {
       row.innerHTML = `
         <div class="device-info">
           <span class="device-name-label">${name} <span class="device-id-tag">#${shortId}</span></span>
-          <span class="device-type-label">${os} • ${ip}:${port}</span>
+          <span class="device-type-label">${os}</span>
         </div>
         <button class="primary-btn connect-btn" data-id="${id}">Connect</button>
       `;
@@ -364,7 +392,11 @@ window.addEventListener("DOMContentLoaded", () => {
   progressBar = document.querySelector("#transfer-progress-bar") as HTMLElement;
   progressPercent = document.querySelector("#transfer-percent");
   progressLabel = document.querySelector("#transfer-label");
+  progressFilename = document.querySelector("#transfer-filename");
+  closeProgressBtn = document.querySelector("#close-progress-toast");
   pairedList = document.querySelector("#paired-list");
+
+  closeProgressBtn?.addEventListener("click", hideProgressToast);
   devicesEmpty = document.querySelector("#devices-empty");
   discoveryList = document.querySelector("#discovery-list");
   discoverySection = document.querySelector("#discovery-section");
@@ -374,6 +406,15 @@ window.addEventListener("DOMContentLoaded", () => {
   confirmPairingBtn = document.querySelector("#pairing-confirm-btn") as HTMLButtonElement;
 
   loadSettings();
+  document.querySelector("#clear-finished-btn")?.addEventListener("click", () => {
+    transfers.forEach((transfer, hash) => {
+      if (transfer.status === "complete" || transfer.status === "error") {
+        transfers.delete(hash);
+      }
+    });
+    renderFiles();
+  });
+
   const navItems = document.querySelectorAll(".nav-item");
   const views = document.querySelectorAll(".view");
 
@@ -587,20 +628,62 @@ window.addEventListener("DOMContentLoaded", () => {
       
       if (nameEl) nameEl.textContent = manifest.file_name;
       if (sizeEl) sizeEl.textContent = `${(manifest.total_size / 1024 / 1024).toFixed(2)} MB`;
-      if (sourceEl) sourceEl.textContent = `from ${nodeId}`;
-      
+      if (sourceEl) sourceEl.textContent = `from ${getDeviceLabel(nodeId)}`;
+
       fileTransferModal.classList.remove("hidden");
+      showProgressToast("Downloading file...", manifest.file_name);
+    }
+  });
+
+  listen("manifest-progress", (event: any) => {
+    const { path, progress } = event.payload;
+    const fileName = path.split(/[/\\]/).pop() || "file";
+    
+    const transfer = transfers.get(path);
+    if (transfer) {
+      transfer.progress = Math.round(progress);
+      transfer.status = "hashing";
+      updateProgress(progress);
+      renderFiles();
+    } else {
+      // If we don't have it yet (e.g. from Android), add it
+      transfers.set(path, {
+        fileHash: path,
+        fileName: fileName,
+        nodeId: "Remote",
+        progress: Math.round(progress),
+        status: "hashing",
+        direction: "outgoing"
+      });
+      renderFiles();
     }
   });
 
   listen("file-transfer-progress", (event: any) => {
     const [fileHash, progress] = event.payload;
-    updateProgress(progress);
     
-    const transfer = transfers.get(fileHash);
+    // Check if we have it by hash
+    let transfer = transfers.get(fileHash);
+    
+    if (!transfer) {
+        // Check if we have a "hashing" transfer that should now be this hash
+        // This is tricky because we don't know which path matches which hash.
+        // However, we can look for the most recent "hashing" or "preparing" transfer.
+        const pending = Array.from(transfers.values()).find(t => t.status === "hashing" || t.status === "preparing" || t.status === "pending");
+        if (pending) {
+            transfers.delete(pending.fileHash);
+            pending.fileHash = fileHash;
+            transfers.set(fileHash, pending);
+            transfer = pending;
+        }
+    }
+
     if (transfer) {
+      updateProgress(progress);
+      if (progressFilename) progressFilename.textContent = transfer.fileName;
+      
       transfer.progress = Math.round(progress);
-      if (transfer.status === "pending" || transfer.status === "preparing") transfer.status = "active";
+      if (transfer.status === "pending" || transfer.status === "preparing" || transfer.status === "hashing") transfer.status = "active";
       renderFiles();
     }
   });
@@ -634,6 +717,10 @@ window.addEventListener("DOMContentLoaded", () => {
 
   listen("clipboard-updated", (_event: any) => {
     renderClipboard();
+  });
+
+  listen("peer-disconnected", (_event: any) => {
+    renderPairedDevices();
   });
 
   // Initial load

@@ -219,7 +219,9 @@ fn main() {
     let discovered_devices = Arc::new(Mutex::new(
         Vec::<(String, String, String, String, u16)>::new(),
     ));
+    let peer_map = Arc::new(Mutex::new(std::collections::HashMap::<String, (String, String, String, u16, std::time::Instant)>::new()));
     let discovered_devices_daemon = Arc::clone(&discovered_devices);
+    let peer_map_daemon = Arc::clone(&peer_map);
 
     // Start daemon logic thread
     let daemon_tx = tx.clone();
@@ -240,6 +242,7 @@ fn main() {
             sync_manager_daemon,
             pm_daemon_loop,
             last_ts_daemon,
+            peer_map_daemon,
             Some(libp2p_request_tx_daemon),
             active_transfers_daemon,
             received_manifests_daemon,
@@ -253,15 +256,13 @@ fn main() {
 
     info!("IPC Listener bound to {}", socket_name);
 
-    let sync_manager_ipc = Arc::clone(&sync_manager);
-    let relay_ipc = Arc::clone(&relay);
-
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
                 let tx_clone = tx.clone();
                 let pm_clone = Arc::clone(&pm);
                 let discovered_devices_clone = Arc::clone(&discovered_devices);
+                let peer_map_clone = Arc::clone(&peer_map);
                 let active_pairing_clone = Arc::clone(&active_pairing);
                 let sync_manager_ipc = Arc::clone(&sync_manager);
                 let relay_ipc = Arc::clone(&relay);
@@ -332,12 +333,20 @@ fn main() {
                                             let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::PairWith { node_id } => {
-                                            let list = discovered_devices_clone.lock().unwrap();
-                                            if let Some((_, _, _, ip, port)) =
-                                                list.iter().find(|(id, _, _, _, _)| id == &node_id)
-                                            {
+                                            let device_info = {
+                                                let list = discovered_devices_clone.lock().unwrap();
+                                                let found_in_list = list.iter().find(|(id, _, _, _, _)| id == &node_id)
+                                                    .map(|(_, _, _, ip, port)| (ip.clone(), *port));
+
+                                                found_in_list.or_else(|| {
+                                                    let map = peer_map_clone.lock().unwrap();
+                                                    map.get(&node_id).map(|(_, _, ip, port, _)| (ip.clone(), *port))
+                                                })
+                                            };
+
+                                            if let Some((ip, port)) = device_info {
                                                 if let Ok(ip_addr) = ip.parse() {
-                                                    let addr = SocketAddr::new(ip_addr, *port);
+                                                    let addr = SocketAddr::new(ip_addr, port);
                                                     let pm_init = Arc::clone(&pm_clone);
                                                     thread::spawn(move || {
                                                         pm_init.initiate_pairing(addr);
@@ -350,8 +359,7 @@ fn main() {
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                             }
-                                        }
-                                        IpcMessage::PairWithIp { ip, port } => {
+                                        }                                        IpcMessage::PairWithIp { ip, port } => {
                                             if let Ok(ip_addr) = ip.parse() {
                                                 let addr = SocketAddr::new(ip_addr, port);
                                                 let pm_init = Arc::clone(&pm_clone);
@@ -447,8 +455,19 @@ fn main() {
                                                     )> = devices
                                                         .into_iter()
                                                         .map(|(id, label)| {
-                                                            let transport = sync_manager_ipc
+                                                            let mut transport = sync_manager_ipc
                                                                 .get_peer_transport(&id);
+                                                            
+                                                            // Fallback to Lan transport if recently seen via mDNS but no active session
+                                                            if transport.is_none() {
+                                                                let map = peer_map_clone.lock().unwrap();
+                                                                if let Some((_, _, _, _, last_seen)) = map.get(&id) {
+                                                                    if last_seen.elapsed() < std::time::Duration::from_secs(30) {
+                                                                        transport = Some(TransportType::Lan);
+                                                                    }
+                                                                }
+                                                            }
+
                                                             (id, label, transport)
                                                         })
                                                         .collect();
@@ -627,6 +646,14 @@ fn daemon_loop(
     sync_manager: Arc<SyncManager>,
     pm: Arc<PairingManager>,
     last_processed_timestamp: Arc<Mutex<u64>>,
+    peer_map: Arc<
+        Mutex<
+            std::collections::HashMap<
+                String,
+                (String, String, String, u16, std::time::Instant),
+            >,
+        >,
+    >,
     libp2p_request_tx: Option<Sender<(libp2p::PeerId, SyncMessage)>>,
     active_transfers: Arc<
         Mutex<std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>>,
@@ -757,6 +784,12 @@ fn daemon_loop(
                     ip,
                     port,
                 } => {
+                    // Update global peer map for connection fallback
+                    {
+                        let mut map = peer_map.lock().unwrap();
+                        map.insert(node_id.clone(), (label.clone(), os.clone(), ip.clone(), port, std::time::Instant::now()));
+                    }
+
                     {
                         let mut list = discovered_devices.lock().unwrap();
                         if !list.iter().any(|(id, _, _, _, _)| id == &node_id) {
@@ -772,12 +805,13 @@ fn daemon_loop(
                     broadcast_event(IpcMessage::DeviceDiscovered {
                         node_id: node_id.clone(),
                         label: label.clone(),
-                        os,
+                        os: os.clone(),
                         ip: ip.clone(),
                         port,
                     });
 
-                    // Auto-connect to trusted peers
+                    // Auto-connect to trusted peers (even if we didn't broadcast discovery,
+                    // we might still want to trigger connection if not already connected)
                     if !sync_manager.is_connected(&node_id) {
                         if let Ok(true) = store.is_device_paired(&node_id) {
                             if let Ok(ip_addr) = ip.parse() {
@@ -801,6 +835,10 @@ fn daemon_loop(
                     );
                     broadcast_event(IpcMessage::DeviceLost { node_id });
                 }
+                IpcMessage::PeerDisconnected { node_id } => {
+                    info!("Peer disconnected: {}", node_id);
+                    broadcast_event(IpcMessage::PeerDisconnected { node_id });
+                }
                 IpcMessage::RelayMessage {
                     source_uuid,
                     payload,
@@ -815,7 +853,18 @@ fn daemon_loop(
                     let libp2p_request_tx_clone = libp2p_request_tx.clone();
                     thread::spawn(move || {
                         info!("Generating manifest for {:?}", path_buf);
-                        match file_transfer::generate_manifest(&path_buf) {
+                        let path_str = path_buf.to_string_lossy().to_string();
+                        let tx_for_progress = tx_clone.clone();
+                        let path_for_progress = path_str.clone();
+                        
+                        let progress_callback = move |p: f32| {
+                            let _ = tx_for_progress.send(IpcMessage::ManifestProgress {
+                                path: path_for_progress.clone(),
+                                progress: p,
+                            });
+                        };
+
+                        match file_transfer::generate_manifest(&path_buf, progress_callback) {
                             Ok(manifest) => {
                                 info!("Manifest generated, sending request to {}", node_id);
                                 let file_hash = manifest.file_hash.clone();
@@ -824,14 +873,12 @@ fn daemon_loop(
                                     at.insert(file_hash.clone(), (path_buf, manifest.clone()));
                                 }
 
-                                info!("FILE HASHING...");
                                 let progress_msg = IpcMessage::FileTransferProgress {
                                     file_hash: file_hash.clone(),
                                     progress: 0.0,
                                 };
                                 let _ = tx_clone.send(progress_msg.clone());
 
-                                info!("SENDING REQ... {}", node_id);
                                 let msg = SyncMessage::FileTransferRequest(manifest);
                                 let mut sent_direct = false;
                                 if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
@@ -856,7 +903,7 @@ fn daemon_loop(
                             Err(e) => {
                                 error!("Failed to generate manifest: {}", e);
                                 let _ = tx_clone.send(IpcMessage::FileTransferError {
-                                    file_hash: "unknown".to_string(),
+                                    file_hash: path_str,
                                     error: e.to_string(),
                                 });
                             }
@@ -896,6 +943,8 @@ fn daemon_loop(
                                                 chunk_hash: chunk.hash.clone(),
                                             },
                                         ));
+                                        // Small delay to avoid flooding libp2p request-response
+                                        std::thread::sleep(std::time::Duration::from_millis(5));
                                     }
                                 });
                             }
@@ -920,6 +969,8 @@ fn daemon_loop(
                                                     chunk_hash: chunk.hash.clone(),
                                                 },
                                             ));
+                                            // Small delay to avoid flooding
+                                            std::thread::sleep(std::time::Duration::from_millis(5));
                                         }
                                     });
                                 }
@@ -982,6 +1033,9 @@ fn daemon_loop(
                     error!("Daemon: Broadcasting error for {}: {}", file_hash, error);
                     broadcast_event(IpcMessage::FileTransferError { file_hash, error });
                 }
+                IpcMessage::ManifestProgress { path, progress } => {
+                    broadcast_event(IpcMessage::ManifestProgress { path, progress });
+                }
                 IpcMessage::ChunkReceived {
                     file_hash,
                     chunk_hash,
@@ -1009,10 +1063,13 @@ fn daemon_loop(
                                         use std::io::{Seek, Write};
                                         if let Err(e) = file.seek(std::io::SeekFrom::Start(chunk.offset)) {
                                             error!("Failed to seek in part file: {}", e);
+                                            let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
                                         } else if let Err(e) = file.write_all(&data) {
                                             error!("Failed to write chunk to part file: {}", e);
+                                            let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
                                         } else {
                                             progress.completed_hashes.insert(chunk_hash);
+                                            // ... rest of logic ...
 
                                             let total = progress.manifest.chunks.len();
                                             let completed = progress.completed_hashes.len();
@@ -1069,8 +1126,12 @@ fn daemon_loop(
                                     }
                                     Err(e) => {
                                         error!("Failed to open part file: {}", e);
+                                        let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
                                     }
                                 }
+                            } else {
+                                error!("Chunk hash mismatch for {}: expected {}, got {}", file_hash, chunk_hash, actual_hash);
+                                let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: "Chunk integrity check failed".to_string() });
                             }
                         }
                     }

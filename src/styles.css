@@ -581,6 +581,41 @@ input[type="text"] {
   gap: 10px;
 }
 
+.toast-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.toast-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+}
+
+.toast-filename {
+  font-weight: 500;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.close-btn:hover {
+  color: white;
+}
+
 .progress-bar-container {
   width: 100%;
   height: 6px;
@@ -652,6 +687,11 @@ input[type="text"] {
   color: #c62828;
 }
 
+.file-transfer-item.hashing .transfer-icon {
+  background-color: #fff3e0;
+  color: #ef6c00;
+}
+
 .transfer-details {
   flex: 1;
   display: flex;
@@ -682,6 +722,33 @@ input[type="text"] {
   text-transform: uppercase;
   font-weight: 700;
   color: #888;
+}
+
+.transfer-status-text.error-text {
+  color: #ef4444;
+}
+
+.error-message {
+  font-size: 0.75rem;
+  color: #ef4444;
+  margin: 4px 0;
+  padding: 4px 8px;
+  background: rgba(239, 68, 68, 0.1);
+  border-radius: 4px;
+}
+
+.text-btn {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 0 4px;
+  text-decoration: underline;
+}
+
+.text-btn:hover {
+  color: #eee;
 }
 
 .progress-bar-container.small {

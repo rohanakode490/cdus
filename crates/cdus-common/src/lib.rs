@@ -53,6 +53,9 @@ pub enum IpcMessage {
     DeviceLost {
         node_id: String,
     },
+    PeerDisconnected {
+        node_id: String,
+    },
     GetDiscovered,
     DiscoveredResponse(Vec<(String, String, String, String, u16)>),
     PairWith {
@@ -117,6 +120,10 @@ pub enum IpcMessage {
     FileTransferError {
         file_hash: String,
         error: String,
+    },
+    ManifestProgress {
+        path: String,
+        progress: f32,
     },
     ChunkReceived {
         file_hash: String,

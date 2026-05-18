@@ -86,7 +86,7 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         val notification = NotificationCompat.Builder(this, FILE_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle("Incoming File")
-            .setContentText("${manifest.fileName} from ${UIUtils.formatDeviceLabel(nodeId)}")
+            .setContentText("${manifest.fileName} from ${io.cdus.app.data.DeviceManager.getLabel(nodeId)}")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .addAction(android.R.drawable.checkbox_on_background, "Accept", acceptPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePendingIntent)
@@ -99,14 +99,50 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
 
     override fun onOutgoingTransferStarted(manifest: FileManifest) {
         Logger.i("Outgoing file transfer started: ${manifest.fileName}")
+        
+        // Find existing entry by fileName that is in HASHING status
+        val existing = FileTransferManager.transfers.values.find { 
+            it.fileName == manifest.fileName && it.status == TransferStatus.HASHING 
+        }
+        
+        if (existing != null) {
+            FileTransferManager.linkPathToHash(existing.fileHash, manifest.fileHash)
+            FileTransferManager.updateProgress(manifest.fileHash, 0f) // Reset to 0% for actual transfer
+        } else {
+            FileTransferManager.updateTransfer(
+                FileTransferInfo(
+                    fileHash = manifest.fileHash,
+                    fileName = manifest.fileName,
+                    progress = 0f,
+                    status = TransferStatus.OUTGOING
+                )
+            )
+        }
+    }
+
+    override fun onManifestProgress(path: String, progress: Float) {
+        val fileName = path.substringAfterLast('/')
+        Logger.d("Manifest progress for $fileName: $progress%")
+        
         FileTransferManager.updateTransfer(
             FileTransferInfo(
-                fileHash = manifest.fileHash,
-                fileName = manifest.fileName,
-                progress = 0f,
-                status = TransferStatus.OUTGOING
+                fileHash = path,
+                fileName = fileName,
+                progress = progress,
+                status = TransferStatus.HASHING
             )
         )
+
+        val notification = NotificationCompat.Builder(this, FILE_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setContentTitle("Preparing File")
+            .setContentText("Hashing $fileName...")
+            .setProgress(100, progress.toInt(), false)
+            .setOngoing(true)
+            .build()
+
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(FILE_NOTIFICATION_ID, notification)
     }
 
     override fun onTransferProgress(fileHash: String, progress: Float) {
@@ -161,6 +197,14 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(FILE_NOTIFICATION_ID, notification)
+    }
+
+    override fun onPeerDisconnected(nodeId: String) {
+        val label = io.cdus.app.data.DeviceManager.getLabel(nodeId)
+        Logger.i("Peer disconnected: $label ($nodeId)")
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            android.widget.Toast.makeText(this, "$label went offline", android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

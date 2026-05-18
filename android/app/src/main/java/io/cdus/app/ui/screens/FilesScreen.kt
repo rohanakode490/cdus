@@ -19,10 +19,21 @@ import io.cdus.app.data.TransferStatus
 
 @Composable
 fun FilesScreen() {
-    val transfers = FileTransferManager.transfers.values.toList()
+    val transfers = FileTransferManager.transfers.values.toList().reversed()
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text(text = "File Transfers", style = MaterialTheme.typography.headlineMedium)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text = "File Transfers", style = MaterialTheme.typography.headlineMedium)
+            if (transfers.any { it.status == TransferStatus.COMPLETE || it.status == TransferStatus.ERROR || it.status == TransferStatus.REJECTED }) {
+                TextButton(onClick = { FileTransferManager.clearFinished() }) {
+                    Text("Clear")
+                }
+            }
+        }
         Spacer(modifier = Modifier.height(16.dp))
 
         if (transfers.isEmpty()) {
@@ -48,6 +59,7 @@ fun TransferItem(transfer: FileTransferInfo) {
                 TransferStatus.COMPLETE -> MaterialTheme.colorScheme.surfaceVariant
                 TransferStatus.ERROR -> MaterialTheme.colorScheme.errorContainer
                 TransferStatus.REJECTED -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                TransferStatus.HASHING -> MaterialTheme.colorScheme.surfaceVariant
                 else -> MaterialTheme.colorScheme.surface
             }
         )
@@ -59,6 +71,7 @@ fun TransferItem(transfer: FileTransferInfo) {
                         TransferStatus.INCOMING -> Icons.Default.FileDownload
                         TransferStatus.DOWNLOADING -> Icons.Default.FileDownload
                         TransferStatus.OUTGOING -> Icons.Default.FileUpload
+                        TransferStatus.HASHING -> Icons.Default.FileUpload
                         TransferStatus.COMPLETE -> Icons.Default.CheckCircle
                         TransferStatus.ERROR -> Icons.Default.Error
                         TransferStatus.REJECTED -> Icons.Default.Error
@@ -77,6 +90,17 @@ fun TransferItem(transfer: FileTransferInfo) {
                         Text(text = transfer.error ?: "Unknown error", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     } else if (transfer.status == TransferStatus.REJECTED) {
                         Text(text = "Declined", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    } else if (transfer.status == TransferStatus.HASHING) {
+                        LinearProgressIndicator(
+                            progress = transfer.progress / 100f,
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                        Text(
+                            text = "Preparing... ${transfer.progress.toInt()}%",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.align(Alignment.End)
+                        )
                     } else if (transfer.status != TransferStatus.INCOMING) {
                         LinearProgressIndicator(
                             progress = transfer.progress / 100f,
@@ -108,6 +132,13 @@ fun TransferItem(transfer: FileTransferInfo) {
                         FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.DOWNLOADING))
                     }) {
                         Text("Accept")
+                    }
+                }
+            } else if (transfer.status == TransferStatus.COMPLETE || transfer.status == TransferStatus.ERROR || transfer.status == TransferStatus.REJECTED) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { FileTransferManager.removeTransfer(transfer.fileHash) }) {
+                        Text("Dismiss")
                     }
                 }
             }
