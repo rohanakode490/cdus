@@ -104,10 +104,31 @@ pub enum IpcMessage {
         node_id: String,
         manifest: FileManifest,
     },
+    IncomingFileOffer {
+        node_id: String,
+        offer: FileTransferOffer,
+    },
+    IncomingManifestRequest {
+        node_id: String,
+        file_hash: String,
+    },
     AcceptFileTransfer {
         file_hash: String,
     },
     RejectFileTransfer {
+        file_hash: String,
+    },
+    IncomingChunkRequest {
+        node_id: String,
+        file_hash: String,
+        chunk_hash: String,
+    },
+    PeerAcceptedFile {
+        node_id: String,
+        file_hash: String,
+    },
+    PeerRejectedFile {
+        node_id: String,
         file_hash: String,
     },
     FileTransferProgress {
@@ -154,8 +175,16 @@ pub struct FileManifest {
 #[derive(Debug, Clone)]
 pub struct TransferProgress {
     pub node_id: String,
-    pub manifest: FileManifest,
+    pub manifest: Option<FileManifest>,
     pub completed_hashes: std::collections::HashSet<String>,
+    pub accepted: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+pub struct FileTransferOffer {
+    pub file_hash: String,
+    pub file_name: String,
+    pub total_size: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
@@ -163,6 +192,10 @@ pub enum SyncMessage {
     ClipboardUpdate {
         content: String,
         timestamp: u64,
+    },
+    FileTransferOffer(FileTransferOffer),
+    RequestManifest {
+        file_hash: String,
     },
     FileTransferRequest(FileManifest),
     FileTransferAccepted {
@@ -180,6 +213,16 @@ pub enum SyncMessage {
         chunk_hash: String,
         data: Vec<u8>,
     },
+}
+
+impl SyncMessage {
+    pub fn to_vec(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+        rmp_serde::to_vec(self)
+    }
+
+    pub fn from_slice(slice: &[u8]) -> Result<Self, rmp_serde::decode::Error> {
+        rmp_serde::from_slice(slice)
+    }
 }
 
 #[cfg(test)]

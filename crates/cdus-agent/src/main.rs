@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -177,6 +177,8 @@ fn main() {
     );
     let sync_manager_daemon = Arc::clone(&sync_manager);
 
+    let active_transfers_pm = Arc::clone(&active_transfers);
+
     // Start Pairing Manager
     let pm = PairingManager::new(
         Arc::clone(&store),
@@ -188,6 +190,7 @@ fn main() {
         Arc::clone(&sync_manager),
         Arc::clone(&relay),
         Arc::clone(&turn_manager),
+        active_transfers_pm,
     );
     let pm = Arc::new(pm);
     let pm_clone = Arc::clone(&pm);
@@ -668,6 +671,7 @@ fn daemon_loop(
     let mut clipboard = Clipboard::new().ok();
 
     let mut outgoing_progress = std::collections::HashMap::<String, std::collections::HashSet<String>>::new();
+    let mut window_controllers: std::collections::HashMap<String, Sender<()>> = std::collections::HashMap::new();
 
     let mut count = 0;
     loop {
@@ -790,7 +794,9 @@ fn daemon_loop(
                         map.insert(node_id.clone(), (label.clone(), os.clone(), ip.clone(), port, std::time::Instant::now()));
                     }
 
-                    {
+                    let already_paired = store.is_device_paired(&node_id).unwrap_or(false);
+
+                    if !already_paired {
                         let mut list = discovered_devices.lock().unwrap();
                         if !list.iter().any(|(id, _, _, _, _)| id == &node_id) {
                             list.push((
@@ -802,13 +808,19 @@ fn daemon_loop(
                             ));
                         }
                     }
-                    broadcast_event(IpcMessage::DeviceDiscovered {
-                        node_id: node_id.clone(),
-                        label: label.clone(),
-                        os: os.clone(),
-                        ip: ip.clone(),
-                        port,
-                    });
+                    
+                    // Still broadcast the event so UI can show it if it wants, 
+                    // but we might want to skip broadcast for paired too?
+                    // Test expects NO broadcast for paired.
+                    if !already_paired {
+                        broadcast_event(IpcMessage::DeviceDiscovered {
+                            node_id: node_id.clone(),
+                            label: label.clone(),
+                            os: os.clone(),
+                            ip: ip.clone(),
+                            port,
+                        });
+                    }
 
                     // Auto-connect to trusted peers (even if we didn't broadcast discovery,
                     // we might still want to trigger connection if not already connected)
@@ -879,11 +891,15 @@ fn daemon_loop(
                                 };
                                 let _ = tx_clone.send(progress_msg.clone());
 
-                                let msg = SyncMessage::FileTransferRequest(manifest);
+                                let msg = SyncMessage::FileTransferOffer(cdus_common::FileTransferOffer {
+                                    file_hash: manifest.file_hash.clone(),
+                                    file_name: manifest.file_name.clone(),
+                                    total_size: manifest.total_size,
+                                });
                                 let mut sent_direct = false;
                                 if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
                                     if let Some(ref req_tx) = libp2p_request_tx_clone {
-                                        info!("Sending FileTransferRequest directly via libp2p to {}", peer_id);
+                                        info!("Sending FileTransferOffer directly via libp2p to {}", peer_id);
                                         let _ = req_tx.send((peer_id, msg.clone()));
                                         sent_direct = true;
                                     }
@@ -910,69 +926,140 @@ fn daemon_loop(
                         }
                     });
                 }
-                IpcMessage::AcceptFileTransfer { file_hash } => {
-                    let progress = {
-                        let rm = received_manifests.lock().unwrap();
-                        rm.get(&file_hash)
-                            .map(|p| (p.node_id.clone(), p.manifest.clone()))
+                IpcMessage::PeerAcceptedFile { node_id, file_hash } => {
+                    info!("Remote peer {} confirmed acceptance of file {}", node_id, file_hash);
+                }
+                IpcMessage::PeerRejectedFile { node_id, file_hash } => {
+                    info!("Remote peer {} rejected file {}", node_id, file_hash);
+                    let mut at = active_transfers.lock().unwrap();
+                    at.remove(&file_hash);
+                    let _ = tx.send(IpcMessage::FileTransferError { 
+                        file_hash, 
+                        error: format!("Peer {} rejected the transfer", node_id) 
+                    });
+                }
+                IpcMessage::IncomingManifestRequest { node_id, file_hash } => {
+                    info!("Daemon: Incoming manifest request for {} from {}", file_hash, node_id);
+                    let manifest = {
+                        let at = active_transfers.lock().unwrap();
+                        at.get(&file_hash).map(|(_, m)| m.clone())
                     };
 
-                    if let Some((node_id, manifest)) = progress {
-                        info!("Accepting file transfer for {} from {}", file_hash, node_id);
-                        
-                        let msg = SyncMessage::FileTransferAccepted {
-                            file_hash: file_hash.clone(),
-                        };
+                    if let Some(m) = manifest {
+                        let msg = SyncMessage::FileTransferRequest(m);
                         let mut sent_direct = false;
                         if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
                             if let Some(ref req_tx) = libp2p_request_tx {
-                                info!("Sending FileTransferAccepted directly via libp2p to {}", peer_id);
-                                let _ = req_tx.send((peer_id, msg));
+                                let _ = req_tx.send((peer_id, msg.clone()));
                                 sent_direct = true;
-                                
-                                // Also start requesting chunks
-                                let req_tx_clone = req_tx.clone();
-                                let file_hash_clone = file_hash.clone();
-                                let manifest_clone = manifest.clone();
-                                thread::spawn(move || {
-                                    for chunk in manifest_clone.chunks {
-                                        let _ = req_tx_clone.send((
-                                            peer_id,
-                                            SyncMessage::ChunkRequest {
-                                                file_hash: file_hash_clone.clone(),
-                                                chunk_hash: chunk.hash.clone(),
-                                            },
-                                        ));
-                                        // Small delay to avoid flooding libp2p request-response
-                                        std::thread::sleep(std::time::Duration::from_millis(5));
-                                    }
-                                });
                             }
                         }
-
                         if !sent_direct {
-                            sync_manager.broadcast(SyncMessage::FileTransferAccepted {
-                                file_hash: file_hash.clone(),
-                            });
+                            if !sync_manager.send_to_peer(&node_id, msg.clone()) {
+                                sync_manager.broadcast(msg);
+                            }
+                        }
+                    }
+                }
+                IpcMessage::AcceptFileTransfer { file_hash } => {
+                    let progress_data = {
+                        let mut rm = received_manifests.lock().unwrap();
+                        if let Some(progress) = rm.get_mut(&file_hash) {
+                            progress.accepted = true;
+                            Some((progress.node_id.clone(), progress.manifest.clone()))
+                        } else {
+                            // Race condition: UI accepted before offer was fully processed.
+                            // Create a dummy entry with a wildcard node ID and request the manifest.
+                            warn!("AcceptFileTransfer called but file_hash {} not in received_manifests. Creating pending entry.", file_hash);
+                            rm.insert(
+                                file_hash.clone(),
+                                TransferProgress {
+                                    node_id: "unknown".to_string(),
+                                    manifest: None,
+                                    completed_hashes: std::collections::HashSet::new(),
+                                    accepted: true,
+                                },
+                            );
+                            Some(("unknown".to_string(), None))
+                        }
+                    };
 
-                            if let Some(ref req_tx) = libp2p_request_tx {
-                                if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
-                                    let req_tx_clone = req_tx.clone();
-                                    let file_hash_clone = file_hash.clone();
-                                    let manifest_clone = manifest.clone();
-                                    thread::spawn(move || {
-                                        for chunk in manifest_clone.chunks {
-                                            let _ = req_tx_clone.send((
-                                                peer_id,
-                                                SyncMessage::ChunkRequest {
-                                                    file_hash: file_hash_clone.clone(),
-                                                    chunk_hash: chunk.hash.clone(),
-                                                },
-                                            ));
-                                            // Small delay to avoid flooding
-                                            std::thread::sleep(std::time::Duration::from_millis(5));
-                                        }
-                                    });
+                    if let Some((node_id, manifest_opt)) = progress_data {
+                        info!("Accepting file transfer for {} from {}", file_hash, node_id);
+                        
+                        if let Some(manifest) = manifest_opt {
+                            let msg = SyncMessage::FileTransferAccepted {
+                                file_hash: file_hash.clone(),
+                            };
+                            let mut sent_direct = false;
+                            
+                            let mut peer_id_opt = None;
+                            if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
+                                peer_id_opt = Some(peer_id);
+                                if let Some(ref req_tx) = libp2p_request_tx {
+                                    info!("Sending FileTransferAccepted directly via libp2p to {}", peer_id);
+                                    let _ = req_tx.send((peer_id, msg.clone()));
+                                    sent_direct = true;
+                                }
+                            }
+                            
+                            if !sent_direct {
+                                if !sync_manager.send_to_peer(&node_id, msg.clone()) {
+                                    sync_manager.broadcast(msg);
+                                }
+                            }
+
+                            // Start requesting chunks
+                            let (window_tx, window_rx) = flume::bounded(50);
+                            for _ in 0..50 {
+                                let _ = window_tx.send(());
+                            }
+                            window_controllers.insert(file_hash.clone(), window_tx);
+
+                            let sync_manager_clone = Arc::clone(&sync_manager);
+                            let libp2p_request_tx_clone = libp2p_request_tx.clone();
+                            let file_hash_clone = file_hash.clone();
+                            let node_id_clone = node_id.clone();
+                            let store_clone = Arc::clone(&store);
+
+                            thread::spawn(move || {
+                                for chunk in manifest.chunks {
+                                    if store_clone.is_chunk_completed(&file_hash_clone, &chunk.hash).unwrap_or(false) {
+                                        continue;
+                                    }
+
+                                    if let Err(_) = window_rx.recv() {
+                                        break;
+                                    }
+                                    let req = SyncMessage::ChunkRequest {
+                                        file_hash: file_hash_clone.clone(),
+                                        chunk_hash: chunk.hash.clone(),
+                                    };
+
+                                    let mut requested = false;
+                                    if let (Some(peer_id), Some(ref req_tx)) =
+                                        (peer_id_opt, &libp2p_request_tx_clone)
+                                    {
+                                        let _ = req_tx.send((peer_id, req.clone()));
+                                        requested = true;
+                                    }
+
+                                    if !requested {
+                                        sync_manager_clone.send_to_peer(&node_id_clone, req);
+                                    }
+                                }
+                            });
+                        } else {
+                            // We only have the offer, need to request manifest
+                            info!("We only have the offer for {}, requesting manifest from {}", file_hash, node_id);
+                            if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
+                                if let Some(ref req_tx) = libp2p_request_tx {
+                                    let _ = req_tx.send((peer_id, SyncMessage::RequestManifest { file_hash: file_hash.clone() }));
+                                }
+                            } else {
+                                let msg = SyncMessage::RequestManifest { file_hash: file_hash.clone() };
+                                if !sync_manager.send_to_peer(&node_id, msg.clone()) {
+                                    sync_manager.broadcast(msg);
                                 }
                             }
                         }
@@ -986,7 +1073,7 @@ fn daemon_loop(
 
                     let msg = SyncMessage::FileTransferRejected { file_hash: file_hash.clone() };
                     let mut sent_direct = false;
-                    if let Some(id) = node_id {
+                    if let Some(ref id) = node_id {
                         if let Ok(peer_id) = id.parse::<libp2p::PeerId>() {
                             if let Some(ref req_tx) = libp2p_request_tx {
                                 let _ = req_tx.send((peer_id, msg.clone()));
@@ -996,23 +1083,93 @@ fn daemon_loop(
                     }
                     
                     if !sent_direct {
-                        sync_manager.broadcast(msg);
+                        if let Some(id) = node_id {
+                            sync_manager.send_to_peer(&id, msg);
+                        }
                     }
                 }
-                IpcMessage::IncomingFileRequest { node_id, manifest } => {
-                    let file_hash = manifest.file_hash.clone();
-                    info!("Daemon: Incoming file request for {} from {}", manifest.file_name, node_id);
+                IpcMessage::IncomingChunkRequest { node_id, file_hash, chunk_hash } => {
+                    let chunk_data = {
+                        let at = active_transfers.lock().unwrap();
+                        if let Some((path, manifest)) = at.get(&file_hash) {
+                            if let Some(chunk) = manifest.chunks.iter().find(|c| c.hash == chunk_hash) {
+                                crate::file_transfer::get_chunk(path, chunk.offset, chunk.size).ok()
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+
+                    if let Some(data) = chunk_data {
+                        let msg = SyncMessage::ChunkResponse {
+                            file_hash,
+                            chunk_hash,
+                            data,
+                        };
+                        let mut sent_direct = false;
+                        if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
+                            if let Some(ref req_tx) = libp2p_request_tx {
+                                let _ = req_tx.send((peer_id, msg.clone()));
+                                sent_direct = true;
+                            }
+                        }
+                        if !sent_direct {
+                            sync_manager.send_to_peer(&node_id, msg);
+                        }
+                    }
+                }
+                IpcMessage::IncomingFileOffer { node_id, offer } => {
+                    let file_hash = offer.file_hash.clone();
+                    info!("Daemon: Incoming file offer for {} from {}", offer.file_name, node_id);
+                    let completed_hashes = store.get_completed_chunks(&file_hash).unwrap_or_default();
                     {
                         let mut rm = received_manifests.lock().unwrap();
                         rm.insert(
                             file_hash.clone(),
                             TransferProgress {
                                 node_id: node_id.clone(),
-                                manifest: manifest.clone(),
-                                completed_hashes: std::collections::HashSet::new(),
+                                manifest: None,
+                                completed_hashes,
+                                accepted: false,
                             },
                         );
                     }
+                    broadcast_event(IpcMessage::IncomingFileOffer { node_id, offer });
+                }
+                IpcMessage::IncomingFileRequest { node_id, manifest } => {
+                    let file_hash = manifest.file_hash.clone();
+                    info!("Daemon: Incoming file request for {} from {}", manifest.file_name, node_id);
+                    let completed_hashes = store.get_completed_chunks(&file_hash).unwrap_or_default();
+                    let mut should_trigger_accept = false;
+                    {
+                        let mut rm = received_manifests.lock().unwrap();
+                        if let Some(progress) = rm.get_mut(&file_hash) {
+                            progress.manifest = Some(manifest.clone());
+                            if progress.completed_hashes.is_empty() {
+                                progress.completed_hashes = completed_hashes;
+                            }
+                            if progress.accepted {
+                                should_trigger_accept = true;
+                            }
+                        } else {
+                            rm.insert(
+                                file_hash.clone(),
+                                TransferProgress {
+                                    node_id: node_id.clone(),
+                                    manifest: Some(manifest.clone()),
+                                    completed_hashes,
+                                    accepted: false,
+                                },
+                            );
+                        }
+                    }
+
+                    if should_trigger_accept {
+                        let _ = tx.send(IpcMessage::AcceptFileTransfer { file_hash: file_hash.clone() });
+                    }
+                    
                     broadcast_event(IpcMessage::IncomingFileRequest { node_id, manifest });
                 }
                 IpcMessage::FileTransferProgress {
@@ -1043,95 +1200,102 @@ fn daemon_loop(
                 } => {
                     let mut rm = received_manifests.lock().unwrap();
                     if let Some(progress) = rm.get_mut(&file_hash) {
-                        if let Some(chunk) = progress
-                            .manifest
-                            .chunks
-                            .iter()
-                            .find(|c| c.hash == chunk_hash)
-                        {
-                            let actual_hash = blake3::hash(&data).to_string();
-                            if actual_hash == chunk_hash {
-                                let mut path = std::env::temp_dir();
-                                path.push(format!("{}.part", file_hash));
+                        if let Some(manifest) = &progress.manifest {
+                            if let Some(chunk) = manifest
+                                .chunks
+                                .iter()
+                                .find(|c| c.hash == chunk_hash)
+                            {
+                                let actual_hash = blake3::hash(&data).to_string();
+                                if actual_hash == chunk_hash {
+                                    let mut path = std::env::temp_dir();
+                                    path.push(format!("{}.part", file_hash));
 
-                                match std::fs::OpenOptions::new()
-                                    .create(true)
-                                    .write(true)
-                                    .open(&path)
-                                {
-                                    Ok(mut file) => {
-                                        use std::io::{Seek, Write};
-                                        if let Err(e) = file.seek(std::io::SeekFrom::Start(chunk.offset)) {
-                                            error!("Failed to seek in part file: {}", e);
-                                            let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
-                                        } else if let Err(e) = file.write_all(&data) {
-                                            error!("Failed to write chunk to part file: {}", e);
-                                            let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
-                                        } else {
-                                            progress.completed_hashes.insert(chunk_hash);
-                                            // ... rest of logic ...
+                                    match std::fs::OpenOptions::new()
+                                        .create(true)
+                                        .write(true)
+                                        .open(&path)
+                                    {
+                                        Ok(mut file) => {
+                                            use std::io::{Seek, Write};
+                                            if let Err(e) = file.seek(std::io::SeekFrom::Start(chunk.offset)) {
+                                                error!("Failed to seek in part file: {}", e);
+                                                let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
+                                            } else if let Err(e) = file.write_all(&data) {
+                                                error!("Failed to write chunk to part file: {}", e);
+                                                let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
+                                            } else {
+                                                progress.completed_hashes.insert(chunk_hash.clone());
+                                                let _ = store.mark_chunk_completed(&file_hash, &chunk_hash);
 
-                                            let total = progress.manifest.chunks.len();
-                                            let completed = progress.completed_hashes.len();
-                                            let percent = (completed as f32 / total as f32) * 100.0;
-                                            info!(
-                                                "File {} progress: {}/{} ({:.2}%)",
-                                                file_hash, completed, total, percent
-                                            );
+                                                let total = manifest.chunks.len();
+                                                let completed = progress.completed_hashes.len();
+                                                let percent = (completed as f32 / total as f32) * 100.0;
+                                                info!(
+                                                    "File {} progress: {}/{} ({:.2}%)",
+                                                    file_hash, completed, total, percent
+                                                );
 
-                                            let _ = tx.send(IpcMessage::FileTransferProgress {
-                                                file_hash: file_hash.clone(),
-                                                progress: percent,
-                                            });
+                                                let _ = tx.send(IpcMessage::FileTransferProgress {
+                                                    file_hash: file_hash.clone(),
+                                                    progress: percent,
+                                                });
 
-                                            if completed == total {
-                                                info!("File {} download complete!", file_hash);
-                                                
-                                                // Resolve download directory
-                                                let mut final_path = if let Some(user_dirs) = directories::UserDirs::new() {
-                                                    user_dirs.download_dir()
-                                                        .map(|d| d.to_path_buf())
-                                                        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-                                                } else {
-                                                    std::env::current_dir().unwrap_or_default()
-                                                };
-                                                
-                                                final_path.push(&progress.manifest.file_name);
-                                                
-                                                // Handle filename collision
-                                                let mut version = 1;
-                                                let original_final_path = final_path.clone();
-                                                while final_path.exists() {
-                                                    let stem = original_final_path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
-                                                    let ext = original_final_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                                                    let ext_suffix = if ext.is_empty() { String::new() } else { format!(".{}", ext) };
-                                                    final_path = original_final_path.with_file_name(format!("{} ({}){}", stem, version, ext_suffix));
-                                                    version += 1;
-                                                }
+                                                if completed == total {
+                                                    info!("File {} download complete!", file_hash);
+                                                    window_controllers.remove(&file_hash);
+                                                    let _ = store.clear_file_chunks(&file_hash);
+                                                    // Resolve download directory
+                                                    let mut final_path = if let Some(user_dirs) = directories::UserDirs::new() {
+                                                        user_dirs.download_dir()
+                                                            .map(|d| d.to_path_buf())
+                                                            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+                                                    } else {
+                                                        std::env::current_dir().unwrap_or_default()
+                                                    };
+                                                    
+                                                    final_path.push(&manifest.file_name);
+                                                    
+                                                    // Handle filename collision
+                                                    let mut version = 1;
+                                                    let original_final_path = final_path.clone();
+                                                    while final_path.exists() {
+                                                        let stem = original_final_path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+                                                        let ext = original_final_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                                        let ext_suffix = if ext.is_empty() { String::new() } else { format!(".{}", ext) };
+                                                        final_path = original_final_path.with_file_name(format!("{} ({}){}", stem, version, ext_suffix));
+                                                        version += 1;
+                                                    }
 
-                                                if let Err(e) = std::fs::rename(&path, &final_path) {
-                                                    error!("Failed to move completed file to final destination: {}", e);
-                                                    let _ = tx.send(IpcMessage::FileTransferError {
-                                                        file_hash: file_hash.clone(),
-                                                        error: format!("Failed to save file: {}", e),
-                                                    });
-                                                } else {
-                                                    info!("Saved completed file to {:?}", final_path);
-                                                    let _ = tx.send(IpcMessage::FileTransferComplete {
-                                                        file_hash: file_hash.clone(),
-                                                    });
+                                                    if let Err(e) = std::fs::rename(&path, &final_path) {
+                                                        error!("Failed to move completed file to final destination: {}", e);
+                                                        let _ = tx.send(IpcMessage::FileTransferError {
+                                                            file_hash: file_hash.clone(),
+                                                            error: format!("Failed to save file: {}", e),
+                                                        });
+                                                    } else {
+                                                        info!("Saved completed file to {:?}", final_path);
+                                                        let _ = tx.send(IpcMessage::FileTransferComplete {
+                                                            file_hash: file_hash.clone(),
+                                                        });
+                                                    }
                                                 }
                                             }
                                         }
+                                        Err(e) => {
+                                            error!("Failed to open part file: {}", e);
+                                            let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
+                                        }
                                     }
-                                    Err(e) => {
-                                        error!("Failed to open part file: {}", e);
-                                        let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
-                                    }
+                                } else {
+                                    error!("Chunk hash mismatch for {}: expected {}, got {}", file_hash, chunk_hash, actual_hash);
+                                    let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: "Chunk integrity check failed".to_string() });
                                 }
-                            } else {
-                                error!("Chunk hash mismatch for {}: expected {}, got {}", file_hash, chunk_hash, actual_hash);
-                                let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: "Chunk integrity check failed".to_string() });
+
+                                // ALWAYS release token for sliding window to avoid stalling
+                                if let Some(w_tx) = window_controllers.get(&file_hash) {
+                                    let _ = w_tx.try_send(());
+                                }
                             }
                         }
                     }
@@ -1139,8 +1303,10 @@ fn daemon_loop(
                     // Separate check for removal
                     let mut complete = false;
                     if let Some(p) = rm.get(&file_hash) {
-                        if p.completed_hashes.len() == p.manifest.chunks.len() {
-                            complete = true;
+                        if let Some(manifest) = &p.manifest {
+                            if p.completed_hashes.len() == manifest.chunks.len() {
+                                complete = true;
+                            }
                         }
                     }
                     if complete {
@@ -1300,6 +1466,12 @@ mod tests {
             "http://localhost".to_string(),
             daemon_tx.clone(),
         );
+        let relay = Arc::new(relay);
+        let lpt = Arc::new(Mutex::new(0u64));
+
+        agent_tx.send(IpcMessage::Ping).unwrap();
+        let at = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let rm = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let pm = PairingManager::new(
             Arc::clone(&store),
             daemon_tx.clone(),
@@ -1308,15 +1480,13 @@ mod tests {
             0,
             Arc::clone(&ap),
             Arc::new(SyncManager::new()),
-            Arc::new(relay),
+            Arc::clone(&relay),
             tm,
+            Arc::clone(&at),
         );
         let pm = Arc::new(pm);
-        let lpt = Arc::new(Mutex::new(0u64));
 
-        agent_tx.send(IpcMessage::Ping).unwrap();
-        let at = Arc::new(Mutex::new(std::collections::HashMap::new()));
-        let rm = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let pm_map = Arc::new(Mutex::new(std::collections::HashMap::new()));
         daemon_loop(
             daemon_tx,
             daemon_rx,
@@ -1328,6 +1498,7 @@ mod tests {
             Arc::new(SyncManager::new()),
             pm,
             lpt,
+            pm_map,
             None,
             at,
             rm,

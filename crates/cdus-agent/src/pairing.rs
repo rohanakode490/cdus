@@ -122,6 +122,9 @@ pub struct PairingManager {
     relay_manager: Arc<RelayManager>,
     turn_manager: Arc<TurnManager>,
     pending_turn_sessions: Mutex<HashMap<String, TurnConnection>>,
+    active_transfers: Arc<
+        Mutex<std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>>,
+    >,
 }
 
 impl PairingManager {
@@ -135,6 +138,9 @@ impl PairingManager {
         sync_manager: Arc<SyncManager>,
         relay_manager: Arc<RelayManager>,
         turn_manager: Arc<TurnManager>,
+        active_transfers: Arc<
+            Mutex<std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>>,
+        >,
     ) -> Self {
         Self {
             store,
@@ -147,6 +153,7 @@ impl PairingManager {
             relay_manager,
             turn_manager,
             pending_turn_sessions: Mutex::new(HashMap::new()),
+            active_transfers,
         }
     }
 
@@ -413,6 +420,7 @@ impl PairingManager {
                                             let ipc_tx = self.ipc_tx.clone();
                                             let remote_uuid = source_uuid.clone();
 
+                                            let active_transfers = Arc::clone(&self.active_transfers);
                                             thread::spawn(move || {
                                                 if let Err(e) = run_turn_sync_session(
                                                     conn,
@@ -421,7 +429,9 @@ impl PairingManager {
                                                     remote_label,
                                                     sync_manager,
                                                     ipc_tx,
+                                                    active_transfers,
                                                 ) {
+
                                                     error!(
                                                         "TURN sync session error for {}: {}",
                                                         remote_uuid, e
@@ -583,6 +593,7 @@ impl PairingManager {
                     let active_pairing = Arc::clone(&self.active_pairing);
                     let self_node_id = self.node_id.clone();
                     let sync_manager = Arc::clone(&self.sync_manager);
+                    let active_transfers = Arc::clone(&self.active_transfers);
                     thread::spawn(move || {
                         if let Err(e) = handle_incoming_connection(
                             stream,
@@ -592,7 +603,9 @@ impl PairingManager {
                             active_pairing,
                             self_node_id,
                             sync_manager,
+                            active_transfers,
                         ) {
+
                             error!("Error in incoming connection: {}", e);
                         }
                     });
@@ -617,6 +630,7 @@ impl PairingManager {
         let active_pairing = Arc::clone(&self.active_pairing);
         let self_node_id = self.node_id.clone();
         let sync_manager = Arc::clone(&self.sync_manager);
+        let active_transfers = Arc::clone(&self.active_transfers);
 
         thread::spawn(move || {
             // Upgrade to WebSocket
@@ -631,6 +645,7 @@ impl PairingManager {
                         active_pairing,
                         self_node_id,
                         sync_manager,
+                        active_transfers,
                     ) {
                         error!("Error in outgoing connection: {}", e);
                     }
@@ -648,9 +663,13 @@ fn run_turn_sync_session(
     label: String,
     sync_manager: Arc<SyncManager>,
     ipc_tx: Sender<IpcMessage>,
+    active_transfers: Arc<
+        Mutex<std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>>,
+    >,
 ) -> Result<()> {
     let (tx, rx) = flume::unbounded::<SyncMessage>();
-    sync_manager.add_peer(node_id.clone(), tx, TransportType::Relay);
+    sync_manager.add_peer(node_id.clone(), tx.clone(),
+ TransportType::Relay);
 
     info!("TURN Sync session started for {} ({})", label, node_id);
 
@@ -661,7 +680,7 @@ fn run_turn_sync_session(
             match transport.read_message(&data, &mut out) {
                 Ok(n) => {
                     out.truncate(n);
-                    if let Ok(msg) = serde_json::from_slice::<SyncMessage>(&out) {
+                    if let Ok(msg) = SyncMessage::from_slice(&out) {
                         match msg {
                             SyncMessage::ClipboardUpdate { content, timestamp } => {
                                 info!(
@@ -674,6 +693,23 @@ fn run_turn_sync_session(
                                     source: label.clone(),
                                 });
                             }
+                            SyncMessage::FileTransferOffer(offer) => {
+                                info!("Received file transfer offer from peer {} via TURN: {}", label, offer.file_name);
+                                let _ = ipc_tx.send(IpcMessage::IncomingFileOffer {
+                                    node_id: node_id.clone(),
+                                    offer,
+                                });
+                            }
+                            SyncMessage::RequestManifest { file_hash } => {
+                                info!("Received RequestManifest for {} from peer {} via TURN", file_hash, label);
+                                let manifest = {
+                                    let at = active_transfers.lock().unwrap();
+                                    at.get(&file_hash).map(|(_, m): &(std::path::PathBuf, cdus_common::FileManifest)| m.clone())
+                                };
+                                if let Some(m) = manifest {
+                                    let _ = tx.send(SyncMessage::FileTransferRequest(m));
+                                }
+                            }
                             SyncMessage::FileTransferRequest(manifest) => {
                                 info!("Received file transfer request from peer {} via TURN: {}", label, manifest.file_name);
                                 let _ = ipc_tx.send(IpcMessage::IncomingFileRequest {
@@ -683,11 +719,17 @@ fn run_turn_sync_session(
                             }
                             SyncMessage::FileTransferAccepted { file_hash } => {
                                 info!("Peer {} accepted file transfer via TURN: {}", label, file_hash);
-                                let _ = ipc_tx.send(IpcMessage::AcceptFileTransfer { file_hash });
+                                let _ = ipc_tx.send(IpcMessage::PeerAcceptedFile { 
+                                    node_id: node_id.clone(),
+                                    file_hash 
+                                });
                             }
                             SyncMessage::FileTransferRejected { file_hash } => {
                                 info!("Peer {} rejected file transfer via TURN: {}", label, file_hash);
-                                let _ = ipc_tx.send(IpcMessage::RejectFileTransfer { file_hash });
+                                let _ = ipc_tx.send(IpcMessage::PeerRejectedFile { 
+                                    node_id: node_id.clone(),
+                                    file_hash 
+                                });
                             }
                             _ => {
                                 warn!("Received unhandled sync message from peer {} via TURN: {:?}", label, msg);
@@ -704,7 +746,7 @@ fn run_turn_sync_session(
 
         // 2. Check for outgoing messages
         if let Ok(msg) = rx.try_recv() {
-            let data = serde_json::to_vec(&msg)?;
+            let data = msg.to_vec()?;
             let mut buf = vec![0u8; data.len() + 1024];
             match transport.write_message(&data, &mut buf) {
                 Ok(n) => {
@@ -736,6 +778,9 @@ fn handle_incoming_connection(
     active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
     self_node_id: String,
     sync_manager: Arc<SyncManager>,
+    active_transfers: Arc<
+        Mutex<std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>>,
+    >,
 ) -> Result<()> {
     let res = handle_incoming_connection_inner(
         stream,
@@ -745,6 +790,7 @@ fn handle_incoming_connection(
         Arc::clone(&active_pairing),
         self_node_id,
         Arc::clone(&sync_manager),
+        active_transfers,
     );
 
     if let Err(e) = res {
@@ -768,6 +814,9 @@ fn handle_incoming_connection_inner(
     active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
     self_node_id: String,
     sync_manager: Arc<SyncManager>,
+    active_transfers: Arc<
+        Mutex<std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>>,
+    >,
 ) -> Result<()> {
     info!("Upgrading incoming connection to WebSocket");
     let mut ws = accept(stream)?;
@@ -869,8 +918,8 @@ fn handle_incoming_connection_inner(
             run_sync_session(
                 ws,
                 transport,
-                remote_node_id,
-                initiator_label,
+                remote_node_id.clone(),
+                initiator_label.clone(),
                 sync_manager,
                 ipc_tx,
             )?;
@@ -1004,6 +1053,9 @@ fn handle_outgoing_connection(
     active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
     self_node_id: String,
     sync_manager: Arc<SyncManager>,
+    active_transfers: Arc<
+        Mutex<std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>>,
+    >,
 ) -> Result<()> {
     let res = handle_outgoing_connection_inner(
         ws,
@@ -1013,6 +1065,7 @@ fn handle_outgoing_connection(
         Arc::clone(&active_pairing),
         self_node_id,
         Arc::clone(&sync_manager),
+        active_transfers,
     );
 
     if let Err(e) = res {
@@ -1035,6 +1088,9 @@ fn handle_outgoing_connection_inner(
     active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
     self_node_id: String,
     sync_manager: Arc<SyncManager>,
+    active_transfers: Arc<
+        Mutex<std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>>,
+    >,
 ) -> Result<()> {
     info!("Initiating outgoing Noise connection over WebSocket");
 
@@ -1130,8 +1186,8 @@ fn handle_outgoing_connection_inner(
             run_sync_session(
                 ws,
                 transport,
-                remote_node_id,
-                responder_label,
+                remote_node_id.clone(),
+                responder_label.clone(),
                 sync_manager,
                 ipc_tx,
             )?;
@@ -1262,8 +1318,10 @@ fn run_sync_session(
     sync_manager: Arc<SyncManager>,
     ipc_tx: Sender<IpcMessage>,
 ) -> Result<()> {
+
     let (tx, rx) = flume::unbounded::<SyncMessage>();
-    sync_manager.add_peer(node_id.clone(), tx, TransportType::Lan);
+    sync_manager.add_peer(node_id.clone(), tx.clone(),
+ TransportType::Lan);
 
     info!(
         "Sync session started for {} ({}) over WebSocket",
@@ -1279,7 +1337,7 @@ fn run_sync_session(
         // 1. Check for incoming messages from peer
         match read_ws_framed(&mut ws, &mut transport) {
             Ok(data) => {
-                if let Ok(msg) = serde_json::from_slice::<SyncMessage>(&data) {
+                if let Ok(msg) = SyncMessage::from_slice(&data) {
                     match msg {
                         SyncMessage::ClipboardUpdate { content, timestamp } => {
                             info!("Received clipboard update from peer {}: {}", label, content);
@@ -1287,6 +1345,20 @@ fn run_sync_session(
                                 content,
                                 timestamp,
                                 source: label.clone(),
+                            });
+                        }
+                        SyncMessage::FileTransferOffer(offer) => {
+                            info!("Received file transfer offer from peer {}: {}", label, offer.file_name);
+                            let _ = ipc_tx.send(IpcMessage::IncomingFileOffer {
+                                node_id: node_id.clone(),
+                                offer,
+                            });
+                        }
+                        SyncMessage::RequestManifest { file_hash } => {
+                            info!("Received RequestManifest for {} from peer {}", file_hash, label);
+                            let _ = ipc_tx.send(IpcMessage::IncomingManifestRequest {
+                                node_id: node_id.clone(),
+                                file_hash,
                             });
                         }
                         SyncMessage::FileTransferRequest(manifest) => {
@@ -1298,14 +1370,32 @@ fn run_sync_session(
                         }
                         SyncMessage::FileTransferAccepted { file_hash } => {
                             info!("Peer {} accepted file transfer: {}", label, file_hash);
-                            let _ = ipc_tx.send(IpcMessage::AcceptFileTransfer { file_hash });
+                            let _ = ipc_tx.send(IpcMessage::PeerAcceptedFile { 
+                                node_id: node_id.clone(),
+                                file_hash 
+                            });
                         }
                         SyncMessage::FileTransferRejected { file_hash } => {
                             info!("Peer {} rejected file transfer: {}", label, file_hash);
-                            let _ = ipc_tx.send(IpcMessage::RejectFileTransfer { file_hash });
+                            let _ = ipc_tx.send(IpcMessage::PeerRejectedFile { 
+                                node_id: node_id.clone(),
+                                file_hash 
+                            });
                         }
-                        _ => {
-                            warn!("Received unhandled sync message from peer {}: {:?}", label, msg);
+                        SyncMessage::ChunkRequest { file_hash, chunk_hash } => {
+                            info!("Received chunk request for {} / {} from peer {}", file_hash, chunk_hash, label);
+                            let _ = ipc_tx.send(IpcMessage::IncomingChunkRequest {
+                                node_id: node_id.clone(),
+                                file_hash,
+                                chunk_hash,
+                            });
+                        }
+                        SyncMessage::ChunkResponse { file_hash, chunk_hash, data } => {
+                            let _ = ipc_tx.send(IpcMessage::ChunkReceived {
+                                file_hash,
+                                chunk_hash,
+                                data,
+                            });
                         }
                     }
                 }
@@ -1322,7 +1412,7 @@ fn run_sync_session(
 
         // 2. Check for outgoing messages
         if let Ok(msg) = rx.try_recv() {
-            let data = serde_json::to_vec(&msg)?;
+            let data = msg.to_vec()?;
             write_ws_framed(&mut ws, &mut transport, &data)?;
         }
 
