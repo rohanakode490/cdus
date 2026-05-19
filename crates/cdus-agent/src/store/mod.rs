@@ -70,11 +70,58 @@ impl Store {
             [],
         )?;
 
+        // File chunks table for resumable transfers
+        events_conn.execute(
+            "CREATE TABLE IF NOT EXISTS file_chunks (
+                file_hash TEXT,
+                chunk_hash TEXT,
+                PRIMARY KEY (file_hash, chunk_hash)
+            )",
+            [],
+        )?;
+
         Ok(Store {
             events_conn: Mutex::new(events_conn),
             state_conn: Mutex::new(state_conn),
         })
-    }
+        }
+
+        pub fn mark_chunk_completed(&self, file_hash: &str, chunk_hash: &str) -> Result<()> {
+        let conn = self.events_conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO file_chunks (file_hash, chunk_hash) VALUES (?1, ?2)",
+            (file_hash, chunk_hash),
+        )?;
+        Ok(())
+        }
+
+        pub fn is_chunk_completed(&self, file_hash: &str, chunk_hash: &str) -> Result<bool> {
+        let conn = self.events_conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT count(*) FROM file_chunks WHERE file_hash = ?1 AND chunk_hash = ?2",
+            (file_hash, chunk_hash),
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+        }
+
+        pub fn get_completed_chunks(&self, file_hash: &str) -> Result<std::collections::HashSet<String>> {
+        let conn = self.events_conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT chunk_hash FROM file_chunks WHERE file_hash = ?")?;
+        let rows = stmt.query_map([file_hash], |row| row.get(0))?;
+        let mut hashes = std::collections::HashSet::new();
+        for row in rows {
+            hashes.insert(row?);
+        }
+        Ok(hashes)
+        }
+
+        pub fn clear_file_chunks(&self, file_hash: &str) -> Result<()> {
+        let conn = self.events_conn.lock().unwrap();
+        conn.execute("DELETE FROM file_chunks WHERE file_hash = ?", [file_hash])?;
+        Ok(())
+        }
+
 
     pub fn append_event(&self, payload: &[u8], source: &str) -> Result<String> {
         let conn = self.events_conn.lock().unwrap();

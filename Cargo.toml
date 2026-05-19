@@ -5,3 +5,6 @@ members = [
     "crates/cdus-common"
 , "crates/cdus-ffi"]
 resolver = "2"
+
+[profile.dev.package."*"]
+debug = 0 

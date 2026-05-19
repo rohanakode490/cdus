@@ -321,6 +321,15 @@ pub fn run() {
                                                     (node_id, manifest),
                                                 );
                                             }
+                                            IpcMessage::IncomingFileOffer {
+                                                node_id,
+                                                offer,
+                                            } => {
+                                                let _ = app_handle_events.emit(
+                                                    "incoming-file-offer",
+                                                    (node_id, offer),
+                                                );
+                                            }
                                             IpcMessage::FileTransferProgress {
                                                 file_hash,
                                                 progress,

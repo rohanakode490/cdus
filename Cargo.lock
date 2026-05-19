@@ -979,6 +979,7 @@ dependencies = [
  "mdns-sd",
  "once_cell",
  "rand 0.8.6",
+ "rmp-serde",
  "rusqlite",
  "serde",
  "serde_json",

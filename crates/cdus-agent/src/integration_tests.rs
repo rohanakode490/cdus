@@ -6,7 +6,9 @@ mod tests {
     use crate::turn_manager::TurnManager;
     use crate::ActivePairingState;
     use base64::Engine;
-    use cdus_common::{IpcMessage, SyncMessage};
+    use cdus_common::{FileManifest, IpcMessage, SyncMessage, TransferProgress};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
@@ -41,6 +43,9 @@ mod tests {
         let (relay2, _) =
             RelayManager::new(id2.clone(), "http://localhost".to_string(), tx2.clone());
 
+        let at1 = Arc::new(Mutex::new(HashMap::new()));
+        let at2 = Arc::new(Mutex::new(HashMap::new()));
+
         let pm1 = PairingManager::new(
             Arc::clone(&store1),
             tx1.clone(),
@@ -51,6 +56,7 @@ mod tests {
             Arc::clone(&sm1),
             Arc::new(relay1),
             tm1,
+            at1,
         );
         let pm2 = PairingManager::new(
             Arc::clone(&store2),
@@ -62,6 +68,7 @@ mod tests {
             Arc::clone(&sm2),
             Arc::new(relay2),
             tm2,
+            at2,
         );
 
         let pm1 = Arc::new(pm1);
@@ -181,6 +188,10 @@ mod tests {
         let ap = Arc::new(Mutex::new(None));
         let sm = Arc::new(SyncManager::new());
         let tm = Arc::new(TurnManager::new().unwrap());
+        let at = Arc::new(Mutex::new(HashMap::new()));
+        let rm = Arc::new(Mutex::new(HashMap::new()));
+        let peer_map = Arc::new(Mutex::new(HashMap::new()));
+
         let (relay, _) = RelayManager::new(
             "test".to_string(),
             "http://localhost".to_string(),
@@ -196,6 +207,7 @@ mod tests {
             Arc::clone(&sm),
             Arc::new(relay),
             tm,
+            Arc::clone(&at),
         ));
         let lpt = Arc::new(Mutex::new(0u64));
 
@@ -218,8 +230,6 @@ mod tests {
         let pm_daemon = Arc::clone(&pm);
         let lpt_daemon = Arc::clone(&lpt);
 
-        let at = Arc::new(Mutex::new(std::collections::HashMap::new()));
-        let rm = Arc::new(Mutex::new(std::collections::HashMap::new()));
         // We'll run it manually to control messages
         crate::daemon_loop(
             tx_daemon,
@@ -232,6 +242,7 @@ mod tests {
             sm_daemon,
             pm_daemon,
             lpt_daemon,
+            peer_map.clone(),
             None,
             at.clone(),
             rm.clone(),
@@ -259,6 +270,7 @@ mod tests {
             Arc::clone(&sm),
             Arc::clone(&pm),
             Arc::clone(&lpt),
+            peer_map.clone(),
             None,
             at.clone(),
             rm.clone(),
@@ -290,6 +302,7 @@ mod tests {
             Arc::clone(&sm),
             Arc::clone(&pm),
             Arc::clone(&lpt),
+            peer_map.clone(),
             None,
             at.clone(),
             rm.clone(),
@@ -319,6 +332,9 @@ mod tests {
         let tm1 = Arc::new(TurnManager::new().unwrap());
         let tm2 = Arc::new(TurnManager::new().unwrap());
 
+        let at1 = Arc::new(Mutex::new(HashMap::new()));
+        let at2 = Arc::new(Mutex::new(HashMap::new()));
+
         let (relay1, _) =
             RelayManager::new(id1.clone(), "http://localhost".to_string(), tx1.clone());
         let (relay2, _) =
@@ -334,6 +350,7 @@ mod tests {
             Arc::clone(&sm1),
             Arc::new(relay1),
             tm1,
+            at1,
         ));
         let pm2 = Arc::new(PairingManager::new(
             Arc::clone(&store2),
@@ -345,6 +362,7 @@ mod tests {
             Arc::clone(&sm2),
             Arc::new(relay2),
             tm2,
+            at2,
         ));
 
         let pm2_c = Arc::clone(&pm2);
@@ -393,6 +411,7 @@ mod tests {
         let ap = Arc::new(Mutex::new(None));
         let sm = Arc::new(SyncManager::new());
         let tm = Arc::new(TurnManager::new().unwrap());
+        let at = Arc::new(Mutex::new(HashMap::new()));
         let (relay, _) = RelayManager::new(id.clone(), "http://localhost".to_string(), tx.clone());
         let pm = Arc::new(PairingManager::new(
             Arc::clone(&store),
@@ -404,6 +423,7 @@ mod tests {
             Arc::clone(&sm),
             Arc::new(relay),
             tm,
+            at,
         ));
 
         let pm_c = Arc::clone(&pm);
@@ -431,6 +451,7 @@ mod tests {
         let ap = Arc::new(Mutex::new(None));
         let sm = Arc::new(SyncManager::new());
         let tm = Arc::new(TurnManager::new().unwrap());
+        let at = Arc::new(Mutex::new(HashMap::new()));
         let (relay, _) = RelayManager::new(id.clone(), "http://localhost".to_string(), tx.clone());
         let pm = PairingManager::new(
             Arc::clone(&store),
@@ -442,6 +463,7 @@ mod tests {
             Arc::clone(&sm),
             Arc::new(relay),
             tm,
+            at,
         );
 
         thread::spawn(move || pm.start_listener());
@@ -484,6 +506,9 @@ mod tests {
         let tm1 = Arc::new(TurnManager::new().unwrap());
         let tm2 = Arc::new(TurnManager::new().unwrap());
 
+        let at1 = Arc::new(Mutex::new(HashMap::new()));
+        let at2 = Arc::new(Mutex::new(HashMap::new()));
+
         let (relay1, relay_rx1) =
             RelayManager::new(id1.clone(), "http://localhost".to_string(), tx1.clone());
         let (relay2, relay_rx2) =
@@ -502,6 +527,7 @@ mod tests {
             Arc::clone(&sm1),
             Arc::clone(&relay1),
             tm1,
+            at1,
         ));
 
         let pm2 = Arc::new(PairingManager::new(
@@ -514,6 +540,7 @@ mod tests {
             Arc::clone(&sm2),
             Arc::clone(&relay2),
             tm2,
+            at2,
         ));
 
         // Mock the relay server by cross-connecting the relay channels
@@ -601,8 +628,8 @@ mod tests {
         let (tx1, rx1) = flume::unbounded();
         let (tx2, rx2) = flume::unbounded();
 
-        let (id1, _priv1) = store1.get_or_create_identity(dir1.path()).unwrap();
-        let (id2, _priv2) = store2.get_or_create_identity(dir2.path()).unwrap();
+        let (id1, priv1) = store1.get_or_create_identity(dir1.path()).unwrap();
+        let (id2, priv2) = store2.get_or_create_identity(dir2.path()).unwrap();
 
         let at1 = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let rm1 = Arc::new(Mutex::new(std::collections::HashMap::new()));
@@ -634,6 +661,7 @@ mod tests {
         let rm1_c = Arc::clone(&rm1);
         let req_tx1_c = req_tx1.clone();
         let id1_c = id1.clone();
+        let peer_map1 = Arc::new(Mutex::new(HashMap::new()));
 
         thread::spawn(move || {
             loop {
@@ -650,7 +678,7 @@ mod tests {
                         Arc::clone(&store1_c),
                         tx1_c.clone(),
                         id1_c.clone(),
-                        vec![],
+                        priv1.clone(),
                         0,
                         Arc::new(Mutex::new(None)),
                         Arc::clone(&sm1_c),
@@ -663,8 +691,10 @@ mod tests {
                             .0,
                         ),
                         Arc::new(crate::turn_manager::TurnManager::new().unwrap()),
+                        Arc::clone(&at1_c),
                     )),
                     Arc::new(Mutex::new(0)),
+                    peer_map1.clone(),
                     Some(req_tx1_c.clone()),
                     Arc::clone(&at1_c),
                     Arc::clone(&rm1_c),
@@ -679,6 +709,7 @@ mod tests {
         let rm2_c = Arc::clone(&rm2);
         let req_tx2_c = req_tx2.clone();
         let id2_c = id2.clone();
+        let peer_map2 = Arc::new(Mutex::new(HashMap::new()));
 
         thread::spawn(move || loop {
             crate::daemon_loop(
@@ -694,7 +725,7 @@ mod tests {
                     Arc::clone(&store2_c),
                     tx2_c.clone(),
                     id2_c.clone(),
-                    vec![],
+                    priv2.clone(),
                     0,
                     Arc::new(Mutex::new(None)),
                     Arc::clone(&sm2_c),
@@ -707,8 +738,10 @@ mod tests {
                         .0,
                     ),
                     Arc::new(crate::turn_manager::TurnManager::new().unwrap()),
+                    Arc::clone(&at2_c),
                 )),
                 Arc::new(Mutex::new(0)),
+                peer_map2.clone(),
                 Some(req_tx2_c.clone()),
                 Arc::clone(&at2_c),
                 Arc::clone(&rm2_c),
@@ -718,21 +751,19 @@ mod tests {
 
         // Router thread to forward SyncMessages and ChunkRequests
         let id1_r = id1.clone();
-        let id2_r = id2.clone();
         let tx1_r = tx1.clone();
         let tx2_r = tx2.clone();
         let at1_r = Arc::clone(&at1);
-        let at2_r = Arc::clone(&at2);
         thread::spawn(move || {
             loop {
                 // Agent 1 -> Agent 2 (SyncManager legacy)
                 if let Ok(msg) = sync_rx2.try_recv() {
                     match msg {
-                        SyncMessage::FileTransferRequest(m) => {
+                        SyncMessage::FileTransferOffer(m) => {
                             tx2_r
-                                .send(IpcMessage::IncomingFileRequest {
+                                .send(IpcMessage::IncomingFileOffer {
                                     node_id: id1_r.clone(),
-                                    manifest: m,
+                                    offer: m,
                                 })
                                 .unwrap();
                         }
@@ -742,13 +773,30 @@ mod tests {
                 // Agent 1 -> Agent 2 (Direct libp2p)
                 if let Ok((_peer, msg)) = req_rx1.try_recv() {
                     match msg {
-                        SyncMessage::FileTransferRequest(m) => {
+                        SyncMessage::FileTransferOffer(m) => {
                             tx2_r
-                                .send(IpcMessage::IncomingFileRequest {
+                                .send(IpcMessage::IncomingFileOffer {
                                     node_id: id1_r.clone(),
-                                    manifest: m,
+                                    offer: m,
                                 })
                                 .unwrap();
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Agent 2 -> Agent 1 (Direct libp2p requests)
+                if let Ok((_peer, msg)) = req_rx2.try_recv() {
+                    match msg {
+                        SyncMessage::RequestManifest { file_hash } => {
+                             let info = at1_r.lock().unwrap().get(&file_hash).cloned();
+                             if let Some((_, manifest)) = info {
+                                 // Deliver manifest as FileTransferRequest to Agent 2
+                                 tx2_r.send(IpcMessage::IncomingFileRequest {
+                                     node_id: id1_r.clone(),
+                                     manifest
+                                 }).unwrap();
+                             }
                         }
                         SyncMessage::ChunkRequest { file_hash, chunk_hash } => {
                             // Agent 2 -> Agent 1 chunk request
@@ -777,7 +825,7 @@ mod tests {
                     }
                 }
 
-                // Agent 2 -> Agent 1 (SyncManager legacy)
+                // Agent 2 -> Agent 1 (SyncManager legacy responses)
                 if let Ok(msg) = sync_rx1.try_recv() {
                     match msg {
                         SyncMessage::FileTransferAccepted { file_hash } => {
@@ -788,39 +836,7 @@ mod tests {
                         _ => {}
                     }
                 }
-                // Agent 2 -> Agent 1 (Direct libp2p)
-                if let Ok((_peer, msg)) = req_rx2.try_recv() {
-                    match msg {
-                        SyncMessage::FileTransferAccepted { file_hash } => {
-                            tx1_r
-                                .send(IpcMessage::AcceptFileTransfer { file_hash })
-                                .unwrap();
-                        }
-                        SyncMessage::ChunkRequest { file_hash, chunk_hash } => {
-                            let info = at1_r.lock().unwrap().get(&file_hash).cloned();
-                            if let Some((path, manifest)) = info {
-                                if let Some(chunk) =
-                                    manifest.chunks.iter().find(|c| c.hash == chunk_hash)
-                                {
-                                    let data = crate::file_transfer::get_chunk(
-                                        &path,
-                                        chunk.offset,
-                                        chunk.size,
-                                    )
-                                    .unwrap();
-                                    tx2_r
-                                        .send(IpcMessage::ChunkReceived {
-                                            file_hash,
-                                            chunk_hash,
-                                            data,
-                                        })
-                                        .unwrap();
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+
                 thread::sleep(Duration::from_millis(5));
             }
         });
@@ -832,22 +848,23 @@ mod tests {
         })
         .unwrap();
 
-        // Step 2: Wait for Agent 2 to receive IncomingFileRequest
+        // Step 2: Wait for Agent 2 to receive IncomingFileOffer
         let mut file_hash = String::new();
         let mut attempts = 0;
         while attempts < 100 {
             let rm = rm2.lock().unwrap();
-            if let Some(p) = rm.values().next() {
-                file_hash = p.manifest.file_hash.clone();
+            if let Some(h) = rm.get_any_hash() {
+                file_hash = h;
                 break;
             }
             drop(rm);
             thread::sleep(Duration::from_millis(100));
             attempts += 1;
         }
+        
         assert!(
             !file_hash.is_empty(),
-            "Agent 2 should have received manifest"
+            "Agent 2 should have received offer"
         );
 
         // Step 3: Agent 2 accepts transfer
@@ -860,7 +877,13 @@ mod tests {
         attempts = 0;
         let mut completed = false;
         while attempts < 200 {
-            let mut final_path = std::env::current_dir().unwrap();
+            let mut final_path = if let Some(user_dirs) = directories::UserDirs::new() {
+                user_dirs.download_dir()
+                    .map(|d| d.to_path_buf())
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+            } else {
+                std::env::current_dir().unwrap_or_default()
+            };
             final_path.push("test_file.bin");
             if final_path.exists() {
                 let saved_content = std::fs::read(&final_path).unwrap();
@@ -919,10 +942,12 @@ mod tests {
             Arc::clone(&sm),
             Arc::new(relay),
             tm,
+            Arc::new(Mutex::new(HashMap::new())),
         ));
         let lpt = Arc::new(Mutex::new(0u64));
         let at = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let rm = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let peer_map = Arc::new(Mutex::new(HashMap::new()));
 
         // 2. Simulate discovery of the ALREADY PAIRED device
         tx.send(IpcMessage::DeviceDiscovered {
@@ -946,6 +971,7 @@ mod tests {
             sm,
             pm,
             lpt,
+            peer_map,
             None,
             at,
             rm,
@@ -963,6 +989,16 @@ mod tests {
             if let IpcMessage::DeviceDiscovered { node_id, .. } = msg {
                 assert_ne!(node_id, id, "Paired device discovery should not be broadcasted");
             }
+        }
+    }
+
+    trait HackRm {
+        fn get_any_hash(&self) -> Option<String>;
+    }
+
+    impl HackRm for HashMap<String, TransferProgress> {
+        fn get_any_hash(&self) -> Option<String> {
+            self.keys().next().cloned()
         }
     }
 }

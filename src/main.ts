@@ -605,6 +605,34 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }, 1000);
 
+  listen("incoming-file-offer", (event: any) => {
+    console.log("UI: Received incoming-file-offer", event.payload);
+    const [nodeId, offer] = event.payload;
+    currentIncomingFileHash = offer.file_hash;
+    
+    transfers.set(offer.file_hash, {
+      fileHash: offer.file_hash,
+      fileName: offer.file_name,
+      nodeId: nodeId,
+      progress: 0,
+      status: "offered",
+      direction: "incoming"
+    });
+    renderFiles();
+
+    if (fileTransferModal) {
+      const nameEl = document.querySelector("#incoming-file-name");
+      const sizeEl = document.querySelector("#incoming-file-size");
+      const sourceEl = document.querySelector("#incoming-file-source");
+      
+      if (nameEl) nameEl.textContent = offer.file_name;
+      if (sizeEl) sizeEl.textContent = `${(offer.total_size / 1024 / 1024).toFixed(2)} MB`;
+      if (sourceEl) sourceEl.textContent = `from ${getDeviceLabel(nodeId)}`;
+
+      fileTransferModal.classList.remove("hidden");
+    }
+  });
+
   // Agent Event Stream
   listen("incoming-file-request", (event: any) => {
     console.log("UI: Received incoming-file-request", event.payload);
