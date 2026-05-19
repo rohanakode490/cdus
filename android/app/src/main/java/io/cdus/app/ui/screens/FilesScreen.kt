@@ -13,6 +13,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
+import android.app.NotificationManager
+import android.content.Context
 import io.cdus.app.data.FileTransferManager
 import io.cdus.app.data.FileTransferInfo
 import io.cdus.app.data.TransferStatus
@@ -52,6 +55,7 @@ fun FilesScreen() {
 
 @Composable
 fun TransferItem(transfer: FileTransferInfo) {
+    val context = LocalContext.current
     Card(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         colors = CardDefaults.cardColors(
@@ -123,6 +127,9 @@ fun TransferItem(transfer: FileTransferInfo) {
                     TextButton(onClick = { 
                         uniffi.cdus_ffi.rejectFileTransfer(transfer.fileHash)
                         FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.REJECTED))
+                        // Dismiss notification
+                        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                        notificationManager.cancel(2) // FILE_NOTIFICATION_ID
                     }) {
                         Text("Decline", color = MaterialTheme.colorScheme.error)
                     }
@@ -130,6 +137,9 @@ fun TransferItem(transfer: FileTransferInfo) {
                     Button(onClick = { 
                         uniffi.cdus_ffi.acceptFileTransfer(transfer.fileHash)
                         FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.DOWNLOADING))
+                        // Dismiss notification
+                        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                        notificationManager.cancel(2) // FILE_NOTIFICATION_ID
                     }) {
                         Text("Accept")
                     }

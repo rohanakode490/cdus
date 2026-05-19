@@ -15,6 +15,7 @@ import uniffi.cdus_ffi.ClipboardListener
 import uniffi.cdus_ffi.FileTransferListener
 import uniffi.cdus_ffi.setFileTransferListener
 import uniffi.cdus_ffi.FileManifest
+import uniffi.cdus_ffi.FileTransferOffer
 import uniffi.cdus_ffi.acceptFileTransfer
 import uniffi.cdus_ffi.rejectFileTransfer
 import io.cdus.app.data.FileTransferManager
@@ -58,6 +59,21 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         }
     }
 
+    override fun onIncomingOffer(nodeId: String, offer: FileTransferOffer) {
+        Logger.i("Incoming file offer from $nodeId: ${offer.fileName}")
+        
+        FileTransferManager.updateTransfer(
+            FileTransferInfo(
+                fileHash = offer.fileHash,
+                fileName = offer.fileName,
+                progress = 0f,
+                status = TransferStatus.INCOMING
+            )
+        )
+
+        showIncomingNotification(nodeId, offer.fileHash, offer.fileName, offer.totalSize.toLong())
+    }
+
     override fun onIncomingRequest(nodeId: String, manifest: FileManifest) {
         Logger.i("Incoming file request from $nodeId: ${manifest.fileName}")
         
@@ -70,23 +86,38 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
             )
         )
 
+        showIncomingNotification(nodeId, manifest.fileHash, manifest.fileName, manifest.totalSize.toLong())
+    }
+
+    private fun showIncomingNotification(nodeId: String, fileHash: String, fileName: String, totalSize: Long) {
         // Show notification with Accept/Decline actions
         val acceptIntent = Intent(this, FileActionReceiver::class.java).apply {
             action = "ACCEPT"
-            putExtra("file_hash", manifest.fileHash)
+            putExtra("file_hash", fileHash)
         }
-        val acceptPendingIntent = android.app.PendingIntent.getBroadcast(this, 0, acceptIntent, android.app.PendingIntent.FLAG_IMMUTABLE)
+        val acceptPendingIntent = android.app.PendingIntent.getBroadcast(
+            this, 
+            fileHash.hashCode(), 
+            acceptIntent, 
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
 
         val declineIntent = Intent(this, FileActionReceiver::class.java).apply {
             action = "DECLINE"
-            putExtra("file_hash", manifest.fileHash)
+            putExtra("file_hash", fileHash)
         }
-        val declinePendingIntent = android.app.PendingIntent.getBroadcast(this, 1, declineIntent, android.app.PendingIntent.FLAG_IMMUTABLE)
+        val declinePendingIntent = android.app.PendingIntent.getBroadcast(
+            this, 
+            fileHash.hashCode() + 1, 
+            declineIntent, 
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
 
+        val sizeMb = totalSize / 1024f / 1024f
         val notification = NotificationCompat.Builder(this, FILE_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle("Incoming File")
-            .setContentText("${manifest.fileName} from ${io.cdus.app.data.DeviceManager.getLabel(nodeId)}")
+            .setContentText("$fileName (%.2f MB) from ${io.cdus.app.data.DeviceManager.getLabel(nodeId)}".format(sizeMb))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .addAction(android.R.drawable.checkbox_on_background, "Accept", acceptPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePendingIntent)
@@ -193,6 +224,44 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
             .setContentTitle("Transfer Failed")
             .setContentText(error)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(FILE_NOTIFICATION_ID, notification)
+    }
+
+    override fun onPeerAccepted(nodeId: String, fileHash: String) {
+        val label = io.cdus.app.data.DeviceManager.getLabel(nodeId)
+        Logger.i("Peer $label ($nodeId) accepted file $fileHash")
+        
+        FileTransferManager.transfers[fileHash]?.let {
+            FileTransferManager.updateTransfer(it.copy(status = TransferStatus.OUTGOING))
+        }
+
+        val notification = NotificationCompat.Builder(this, FILE_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setContentTitle("File Accepted")
+            .setContentText("$label accepted your file. Starting transfer...")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .build()
+
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(FILE_NOTIFICATION_ID, notification)
+    }
+
+    override fun onPeerRejected(nodeId: String, fileHash: String) {
+        val label = io.cdus.app.data.DeviceManager.getLabel(nodeId)
+        Logger.w("Peer $label ($nodeId) rejected file $fileHash")
+        
+        FileTransferManager.markError(fileHash, "Rejected by $label")
+
+        val notification = NotificationCompat.Builder(this, FILE_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("Transfer Rejected")
+            .setContentText("$label declined the file.")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
             .build()
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

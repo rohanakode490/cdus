@@ -55,14 +55,24 @@ pub trait ClipboardListener: Send + Sync {
     fn on_clipboard_update(&self, content: String, source: String);
 }
 
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FileTransferOffer {
+    pub file_hash: String,
+    pub file_name: String,
+    pub total_size: u64,
+}
+
 #[uniffi::export(callback_interface)]
 pub trait FileTransferListener: Send + Sync {
+    fn on_incoming_offer(&self, node_id: String, offer: FileTransferOffer);
     fn on_incoming_request(&self, node_id: String, manifest: FileManifest);
     fn on_outgoing_transfer_started(&self, manifest: FileManifest);
     fn on_manifest_progress(&self, path: String, progress: f32);
     fn on_transfer_progress(&self, file_hash: String, progress: f32);
     fn on_transfer_complete(&self, file_hash: String);
     fn on_transfer_error(&self, file_hash: String, error: String);
+    fn on_peer_accepted(&self, node_id: String, file_hash: String);
+    fn on_peer_rejected(&self, node_id: String, file_hash: String);
     fn on_peer_disconnected(&self, node_id: String);
 }
 
@@ -117,6 +127,9 @@ static ACTIVE_TRANSFERS: Lazy<
 static RECEIVED_MANIFESTS: Lazy<
     Arc<Mutex<std::collections::HashMap<String, cdus_common::TransferProgress>>>,
 > = Lazy::new(|| Arc::new(Mutex::new(std::collections::HashMap::new())));
+
+static WINDOW_CONTROLLERS: Lazy<Arc<Mutex<std::collections::HashMap<String, flume::Sender<()>>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(std::collections::HashMap::new())));
 
 static STORE: Lazy<Mutex<Option<Arc<cdus_agent::store::Store>>>> = Lazy::new(|| Mutex::new(None));
 
@@ -199,12 +212,14 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                         tx.clone(),
                         node_id.clone(),
                         private_key,
-                        5200, // Default port
+                        5200,
                         Arc::clone(&ACTIVE_PAIRING),
                         sync_manager,
                         relay,
                         turn,
+                        Arc::clone(&ACTIVE_TRANSFERS),
                     );
+
                     let pm = Arc::new(pm);
                     let pm_clone = Arc::clone(&pm);
                     std::thread::spawn(move || {
@@ -288,36 +303,52 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                     }
                                 }
                                 cdus_common::IpcMessage::AcceptFileTransfer { file_hash } => {
-                                    let progress = {
+                                    let progress_data = {
                                         let rm = RECEIVED_MANIFESTS.lock().unwrap();
                                         rm.get(&file_hash)
                                             .map(|p| (p.node_id.clone(), p.manifest.clone()))
                                     };
 
-                                    if let Some((node_id, manifest)) = progress {
-                                        if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
-                                            pm.sync_manager.broadcast(
-                                                cdus_common::SyncMessage::FileTransferAccepted {
-                                                    file_hash: file_hash.clone(),
-                                                },
-                                            );
-                                        }
+                                    if let Some((node_id, manifest_opt)) = progress_data {
+                                        if let Some(manifest) = manifest_opt {
+                                            if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+                                                pm.sync_manager.broadcast(
+                                                    cdus_common::SyncMessage::FileTransferAccepted {
+                                                        file_hash: file_hash.clone(),
+                                                    },
+                                                );
+                                            }
 
-                                        if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
-                                            let req_tx_clone = libp2p_request_tx.clone();
-                                            std::thread::spawn(move || {
-                                                for chunk in manifest.chunks {
-                                                    let _ = req_tx_clone.send((
-                                                        peer_id,
-                                                        cdus_common::SyncMessage::ChunkRequest {
-                                                            file_hash: file_hash.clone(),
-                                                            chunk_hash: chunk.hash.clone(),
-                                                        },
-                                                    ));
-                                                    // Small delay to avoid flooding libp2p
-                                                    std::thread::sleep(std::time::Duration::from_millis(5));
-                                                }
-                                            });
+                                            // Start requesting chunks with sliding window
+                                            let (window_tx, window_rx) = flume::bounded(50);
+                                            for _ in 0..50 {
+                                                let _ = window_tx.send(());
+                                            }
+                                            WINDOW_CONTROLLERS.lock().unwrap().insert(file_hash.clone(), window_tx);
+
+                                            if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
+                                                let req_tx_clone = libp2p_request_tx.clone();
+                                                let file_hash_clone = file_hash.clone();
+                                                std::thread::spawn(move || {
+                                                    for chunk in manifest.chunks {
+                                                        if let Err(_) = window_rx.recv() {
+                                                            break;
+                                                        }
+                                                        let _ = req_tx_clone.send((
+                                                            peer_id,
+                                                            cdus_common::SyncMessage::ChunkRequest {
+                                                                file_hash: file_hash_clone.clone(),
+                                                                chunk_hash: chunk.hash.clone(),
+                                                            },
+                                                        ));
+                                                    }
+                                                });
+                                            }
+                                        } else {
+                                            // Request manifest
+                                            if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+                                                pm.sync_manager.send_to_peer(&node_id, cdus_common::SyncMessage::RequestManifest { file_hash: file_hash.clone() });
+                                            }
                                         }
                                     } else {
                                         error!("FFI: Failed to accept transfer, manifest not found for {}", file_hash);
@@ -327,12 +358,20 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                     }
                                 }
                                 cdus_common::IpcMessage::RejectFileTransfer { file_hash } => {
-                                    if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
-                                        pm.sync_manager.broadcast(
-                                            cdus_common::SyncMessage::FileTransferRejected {
-                                                file_hash,
-                                            },
-                                        );
+                                    let node_id = {
+                                        let rm = RECEIVED_MANIFESTS.lock().unwrap();
+                                        rm.get(&file_hash).map(|p| p.node_id.clone())
+                                    };
+
+                                    if let Some(node_id) = node_id {
+                                        if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+                                            pm.sync_manager.send_to_peer(
+                                                &node_id,
+                                                cdus_common::SyncMessage::FileTransferRejected {
+                                                    file_hash,
+                                                },
+                                            );
+                                        }
                                     }
                                 }
                                 cdus_common::IpcMessage::ChunkReceived {
@@ -342,69 +381,109 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                 } => {
                                     let mut rm = RECEIVED_MANIFESTS.lock().unwrap();
                                     if let Some(progress) = rm.get_mut(&file_hash) {
-                                        if let Some(chunk) = progress
-                                            .manifest
-                                            .chunks
-                                            .iter()
-                                            .find(|c| c.hash == chunk_hash)
-                                        {
-                                            let actual_hash = blake3::hash(&data).to_string();
-                                            if actual_hash == chunk_hash {
-                                                // Save chunk to disk
-                                                // For mobile, we'll save in the data dir
-                                                let mut path = std::path::PathBuf::from(&data_dir);
-                                                path.push(format!("{}.part", file_hash));
+                                        if let Some(manifest) = &progress.manifest {
+                                            if let Some(chunk) = manifest
+                                                .chunks
+                                                .iter()
+                                                .find(|c| c.hash == chunk_hash)
+                                            {
+                                                let actual_hash = blake3::hash(&data).to_string();
+                                                if actual_hash == chunk_hash {
+                                                    // Save chunk to disk
+                                                    // For mobile, we'll save in the data dir
+                                                    let mut path =
+                                                        std::path::PathBuf::from(&data_dir);
+                                                    path.push(format!("{}.part", file_hash));
 
-                                                match std::fs::OpenOptions::new()
-                                                    .create(true)
-                                                    .write(true)
-                                                    .open(&path)
-                                                {
-                                                    Ok(mut file) => {
-                                                        use std::io::{Seek, Write};
-                                                        let _ = file.seek(std::io::SeekFrom::Start(
-                                                            chunk.offset,
-                                                        ));
-                                                        if let Err(e) = file.write_all(&data) {
-                                                            error!("FFI: Failed to write chunk: {}", e);
-                                                            if let Some(tx) = AGENT_TX.lock().unwrap().as_ref() {
-                                                                let _ = tx.send(cdus_common::IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
-                                                            }
-                                                            continue;
-                                                        }
-
-                                                        progress.completed_hashes.insert(chunk_hash);
-
-                                                        let total = progress.manifest.chunks.len();
-                                                        let completed = progress.completed_hashes.len();
-                                                        let percent =
-                                                            (completed as f32 / total as f32) * 100.0;
-
-                                                        if let Some(tx) =
-                                                            AGENT_TX.lock().unwrap().as_ref()
-                                                        {
-                                                            let _ = tx.send(cdus_common::IpcMessage::FileTransferProgress { file_hash: file_hash.clone(), progress: percent });
-                                                            if completed == total {
-                                                                // Move to final destination
-                                                                let mut final_path =
-                                                                    std::path::PathBuf::from(&data_dir);
-                                                                final_path
-                                                                    .push(&progress.manifest.file_name);
-                                                                if let Err(e) = std::fs::rename(&path, &final_path) {
-                                                                    error!("FFI: Failed to rename file: {}", e);
+                                                    match std::fs::OpenOptions::new()
+                                                        .create(true)
+                                                        .write(true)
+                                                        .open(&path)
+                                                    {
+                                                        Ok(mut file) => {
+                                                            use std::io::{Seek, Write};
+                                                            let _ = file.seek(
+                                                                std::io::SeekFrom::Start(
+                                                                    chunk.offset,
+                                                                ),
+                                                            );
+                                                            if let Err(e) = file.write_all(&data) {
+                                                                error!("FFI: Failed to write chunk: {}", e);
+                                                                if let Some(tx) = AGENT_TX.lock().unwrap().as_ref() {
                                                                     let _ = tx.send(cdus_common::IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
-                                                                } else {
-                                                                    let _ = tx.send(cdus_common::IpcMessage::FileTransferComplete { file_hash: file_hash.clone() });
+                                                                }
+                                                                continue;
+                                                            }
+
+                                                            progress
+                                                                .completed_hashes
+                                                                .insert(chunk_hash.clone());
+
+                                                            let total = manifest.chunks.len();
+                                                            let completed =
+                                                                progress.completed_hashes.len();
+                                                            let percent = (completed as f32
+                                                                / total as f32)
+                                                                * 100.0;
+
+                                                            if let Some(tx) =
+                                                                AGENT_TX.lock().unwrap().as_ref()
+                                                            {
+                                                                let _ = tx.send(cdus_common::IpcMessage::FileTransferProgress { file_hash: file_hash.clone(), progress: percent });
+
+                                                                if completed == total {
+                                                                    WINDOW_CONTROLLERS
+                                                                        .lock()
+                                                                        .unwrap()
+                                                                        .remove(&file_hash);
+
+                                                                    // Move to final destination
+                                                                    let mut final_path =
+                                                                        std::path::PathBuf::from(
+                                                                            &data_dir,
+                                                                        );
+                                                                    final_path
+                                                                        .push(&manifest.file_name);
+                                                                    if let Err(e) =
+                                                                        std::fs::rename(
+                                                                            &path,
+                                                                            &final_path,
+                                                                        )
+                                                                    {
+                                                                        error!("FFI: Failed to rename file: {}", e);
+                                                                        let _ = tx.send(cdus_common::IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
+                                                                    } else {
+                                                                        let _ = tx.send(cdus_common::IpcMessage::FileTransferComplete { file_hash: file_hash.clone() });
+                                                                    }
                                                                 }
                                                             }
                                                         }
-                                                    }
-                                                    Err(e) => {
-                                                        error!("FFI: Failed to open part file: {}", e);
-                                                        if let Some(tx) = AGENT_TX.lock().unwrap().as_ref() {
-                                                            let _ = tx.send(cdus_common::IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
+                                                        Err(e) => {
+                                                            error!(
+                                                                "FFI: Failed to open part file: {}",
+                                                                e
+                                                            );
+                                                            if let Some(tx) =
+                                                                AGENT_TX.lock().unwrap().as_ref()
+                                                            {
+                                                                let _ = tx.send(cdus_common::IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
+                                                            }
                                                         }
                                                     }
+                                                } else {
+                                                    error!("FFI: Hash mismatch for chunk {} of file {}", chunk_hash, file_hash);
+                                                    if let Some(tx) = AGENT_TX.lock().unwrap().as_ref() {
+                                                        let _ = tx.send(cdus_common::IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: "Chunk corruption detected".to_string() });
+                                                    }
+                                                }
+
+                                                // ALWAYS release token for sliding window to avoid stalling
+                                                if let Some(w_tx) = WINDOW_CONTROLLERS
+                                                    .lock()
+                                                    .unwrap()
+                                                    .get(&file_hash)
+                                                {
+                                                    let _ = w_tx.try_send(());
                                                 }
                                             }
                                         }
@@ -419,43 +498,76 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                         listener.on_clipboard_update(content, source);
                                     }
                                 }
-                                cdus_common::IpcMessage::IncomingFileRequest {
-                                    node_id,
-                                    manifest,
+                                cdus_common::IpcMessage::IncomingFileOffer {
+                                   node_id,
+                                   offer,
                                 } => {
-                                    let file_hash = manifest.file_hash.clone();
-                                    {
-                                        let mut rm = RECEIVED_MANIFESTS.lock().unwrap();
-                                        rm.insert(
-                                            file_hash.clone(),
-                                            cdus_common::TransferProgress {
-                                                node_id: node_id.clone(),
-                                                manifest: manifest.clone(),
-                                                completed_hashes: std::collections::HashSet::new(),
-                                            },
-                                        );
-                                    }
+                                   let file_hash = offer.file_hash.clone();
+                                   {
+                                       let mut rm = RECEIVED_MANIFESTS.lock().unwrap();
+                                       rm.insert(
+                                           file_hash.clone(),
+                                           cdus_common::TransferProgress {
+                                               node_id: node_id.clone(),
+                                               manifest: None,
+                                               completed_hashes: std::collections::HashSet::new(),
+                                               accepted: false,
+                                           },
+                                       );                                   }
 
-                                    if let Some(listener) =
-                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
-                                    {
-                                        let ffi_manifest = FileManifest {
-                                            file_hash: manifest.file_hash,
-                                            file_name: manifest.file_name,
-                                            total_size: manifest.total_size,
-                                            chunks: manifest
-                                                .chunks
-                                                .into_iter()
-                                                .map(|c| FileChunk {
-                                                    hash: c.hash,
-                                                    offset: c.offset,
-                                                    size: c.size,
-                                                })
-                                                .collect(),
-                                        };
-                                        listener.on_incoming_request(node_id, ffi_manifest);
-                                    }
+                                   if let Some(listener) =
+                                       FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
+                                   {
+                                       let ffi_offer = FileTransferOffer {
+                                           file_hash: offer.file_hash,
+                                           file_name: offer.file_name,
+                                           total_size: offer.total_size,
+                                       };
+                                       listener.on_incoming_offer(node_id, ffi_offer);
+                                   }
                                 }
+                                cdus_common::IpcMessage::IncomingFileRequest {
+                                   node_id,
+                                   manifest,
+                                } => {
+                                   let file_hash = manifest.file_hash.clone();
+                                   {
+                                       let mut rm = RECEIVED_MANIFESTS.lock().unwrap();
+                                       if let Some(progress) = rm.get_mut(&file_hash) {
+                                           progress.manifest = Some(manifest.clone());
+                                       } else {
+                                           rm.insert(
+                                               file_hash.clone(),
+                                               cdus_common::TransferProgress {
+                                                   node_id: node_id.clone(),
+                                                   manifest: Some(manifest.clone()),
+                                                   completed_hashes: std::collections::HashSet::new(),
+                                                   accepted: false,
+                                               },
+                                           );                                       }
+                                   }
+
+                                   if let Some(listener) =
+                                       FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
+                                   {
+                                       let ffi_manifest = FileManifest {
+                                           file_hash: manifest.file_hash,
+                                           file_name: manifest.file_name,
+                                           total_size: manifest.total_size,
+                                           chunks: manifest
+                                               .chunks
+                                               .into_iter()
+                                               .map(|c| FileChunk {
+                                                   hash: c.hash,
+                                                   offset: c.offset,
+                                                   size: c.size,
+                                               })
+                                               .collect(),
+                                       };
+                                       listener.on_incoming_request(node_id, ffi_manifest);
+                                   }
+                                }
+
                                 cdus_common::IpcMessage::FileTransferProgress {
                                     file_hash,
                                     progress,
@@ -488,6 +600,20 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                         FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
                                     {
                                         listener.on_transfer_error(file_hash, error);
+                                    }
+                                }
+                                cdus_common::IpcMessage::PeerAcceptedFile { node_id, file_hash } => {
+                                    if let Some(listener) =
+                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
+                                    {
+                                        listener.on_peer_accepted(node_id, file_hash);
+                                    }
+                                }
+                                cdus_common::IpcMessage::PeerRejectedFile { node_id, file_hash } => {
+                                    if let Some(listener) =
+                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
+                                    {
+                                        listener.on_peer_rejected(node_id, file_hash);
                                     }
                                 }
                                 cdus_common::IpcMessage::PeerDisconnected { node_id } => {
