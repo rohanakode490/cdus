@@ -129,7 +129,12 @@ impl Libp2pManager {
                             libp2p::identify::Config::new("/cdus/1.0.0".into(), key.public()),
                         );
 
-                        let request_response = request_response::cbor::Behaviour::new(
+                        let mut codec = request_response::cbor::codec::Codec::default();
+                        codec = codec.set_request_size_maximum(256 * 1024 * 1024);
+                        codec = codec.set_response_size_maximum(256 * 1024 * 1024);
+
+                        let request_response = request_response::cbor::Behaviour::with_codec(
+                            codec,
                             [(
                                 libp2p::StreamProtocol::new("/cdus/file-transfer/1.0.0"),
                                 request_response::ProtocolSupport::Full,
@@ -225,6 +230,9 @@ impl Libp2pManager {
                                                                 file_hash 
                                                             });
                                                         }
+                                                        SyncMessage::FileTransferError { file_hash, error } => {
+                                                            let _ = tx.send(IpcMessage::FileTransferError { file_hash, error });
+                                                        }
                                                         _ => {}
                                                     }
                                                 } else {
@@ -286,34 +294,41 @@ impl Libp2pManager {
                                                         SyncMessage::ChunkRequest { file_hash, chunk_hash } => {
                                                             info!("Received ChunkRequest for {} / {}", file_hash, chunk_hash);
                                                             
-                                                            let chunk_data = {
-                                                                let at = active_transfers.lock().unwrap();
-                                                                if let Some((path, manifest)) = at.get(&file_hash) {
+                                                            let response = match active_transfers.lock().unwrap().get(&file_hash) {
+                                                                Some((path, manifest)) => {
                                                                     if let Some(chunk) = manifest.chunks.iter().find(|c| c.hash == chunk_hash) {
-                                                                        crate::file_transfer::get_chunk(path, chunk.offset, chunk.size).ok()
+                                                                        match crate::file_transfer::get_chunk(path, chunk.offset, chunk.size) {
+                                                                            Ok(data) => {
+                                                                                let _ = tx.send(IpcMessage::ChunkServed { 
+                                                                                    file_hash: file_hash.clone(), 
+                                                                                    chunk_hash: chunk_hash.clone() 
+                                                                                });
+                                                                                SyncMessage::ChunkResponse {
+                                                                                    file_hash,
+                                                                                    chunk_hash,
+                                                                                    data,
+                                                                                }
+                                                                            },
+                                                                            Err(e) => {
+                                                                                error!("Failed to read chunk {} of file {}: {}", chunk_hash, file_hash, e);
+                                                                                SyncMessage::FileTransferError {
+                                                                                    file_hash,
+                                                                                    error: format!("Read error: {}", e),
+                                                                                }
+                                                                            }
+                                                                        }
                                                                     } else {
-                                                                        None
+                                                                        SyncMessage::FileTransferError {
+                                                                            file_hash,
+                                                                            error: "Chunk not found in manifest".to_string(),
+                                                                        }
                                                                     }
-                                                                } else {
-                                                                    None
-                                                                }
-                                                            };
-
-                                                            let response = if let Some(data) = chunk_data {
-                                                                let _ = tx.send(IpcMessage::ChunkServed { 
-                                                                    file_hash: file_hash.clone(), 
-                                                                    chunk_hash: chunk_hash.clone() 
-                                                                });
-                                                                SyncMessage::ChunkResponse {
-                                                                    file_hash,
-                                                                    chunk_hash,
-                                                                    data,
-                                                                }
-                                                            } else {
-                                                                SyncMessage::ChunkResponse {
-                                                                    file_hash,
-                                                                    chunk_hash,
-                                                                    data: Vec::new(),
+                                                                },
+                                                                None => {
+                                                                    SyncMessage::FileTransferError {
+                                                                        file_hash,
+                                                                        error: "Transfer not active or already completed".to_string(),
+                                                                    }
                                                                 }
                                                             };
 
@@ -332,6 +347,9 @@ impl Libp2pManager {
                                                                 node_id: peer.to_string(),
                                                                 manifest,
                                                             });
+                                                        }
+                                                        SyncMessage::FileTransferError { file_hash, error } => {
+                                                            let _ = tx.send(IpcMessage::FileTransferError { file_hash, error });
                                                         }
                                                         _ => {}
                                                     }

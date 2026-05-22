@@ -731,6 +731,9 @@ fn run_turn_sync_session(
                                     file_hash 
                                 });
                             }
+                            SyncMessage::FileTransferError { file_hash, error } => {
+                                let _ = ipc_tx.send(IpcMessage::FileTransferError { file_hash, error });
+                            }
                             _ => {
                                 warn!("Received unhandled sync message from peer {} via TURN: {:?}", label, msg);
                             }
@@ -814,7 +817,7 @@ fn handle_incoming_connection_inner(
     active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
     self_node_id: String,
     sync_manager: Arc<SyncManager>,
-    active_transfers: Arc<
+    _active_transfers: Arc<
         Mutex<std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>>,
     >,
 ) -> Result<()> {
@@ -1088,7 +1091,7 @@ fn handle_outgoing_connection_inner(
     active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
     self_node_id: String,
     sync_manager: Arc<SyncManager>,
-    active_transfers: Arc<
+    _active_transfers: Arc<
         Mutex<std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>>,
     >,
 ) -> Result<()> {
@@ -1396,6 +1399,9 @@ fn run_sync_session(
                                 chunk_hash,
                                 data,
                             });
+                        }
+                        SyncMessage::FileTransferError { file_hash, error } => {
+                            let _ = ipc_tx.send(IpcMessage::FileTransferError { file_hash, error });
                         }
                     }
                 }

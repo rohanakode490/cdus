@@ -94,6 +94,7 @@ pub enum IpcMessage {
         source_uuid: String,
         payload: Vec<u8>,
     },
+    ConnectRelay,
     ListenEvents,
     // File Transfer
     SendFile {
@@ -149,6 +150,7 @@ pub enum IpcMessage {
     ChunkReceived {
         file_hash: String,
         chunk_hash: String,
+        #[serde(with = "serde_bytes")]
         data: Vec<u8>,
     },
     ChunkServed {
@@ -211,7 +213,12 @@ pub enum SyncMessage {
     ChunkResponse {
         file_hash: String,
         chunk_hash: String,
+        #[serde(with = "serde_bytes")]
         data: Vec<u8>,
+    },
+    FileTransferError {
+        file_hash: String,
+        error: String,
     },
 }
 
