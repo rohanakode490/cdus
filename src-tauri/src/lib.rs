@@ -216,8 +216,8 @@ async fn send_file(node_id: String, path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn accept_file_transfer(file_hash: String) -> Result<String, String> {
-    let msg = IpcMessage::AcceptFileTransfer { file_hash };
+async fn accept_file_transfer(transfer_id: String) -> Result<String, String> {
+    let msg = IpcMessage::AcceptFileTransfer { transfer_id };
     match send_ipc_message(msg)? {
         IpcMessage::Log(msg) => Ok(msg),
         _ => Err("Unexpected response from agent".to_string()),
@@ -225,8 +225,8 @@ async fn accept_file_transfer(file_hash: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn reject_file_transfer(file_hash: String) -> Result<String, String> {
-    let msg = IpcMessage::RejectFileTransfer { file_hash };
+async fn reject_file_transfer(transfer_id: String) -> Result<String, String> {
+    let msg = IpcMessage::RejectFileTransfer { transfer_id };
     match send_ipc_message(msg)? {
         IpcMessage::Log(msg) => Ok(msg),
         _ => Err("Unexpected response from agent".to_string()),
@@ -312,47 +312,89 @@ pub fn run() {
                                 if let Ok(line) = line {
                                     if let Ok(event) = serde_json::from_str::<IpcMessage>(&line) {
                                         match event {
-                                            IpcMessage::IncomingFileRequest {
-                                                node_id,
-                                                manifest,
-                                            } => {
-                                                let _ = app_handle_events.emit(
-                                                    "incoming-file-request",
-                                                    (node_id, manifest),
-                                                );
-                                            }
-                                            IpcMessage::IncomingFileOffer {
-                                                node_id,
-                                                offer,
-                                            } => {
-                                                let _ = app_handle_events.emit(
-                                                    "incoming-file-offer",
-                                                    (node_id, offer),
-                                                );
+                                            IpcMessage::FileProgress(progress_event) => {
+                                                use cdus_common::ProgressEvent;
+                                                match progress_event {
+                                                    ProgressEvent::IncomingRequest {
+                                                        transfer_id,
+                                                        file_name,
+                                                        total_bytes,
+                                                        sender_label,
+                                                    } => {
+                                                        let _ = app_handle_events.emit(
+                                                            "incoming-file-request",
+                                                            (
+                                                                sender_label.clone(),
+                                                                serde_json::json!({
+                                                                    "file_hash": transfer_id,
+                                                                    "file_name": file_name,
+                                                                    "total_size": total_bytes,
+                                                                }),
+                                                            ),
+                                                        );
+                                                    }
+                                                    ProgressEvent::Started {
+                                                        transfer_id,
+                                                        total_bytes: _,
+                                                        is_outgoing,
+                                                    } => {
+                                                        let event_name = if is_outgoing {
+                                                            "file-transfer-progress"
+                                                        } else {
+                                                            "file-transfer-progress" // Or "incoming-transfer-started"?
+                                                        };
+                                                        let _ = app_handle_events.emit(
+                                                            event_name,
+                                                            (transfer_id, 0.0),
+                                                        );
+                                                    }
+                                                    ProgressEvent::Progress {
+                                                        transfer_id,
+                                                        bytes_confirmed,
+                                                    } => {
+                                                        // Note: bytes_confirmed is absolute, but UI expects percentage?
+                                                        // Actually UI expects progress as f32 which is likely percentage.
+                                                        // Let's check how FileTransferProgress was used.
+                                                        let _ = app_handle_events.emit(
+                                                            "file-transfer-progress",
+                                                            (transfer_id, bytes_confirmed as f32),
+                                                        );
+                                                    }
+                                                    ProgressEvent::Complete {
+                                                        transfer_id,
+                                                        ..
+                                                    } => {
+                                                        let _ = app_handle_events
+                                                            .emit("file-transfer-complete", transfer_id);
+                                                    }
+                                                    ProgressEvent::Failed {
+                                                        transfer_id,
+                                                        reason,
+                                                    } => {
+                                                        let _ = app_handle_events.emit(
+                                                            "file-transfer-error",
+                                                            (transfer_id, reason),
+                                                        );
+                                                    }
+                                                }
                                             }
                                             IpcMessage::FileTransferProgress {
-                                                file_hash,
+                                                transfer_id,
                                                 progress,
                                             } => {
                                                 let _ = app_handle_events.emit(
                                                     "file-transfer-progress",
-                                                    (file_hash, progress),
+                                                    (transfer_id, progress),
                                                 );
                                             }
-                                            IpcMessage::FileTransferComplete { file_hash } => {
+                                            IpcMessage::FileTransferComplete { transfer_id } => {
                                                 let _ = app_handle_events
-                                                    .emit("file-transfer-complete", file_hash);
+                                                    .emit("file-transfer-complete", transfer_id);
                                             }
-                                            IpcMessage::FileTransferError { file_hash, error } => {
+                                            IpcMessage::FileTransferError { transfer_id, error } => {
                                                 let _ = app_handle_events.emit(
                                                     "file-transfer-error",
-                                                    (file_hash, error),
-                                                );
-                                            }
-                                            IpcMessage::ManifestProgress { path, progress } => {
-                                                let _ = app_handle_events.emit(
-                                                    "manifest-progress",
-                                                    serde_json::json!({ "path": path, "progress": progress }),
+                                                    (transfer_id, error),
                                                 );
                                             }
                                             IpcMessage::ClipboardChanged { content, .. }

@@ -9,7 +9,7 @@ let scanInterval: any = null;
 let pairingInterval: any = null;
 let currentPairingDevice: any = null;
 const transfers = new Map<string, any>();
-let currentIncomingFileHash = "";
+let currentIncomingTransferId = "";
 
 // --- UI Elements (initialized in DOMContentLoaded) ---
 let fileTransferModal: Element | null = null;
@@ -137,13 +137,13 @@ function renderFiles() {
         <div class="transfer-meta">
           <span>${transfer.direction === "incoming" ? "from" : "to"} ${transfer.nodeId}</span>
           <span>${transfer.progress}%</span>
-          ${transfer.status === "error" || transfer.status === "complete" ? `<button class="text-btn dismiss-btn" data-hash="${transfer.fileHash}">Dismiss</button>` : ""}
+          ${transfer.status === "error" || transfer.status === "complete" ? `<button class="text-btn dismiss-btn" data-id="${transfer.transferId}">Dismiss</button>` : ""}
         </div>
       </div>
     `;
 
     itemEl.querySelector(".dismiss-btn")?.addEventListener("click", () => {
-      transfers.delete(transfer.fileHash);
+      transfers.delete(transfer.transferId);
       renderFiles();
     });
     listContainer.appendChild(itemEl);
@@ -234,7 +234,7 @@ async function renderPairedDevices() {
         initiateFileSend(id);
       });
 
-      pairedList.appendChild(row);
+      pairedList?.appendChild(row);
     });
   } catch (err) {
     console.error("Failed to render paired devices:", err);
@@ -269,7 +269,7 @@ async function initiateFileSend(nodeId: string) {
       const fileName = path.split(/[/\\]/).pop() || "file";
       
       transfers.set(path, {
-          fileHash: path,
+          transferId: path,
           fileName: fileName,
           nodeId: nodeId,
           progress: 0,
@@ -301,7 +301,7 @@ async function updateDiscoveryList() {
     }
 
     discoveryList.innerHTML = "";
-    availableDevices.forEach(([id, name, os, ip, port]) => {
+    availableDevices.forEach(([id, name, os]) => {
       const row = document.createElement("div");
       row.className = "device-row";
       const shortId = id.substring(0, 8);
@@ -322,7 +322,7 @@ async function updateDiscoveryList() {
         }
       });
       
-      discoveryList.appendChild(row);
+      discoveryList?.appendChild(row);
     });
   } catch (err) {
     console.error("Failed to fetch discovered devices:", err);
@@ -558,11 +558,11 @@ window.addEventListener("DOMContentLoaded", () => {
   // --- File Transfer Listeners ---
 
   fileAcceptBtn?.addEventListener("click", async () => {
-    if (currentIncomingFileHash) {
-      await invoke("accept_file_transfer", { fileHash: currentIncomingFileHash });
+    if (currentIncomingTransferId) {
+      await invoke("accept_file_transfer", { transferId: currentIncomingTransferId });
       fileTransferModal?.classList.add("hidden");
       
-      const transfer = transfers.get(currentIncomingFileHash);
+      const transfer = transfers.get(currentIncomingTransferId);
       if (transfer) {
         transfer.status = "downloading";
         renderFiles();
@@ -573,11 +573,11 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   fileRejectBtn?.addEventListener("click", async () => {
-    if (currentIncomingFileHash) {
-      await invoke("reject_file_transfer", { fileHash: currentIncomingFileHash });
+    if (currentIncomingTransferId) {
+      await invoke("reject_file_transfer", { transferId: currentIncomingTransferId });
       fileTransferModal?.classList.add("hidden");
       
-      const transfer = transfers.get(currentIncomingFileHash);
+      const transfer = transfers.get(currentIncomingTransferId);
       if (transfer) {
         transfer.status = "rejected";
         renderFiles();
@@ -608,10 +608,10 @@ window.addEventListener("DOMContentLoaded", () => {
   listen("incoming-file-offer", (event: any) => {
     console.log("UI: Received incoming-file-offer", event.payload);
     const [nodeId, offer] = event.payload;
-    currentIncomingFileHash = offer.file_hash;
+    currentIncomingTransferId = offer.file_hash;
     
     transfers.set(offer.file_hash, {
-      fileHash: offer.file_hash,
+      transferId: offer.file_hash,
       fileName: offer.file_name,
       nodeId: nodeId,
       progress: 0,
@@ -637,10 +637,10 @@ window.addEventListener("DOMContentLoaded", () => {
   listen("incoming-file-request", (event: any) => {
     console.log("UI: Received incoming-file-request", event.payload);
     const [nodeId, manifest] = event.payload;
-    currentIncomingFileHash = manifest.file_hash;
+    currentIncomingTransferId = manifest.file_hash;
     
     transfers.set(manifest.file_hash, {
-      fileHash: manifest.file_hash,
+      transferId: manifest.file_hash,
       fileName: manifest.file_name,
       nodeId: nodeId,
       progress: 0,
@@ -676,7 +676,7 @@ window.addEventListener("DOMContentLoaded", () => {
     } else {
       // If we don't have it yet (e.g. from Android), add it
       transfers.set(path, {
-        fileHash: path,
+        transferId: path,
         fileName: fileName,
         nodeId: "Remote",
         progress: Math.round(progress),
@@ -688,20 +688,18 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   listen("file-transfer-progress", (event: any) => {
-    const [fileHash, progress] = event.payload;
+    const [transferId, progress] = event.payload;
     
-    // Check if we have it by hash
-    let transfer = transfers.get(fileHash);
+    // Check if we have it by ID
+    let transfer = transfers.get(transferId);
     
     if (!transfer) {
-        // Check if we have a "hashing" transfer that should now be this hash
-        // This is tricky because we don't know which path matches which hash.
-        // However, we can look for the most recent "hashing" or "preparing" transfer.
+        // Check if we have a "hashing" transfer that should now be this ID
         const pending = Array.from(transfers.values()).find(t => t.status === "hashing" || t.status === "preparing" || t.status === "pending");
         if (pending) {
-            transfers.delete(pending.fileHash);
-            pending.fileHash = fileHash;
-            transfers.set(fileHash, pending);
+            transfers.delete(pending.transferId);
+            pending.transferId = transferId;
+            transfers.set(transferId, pending);
             transfer = pending;
         }
     }
@@ -717,12 +715,12 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   listen("file-transfer-complete", (event: any) => {
-    const fileHash = event.payload;
+    const transferId = event.payload;
     if (progressLabel) progressLabel.textContent = "Transfer complete!";
     updateProgress(100);
     setTimeout(hideProgressToast, 3000);
     
-    const transfer = transfers.get(fileHash);
+    const transfer = transfers.get(transferId);
     if (transfer) {
       transfer.progress = 100;
       transfer.status = "complete";
@@ -731,11 +729,11 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   listen("file-transfer-error", (event: any) => {
-    const [fileHash, error] = event.payload;
+    const [transferId, error] = event.payload;
     alert(`Transfer failed: ${error}`);
     hideProgressToast();
     
-    const transfer = transfers.get(fileHash);
+    const transfer = transfers.get(transferId);
     if (transfer) {
       transfer.status = "error";
       transfer.error = error;
