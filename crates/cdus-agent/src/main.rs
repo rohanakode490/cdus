@@ -1,14 +1,22 @@
 use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
-use flume::{Receiver, Sender};
+use flume::Sender;
 use interprocess::local_socket::LocalSocketListener;
-use once_cell::sync::Lazy;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::{error, info, warn};
+use tracing::{error, info};
+
+use cdus_agent::{broadcast_event, daemon_loop, EVENT_BUS};
+use cdus_common::{IpcMessage, TransportType};
+use cdus_agent::libp2p_manager::Libp2pManager;
+use cdus_agent::mdns::MdnsManager;
+use cdus_agent::pairing::{ActivePairingState, PairingManager, SyncManager};
+use cdus_agent::relay::RelayManager;
+use cdus_agent::store::Store;
+use cdus_agent::turn_manager::TurnManager;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -42,37 +50,6 @@ enum Commands {
     Install,
     /// Uninstall the agent systemd user service
     Uninstall,
-}
-
-use cdus_common::{IpcMessage, SyncMessage, TransferProgress, TransportType};
-use libp2p_manager::Libp2pManager;
-use mdns::MdnsManager;
-use pairing::{ActivePairingState, PairingManager, SyncManager};
-use relay::RelayManager;
-use store::Store;
-use turn_manager::TurnManager;
-
-mod file_transfer;
-mod integration_tests;
-mod libp2p_manager;
-mod mdns;
-mod pairing;
-mod relay;
-mod store;
-mod turn_manager;
-mod utils;
-
-static EVENT_BUS: Lazy<Arc<Mutex<Vec<Sender<IpcMessage>>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(Vec::new())));
-
-fn broadcast_event(msg: IpcMessage) {
-    let mut bus = EVENT_BUS.lock().unwrap();
-    let before = bus.len();
-    bus.retain(|tx: &Sender<IpcMessage>| tx.send(msg.clone()).is_ok());
-    let after = bus.len();
-    if before > 0 {
-        info!("Broadcast event {:?} to {} subscribers ({} dropped)", msg, after, before - after);
-    }
 }
 
 fn main() {
@@ -124,27 +101,26 @@ fn main() {
     let (tx, rx) = flume::unbounded::<IpcMessage>();
     let (relay, relay_rx) = RelayManager::new(node_id.clone(), cli.relay_url.clone(), tx.clone());
     let relay = Arc::new(relay);
-    if let Err(e) = relay.register() {
-        error!(
-            "Failed to register with relay: {}. Will retry connection in background loop.",
-            e
-        );
-    }
-    relay.start_signaling_loop(relay_rx);
+    let relay_rx_opt = Arc::new(Mutex::new(Some(relay_rx)));
 
     // Initialize Turn Manager
     let turn_manager = Arc::new(TurnManager::new().expect("Failed to initialize TurnManager"));
 
-    let active_transfers: Arc<
-        Mutex<std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>>,
-    > = Arc::new(Mutex::new(std::collections::HashMap::new()));
-    let active_transfers_libp2p = Arc::clone(&active_transfers);
-    let active_transfers_daemon = Arc::clone(&active_transfers);
+    // Phase 5.3: Stale transfer cleanup
+    if let Err(e) = cdus_agent::file_transfer::cleanup_stale_transfers(&store) {
+        error!("Failed to cleanup stale transfers: {}", e);
+    }
 
-    let received_manifests: Arc<Mutex<std::collections::HashMap<String, TransferProgress>>> =
-        Arc::new(Mutex::new(std::collections::HashMap::new()));
-    let received_manifests_libp2p = Arc::clone(&received_manifests);
-    let received_manifests_daemon = Arc::clone(&received_manifests);
+    let (progress_tx, progress_rx) = flume::unbounded();
+    let transfer_manager = Arc::new(cdus_agent::file_transfer::FileTransferManager::new(Arc::clone(&store), progress_tx));
+
+    // Start progress forwarder to broadcast events to all IPC clients
+    let _progress_tx_for_forwarder = tx.clone();
+    thread::spawn(move || {
+        while let Ok(event) = progress_rx.recv() {
+            broadcast_event(IpcMessage::FileProgress(event));
+        }
+    });
 
     // Initialize Libp2p Manager
     let libp2p_manager = Arc::new(
@@ -152,22 +128,16 @@ fn main() {
             private_key.clone(),
             tx.clone(),
             Arc::clone(&store),
-            active_transfers_libp2p,
-            received_manifests_libp2p,
+            Arc::clone(&transfer_manager),
         )
         .expect("Failed to initialize Libp2pManager"),
     );
     libp2p_manager.start();
     let libp2p_sync_tx = libp2p_manager.get_sync_tx();
 
-    // Start mDNS registration
+    // Initialize mDNS Manager
     let mdns = MdnsManager::new();
-    mdns.register_device(&node_id, &label, cli.port);
     let mdns = Arc::new(mdns);
-
-    // Auto-start discovery in background to find paired devices
-    info!("Starting background mDNS discovery for auto-reconnect...");
-    mdns.start_discovery(tx.clone());
 
     let sync_manager = Arc::new(SyncManager::new());
     sync_manager.add_peer(
@@ -177,20 +147,17 @@ fn main() {
     );
     let sync_manager_daemon = Arc::clone(&sync_manager);
 
-    let active_transfers_pm = Arc::clone(&active_transfers);
-
     // Start Pairing Manager
     let pm = PairingManager::new(
         Arc::clone(&store),
         tx.clone(),
-        node_id,
+        node_id.clone(),
         private_key,
         cli.port,
         Arc::clone(&active_pairing),
         Arc::clone(&sync_manager),
         Arc::clone(&relay),
         Arc::clone(&turn_manager),
-        active_transfers_pm,
     );
     let pm = Arc::new(pm);
     let pm_clone = Arc::clone(&pm);
@@ -233,6 +200,7 @@ fn main() {
     let pm_daemon_loop = Arc::clone(&pm);
     let last_ts_daemon = Arc::clone(&last_processed_timestamp);
     let libp2p_request_tx_daemon = libp2p_manager.get_request_tx();
+    let libp2p_manager_daemon = Arc::clone(&libp2p_manager);
     thread::spawn(move || {
         daemon_loop(
             daemon_tx,
@@ -247,8 +215,7 @@ fn main() {
             last_ts_daemon,
             peer_map_daemon,
             Some(libp2p_request_tx_daemon),
-            active_transfers_daemon,
-            received_manifests_daemon,
+            libp2p_manager_daemon,
         );
     });
 
@@ -271,6 +238,10 @@ fn main() {
                 let relay_ipc = Arc::clone(&relay);
                 let store_clone = Arc::clone(&store);
                 let mdns_clone = Arc::clone(&mdns);
+                let relay_rx_opt_clone = Arc::clone(&relay_rx_opt);
+                let node_id_clone = node_id.clone();
+                let label_clone = label.clone();
+                let port = cli.port;
 
                 thread::spawn(move || {
                     let mut buffer = [0u8; 4096];
@@ -295,9 +266,8 @@ fn main() {
                                             }
                                             while let Ok(event) = event_rx.recv() {
                                                 if let Ok(mut bytes) = serde_json::to_vec(&event) {
-                                                    // Add a newline as a simple delimiter for multiple JSON messages
                                                     bytes.push(b'\n');
-                                                    if let Err(_) = stream.write_all(&bytes) {
+                                                    if stream.write_all(&bytes).is_err() {
                                                         break;
                                                     }
                                                 }
@@ -305,7 +275,8 @@ fn main() {
                                             break;
                                         }
                                         IpcMessage::StartScan => {
-                                            info!("IPC: Received StartScan request");
+                                            info!("IPC: Received StartScan request. Registering device and starting discovery.");
+                                            mdns_clone.register_device(&node_id_clone, &label_clone, port);
                                             {
                                                 let mut list =
                                                     discovered_devices_clone.lock().unwrap();
@@ -314,6 +285,28 @@ fn main() {
                                             mdns_clone.start_discovery(tx_clone.clone());
                                             let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
                                                 "Scan started".to_string(),
+                                            ))
+                                            .unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        IpcMessage::ConnectRelay => {
+                                            info!("IPC: Received ConnectRelay request");
+                                            let relay_clone = Arc::clone(&relay_ipc);
+                                            let relay_rx_opt = Arc::clone(&relay_rx_opt_clone);
+                                            thread::spawn(move || {
+                                                if let Err(e) = relay_clone.register() {
+                                                    error!("Failed to register with relay: {}", e);
+                                                }
+                                                let rx = {
+                                                    let mut opt = relay_rx_opt.lock().unwrap();
+                                                    opt.take()
+                                                };
+                                                if let Some(rx) = rx {
+                                                    relay_clone.start_signaling_loop(rx);
+                                                }
+                                            });
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
+                                                "Relay connection initiated".to_string(),
                                             ))
                                             .unwrap();
                                             let _ = stream.write_all(&resp_bytes);
@@ -362,7 +355,8 @@ fn main() {
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                             }
-                                        }                                        IpcMessage::PairWithIp { ip, port } => {
+                                        }
+                                        IpcMessage::PairWithIp { ip, port } => {
                                             if let Ok(ip_addr) = ip.parse() {
                                                 let addr = SocketAddr::new(ip_addr, port);
                                                 let pm_init = Arc::clone(&pm_clone);
@@ -409,20 +403,29 @@ fn main() {
                                             .unwrap();
                                             let _ = stream.write_all(&resp_bytes);
                                         }
-                                        IpcMessage::AcceptFileTransfer { file_hash } => {
+                                        IpcMessage::AcceptFileTransfer { transfer_id } => {
                                             let _ = tx_clone
-                                                .send(IpcMessage::AcceptFileTransfer { file_hash });
+                                                .send(IpcMessage::AcceptFileTransfer { transfer_id });
                                             let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
                                                 "File transfer accepted".to_string(),
                                             ))
                                             .unwrap();
                                             let _ = stream.write_all(&resp_bytes);
                                         }
-                                        IpcMessage::RejectFileTransfer { file_hash } => {
+                                        IpcMessage::RejectFileTransfer { transfer_id } => {
                                             let _ = tx_clone
-                                                .send(IpcMessage::RejectFileTransfer { file_hash });
+                                                .send(IpcMessage::RejectFileTransfer { transfer_id });
                                             let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
                                                 "File transfer rejected".to_string(),
+                                            ))
+                                            .unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        IpcMessage::CancelFileTransfer { transfer_id } => {
+                                            let _ = tx_clone
+                                                .send(IpcMessage::CancelFileTransfer { transfer_id });
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
+                                                "File transfer cancellation requested".to_string(),
                                             ))
                                             .unwrap();
                                             let _ = stream.write_all(&resp_bytes);
@@ -454,23 +457,20 @@ fn main() {
                                                     let merged_devices: Vec<(
                                                         String,
                                                         String,
-                                                        Option<TransportType>,
+                                                        Option<cdus_common::TransportType>,
                                                     )> = devices
                                                         .into_iter()
                                                         .map(|(id, label)| {
                                                             let mut transport = sync_manager_ipc
                                                                 .get_peer_transport(&id);
-                                                            
-                                                            // Fallback to Lan transport if recently seen via mDNS but no active session
                                                             if transport.is_none() {
                                                                 let map = peer_map_clone.lock().unwrap();
                                                                 if let Some((_, _, _, _, last_seen)) = map.get(&id) {
                                                                     if last_seen.elapsed() < std::time::Duration::from_secs(30) {
-                                                                        transport = Some(TransportType::Lan);
+                                                                        transport = Some(cdus_common::TransportType::Lan);
                                                                     }
                                                                 }
                                                             }
-
                                                             (id, label, transport)
                                                         })
                                                         .collect();
@@ -638,690 +638,6 @@ fn main() {
     }
 }
 
-fn daemon_loop(
-    tx: Sender<IpcMessage>,
-    rx: Receiver<IpcMessage>,
-    iterations: Option<usize>,
-    store: Arc<Store>,
-    last_written: Arc<Mutex<Option<String>>>,
-    discovered_devices: Arc<Mutex<Vec<(String, String, String, String, u16)>>>,
-    _active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
-    sync_manager: Arc<SyncManager>,
-    pm: Arc<PairingManager>,
-    last_processed_timestamp: Arc<Mutex<u64>>,
-    peer_map: Arc<
-        Mutex<
-            std::collections::HashMap<
-                String,
-                (String, String, String, u16, std::time::Instant),
-            >,
-        >,
-    >,
-    libp2p_request_tx: Option<Sender<(libp2p::PeerId, SyncMessage)>>,
-    active_transfers: Arc<
-        Mutex<std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>>,
-    >,
-    received_manifests: Arc<Mutex<std::collections::HashMap<String, TransferProgress>>>,
-) {
-    info!("Daemon logic thread started");
-    #[cfg(not(target_os = "android"))]
-    use arboard::Clipboard;
-
-    #[cfg(not(target_os = "android"))]
-    let mut clipboard = Clipboard::new().ok();
-
-    let mut outgoing_progress = std::collections::HashMap::<String, std::collections::HashSet<String>>::new();
-    let mut window_controllers: std::collections::HashMap<String, Sender<()>> = std::collections::HashMap::new();
-
-    let mut count = 0;
-    loop {
-        if let Some(max) = iterations {
-            if count >= max {
-                break;
-            }
-        }
-
-        if let Ok(msg) = rx.try_recv() {
-            info!("Daemon processing: {:?}", msg);
-            match msg {
-                IpcMessage::Ping => {
-                    let _ = tx.send(IpcMessage::Pong);
-                }
-                IpcMessage::ChunkServed { file_hash, chunk_hash } => {
-                    let total_chunks = {
-                        let at = active_transfers.lock().unwrap();
-                        at.get(&file_hash).map(|(_, m)| m.chunks.len())
-                    };
-
-                    if let Some(total) = total_chunks {
-                        let completed = outgoing_progress.entry(file_hash.clone()).or_default();
-                        completed.insert(chunk_hash);
-                        
-                        let percent = (completed.len() as f32 / total as f32) * 100.0;
-                        info!("Outgoing file {} progress: {}/{} ({:.2}%)", file_hash, completed.len(), total, percent);
-                        
-                        let _ = tx.send(IpcMessage::FileTransferProgress {
-                            file_hash: file_hash.clone(),
-                            progress: percent,
-                        });
-
-                        if completed.len() == total {
-                            info!("Outgoing file {} transfer complete!", file_hash);
-                            let _ = tx.send(IpcMessage::FileTransferComplete {
-                                file_hash: file_hash.clone(),
-                            });
-                            outgoing_progress.remove(&file_hash);
-                            // We keep it in active_transfers for a bit in case of retries? 
-                            // Or just remove it.
-                            let mut at = active_transfers.lock().unwrap();
-                            at.remove(&file_hash);
-                        }
-                    }
-                }
-                IpcMessage::ClipboardChanged { content, timestamp } => {
-                    let mut last_ts = last_processed_timestamp.lock().unwrap();
-                    if timestamp > *last_ts {
-                        *last_ts = timestamp;
-                        let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
-
-                        info!("Syncing clipboard content: {}", content);
-                        if let Err(e) = store.append_event(content.as_bytes(), "Local") {
-                            error!("Failed to store clipboard event: {}", e);
-                        }
-                        // Broadcast to peers
-                        sync_manager.broadcast(SyncMessage::ClipboardUpdate {
-                            content: content.clone(),
-                            timestamp,
-                        });
-                        broadcast_event(IpcMessage::ClipboardChanged { content, timestamp });
-                    } else {
-                        info!("Ignoring outdated clipboard change");
-                    }
-                }
-                IpcMessage::SetClipboard {
-                    content,
-                    timestamp,
-                    source,
-                } => {
-                    let mut last_ts = last_processed_timestamp.lock().unwrap();
-                    if timestamp > *last_ts {
-                        *last_ts = timestamp;
-                        let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
-
-                        info!("Writing to clipboard from {}: {}", source, content);
-
-                        // Append to local history as well
-                        if let Err(e) = store.append_event(content.as_bytes(), &source) {
-                            error!("Failed to store received clipboard event: {}", e);
-                        }
-
-                        #[cfg(not(target_os = "android"))]
-                        {
-                            if let Some(ref mut cb) = clipboard {
-                                {
-                                    let mut lw = last_written.lock().unwrap();
-                                    *lw = Some(content.clone());
-                                }
-                                if let Err(e) = cb.set_text(content.clone()) {
-                                    error!("Failed to write to clipboard: {}", e);
-                                    let mut lw = last_written.lock().unwrap();
-                                    *lw = None;
-                                }
-                            } else {
-                                clipboard = Clipboard::new().ok();
-                                error!("Clipboard not available in daemon loop");
-                            }
-                        }
-                        broadcast_event(IpcMessage::SetClipboard {
-                            content,
-                            timestamp,
-                            source,
-                        });
-                    } else {
-                        info!("Ignoring outdated SetClipboard request from {}", source);
-                    }
-                }
-                IpcMessage::DeviceDiscovered {
-                    node_id,
-                    label,
-                    os,
-                    ip,
-                    port,
-                } => {
-                    // Update global peer map for connection fallback
-                    {
-                        let mut map = peer_map.lock().unwrap();
-                        map.insert(node_id.clone(), (label.clone(), os.clone(), ip.clone(), port, std::time::Instant::now()));
-                    }
-
-                    let already_paired = store.is_device_paired(&node_id).unwrap_or(false);
-
-                    if !already_paired {
-                        let mut list = discovered_devices.lock().unwrap();
-                        if !list.iter().any(|(id, _, _, _, _)| id == &node_id) {
-                            list.push((
-                                node_id.clone(),
-                                label.clone(),
-                                os.clone(),
-                                ip.clone(),
-                                port,
-                            ));
-                        }
-                    }
-                    
-                    // Still broadcast the event so UI can show it if it wants, 
-                    // but we might want to skip broadcast for paired too?
-                    // Test expects NO broadcast for paired.
-                    if !already_paired {
-                        broadcast_event(IpcMessage::DeviceDiscovered {
-                            node_id: node_id.clone(),
-                            label: label.clone(),
-                            os: os.clone(),
-                            ip: ip.clone(),
-                            port,
-                        });
-                    }
-
-                    // Auto-connect to trusted peers (even if we didn't broadcast discovery,
-                    // we might still want to trigger connection if not already connected)
-                    if !sync_manager.is_connected(&node_id) {
-                        if let Ok(true) = store.is_device_paired(&node_id) {
-                            if let Ok(ip_addr) = ip.parse() {
-                                let addr = SocketAddr::new(ip_addr, port);
-                                let pm_init = Arc::clone(&pm);
-                                info!("Auto-connecting to trusted peer {} at {}", node_id, addr);
-                                let pm_clone = Arc::clone(&pm_init);
-                                thread::spawn(move || {
-                                    pm_clone.initiate_pairing(addr);
-                                });
-                            }
-                        }
-                    }
-                }
-                IpcMessage::DeviceLost { node_id } => {
-                    let mut list = discovered_devices.lock().unwrap();
-                    list.retain(|(id, _, _, _, _)| !id.starts_with(&node_id));
-                    info!(
-                        "Removed device from discovery list: {} (or prefix)",
-                        node_id
-                    );
-                    broadcast_event(IpcMessage::DeviceLost { node_id });
-                }
-                IpcMessage::PeerDisconnected { node_id } => {
-                    info!("Peer disconnected: {}", node_id);
-                    broadcast_event(IpcMessage::PeerDisconnected { node_id });
-                }
-                IpcMessage::RelayMessage {
-                    source_uuid,
-                    payload,
-                } => {
-                    pm.handle_relay_message(source_uuid, payload);
-                }
-                IpcMessage::SendFile { node_id, path } => {
-                    let path_buf = std::path::PathBuf::from(path);
-                    let sync_manager_clone = Arc::clone(&sync_manager);
-                    let tx_clone = tx.clone();
-                    let active_transfers_clone = Arc::clone(&active_transfers);
-                    let libp2p_request_tx_clone = libp2p_request_tx.clone();
-                    thread::spawn(move || {
-                        info!("Generating manifest for {:?}", path_buf);
-                        let path_str = path_buf.to_string_lossy().to_string();
-                        let tx_for_progress = tx_clone.clone();
-                        let path_for_progress = path_str.clone();
-                        
-                        let progress_callback = move |p: f32| {
-                            let _ = tx_for_progress.send(IpcMessage::ManifestProgress {
-                                path: path_for_progress.clone(),
-                                progress: p,
-                            });
-                        };
-
-                        match file_transfer::generate_manifest(&path_buf, progress_callback) {
-                            Ok(manifest) => {
-                                info!("Manifest generated, sending request to {}", node_id);
-                                let file_hash = manifest.file_hash.clone();
-                                {
-                                    let mut at = active_transfers_clone.lock().unwrap();
-                                    at.insert(file_hash.clone(), (path_buf, manifest.clone()));
-                                }
-
-                                let progress_msg = IpcMessage::FileTransferProgress {
-                                    file_hash: file_hash.clone(),
-                                    progress: 0.0,
-                                };
-                                let _ = tx_clone.send(progress_msg.clone());
-
-                                let msg = SyncMessage::FileTransferOffer(cdus_common::FileTransferOffer {
-                                    file_hash: manifest.file_hash.clone(),
-                                    file_name: manifest.file_name.clone(),
-                                    total_size: manifest.total_size,
-                                });
-                                let mut sent_direct = false;
-                                if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
-                                    if let Some(ref req_tx) = libp2p_request_tx_clone {
-                                        info!("Sending FileTransferOffer directly via libp2p to {}", peer_id);
-                                        let _ = req_tx.send((peer_id, msg.clone()));
-                                        sent_direct = true;
-                                    }
-                                }
-
-                                if !sent_direct {
-                                    if node_id == "all" || node_id == "unknown" {
-                                        sync_manager_clone.broadcast(msg);
-                                        info!("request to {}", node_id);
-                                    } else {
-                                        if !sync_manager_clone.send_to_peer(&node_id, msg.clone()) {
-                                            sync_manager_clone.broadcast(msg);
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!("Failed to generate manifest: {}", e);
-                                let _ = tx_clone.send(IpcMessage::FileTransferError {
-                                    file_hash: path_str,
-                                    error: e.to_string(),
-                                });
-                            }
-                        }
-                    });
-                }
-                IpcMessage::PeerAcceptedFile { node_id, file_hash } => {
-                    info!("Remote peer {} confirmed acceptance of file {}", node_id, file_hash);
-                }
-                IpcMessage::PeerRejectedFile { node_id, file_hash } => {
-                    info!("Remote peer {} rejected file {}", node_id, file_hash);
-                    let mut at = active_transfers.lock().unwrap();
-                    at.remove(&file_hash);
-                    let _ = tx.send(IpcMessage::FileTransferError { 
-                        file_hash, 
-                        error: format!("Peer {} rejected the transfer", node_id) 
-                    });
-                }
-                IpcMessage::IncomingManifestRequest { node_id, file_hash } => {
-                    info!("Daemon: Incoming manifest request for {} from {}", file_hash, node_id);
-                    let manifest = {
-                        let at = active_transfers.lock().unwrap();
-                        at.get(&file_hash).map(|(_, m)| m.clone())
-                    };
-
-                    if let Some(m) = manifest {
-                        let msg = SyncMessage::FileTransferRequest(m);
-                        let mut sent_direct = false;
-                        if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
-                            if let Some(ref req_tx) = libp2p_request_tx {
-                                let _ = req_tx.send((peer_id, msg.clone()));
-                                sent_direct = true;
-                            }
-                        }
-                        if !sent_direct {
-                            if !sync_manager.send_to_peer(&node_id, msg.clone()) {
-                                sync_manager.broadcast(msg);
-                            }
-                        }
-                    }
-                }
-                IpcMessage::AcceptFileTransfer { file_hash } => {
-                    let progress_data = {
-                        let mut rm = received_manifests.lock().unwrap();
-                        if let Some(progress) = rm.get_mut(&file_hash) {
-                            progress.accepted = true;
-                            Some((progress.node_id.clone(), progress.manifest.clone()))
-                        } else {
-                            // Race condition: UI accepted before offer was fully processed.
-                            // Create a dummy entry with a wildcard node ID and request the manifest.
-                            warn!("AcceptFileTransfer called but file_hash {} not in received_manifests. Creating pending entry.", file_hash);
-                            rm.insert(
-                                file_hash.clone(),
-                                TransferProgress {
-                                    node_id: "unknown".to_string(),
-                                    manifest: None,
-                                    completed_hashes: std::collections::HashSet::new(),
-                                    accepted: true,
-                                },
-                            );
-                            Some(("unknown".to_string(), None))
-                        }
-                    };
-
-                    if let Some((node_id, manifest_opt)) = progress_data {
-                        info!("Accepting file transfer for {} from {}", file_hash, node_id);
-                        
-                        if let Some(manifest) = manifest_opt {
-                            let msg = SyncMessage::FileTransferAccepted {
-                                file_hash: file_hash.clone(),
-                            };
-                            let mut sent_direct = false;
-                            
-                            let mut peer_id_opt = None;
-                            if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
-                                peer_id_opt = Some(peer_id);
-                                if let Some(ref req_tx) = libp2p_request_tx {
-                                    info!("Sending FileTransferAccepted directly via libp2p to {}", peer_id);
-                                    let _ = req_tx.send((peer_id, msg.clone()));
-                                    sent_direct = true;
-                                }
-                            }
-                            
-                            if !sent_direct {
-                                if !sync_manager.send_to_peer(&node_id, msg.clone()) {
-                                    sync_manager.broadcast(msg);
-                                }
-                            }
-
-                            // Start requesting chunks
-                            let (window_tx, window_rx) = flume::bounded(50);
-                            for _ in 0..50 {
-                                let _ = window_tx.send(());
-                            }
-                            window_controllers.insert(file_hash.clone(), window_tx);
-
-                            let sync_manager_clone = Arc::clone(&sync_manager);
-                            let libp2p_request_tx_clone = libp2p_request_tx.clone();
-                            let file_hash_clone = file_hash.clone();
-                            let node_id_clone = node_id.clone();
-                            let store_clone = Arc::clone(&store);
-
-                            thread::spawn(move || {
-                                for chunk in manifest.chunks {
-                                    if store_clone.is_chunk_completed(&file_hash_clone, &chunk.hash).unwrap_or(false) {
-                                        continue;
-                                    }
-
-                                    if let Err(_) = window_rx.recv() {
-                                        break;
-                                    }
-                                    let req = SyncMessage::ChunkRequest {
-                                        file_hash: file_hash_clone.clone(),
-                                        chunk_hash: chunk.hash.clone(),
-                                    };
-
-                                    let mut requested = false;
-                                    if let (Some(peer_id), Some(ref req_tx)) =
-                                        (peer_id_opt, &libp2p_request_tx_clone)
-                                    {
-                                        let _ = req_tx.send((peer_id, req.clone()));
-                                        requested = true;
-                                    }
-
-                                    if !requested {
-                                        sync_manager_clone.send_to_peer(&node_id_clone, req);
-                                    }
-                                }
-                            });
-                        } else {
-                            // We only have the offer, need to request manifest
-                            info!("We only have the offer for {}, requesting manifest from {}", file_hash, node_id);
-                            if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
-                                if let Some(ref req_tx) = libp2p_request_tx {
-                                    let _ = req_tx.send((peer_id, SyncMessage::RequestManifest { file_hash: file_hash.clone() }));
-                                }
-                            } else {
-                                let msg = SyncMessage::RequestManifest { file_hash: file_hash.clone() };
-                                if !sync_manager.send_to_peer(&node_id, msg.clone()) {
-                                    sync_manager.broadcast(msg);
-                                }
-                            }
-                        }
-                    }
-                }
-                IpcMessage::RejectFileTransfer { file_hash } => {
-                    let node_id = {
-                        let rm = received_manifests.lock().unwrap();
-                        rm.get(&file_hash).map(|p| p.node_id.clone())
-                    };
-
-                    let msg = SyncMessage::FileTransferRejected { file_hash: file_hash.clone() };
-                    let mut sent_direct = false;
-                    if let Some(ref id) = node_id {
-                        if let Ok(peer_id) = id.parse::<libp2p::PeerId>() {
-                            if let Some(ref req_tx) = libp2p_request_tx {
-                                let _ = req_tx.send((peer_id, msg.clone()));
-                                sent_direct = true;
-                            }
-                        }
-                    }
-                    
-                    if !sent_direct {
-                        if let Some(id) = node_id {
-                            sync_manager.send_to_peer(&id, msg);
-                        }
-                    }
-                }
-                IpcMessage::IncomingChunkRequest { node_id, file_hash, chunk_hash } => {
-                    let chunk_data = {
-                        let at = active_transfers.lock().unwrap();
-                        if let Some((path, manifest)) = at.get(&file_hash) {
-                            if let Some(chunk) = manifest.chunks.iter().find(|c| c.hash == chunk_hash) {
-                                crate::file_transfer::get_chunk(path, chunk.offset, chunk.size).ok()
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    };
-
-                    if let Some(data) = chunk_data {
-                        let msg = SyncMessage::ChunkResponse {
-                            file_hash,
-                            chunk_hash,
-                            data,
-                        };
-                        let mut sent_direct = false;
-                        if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
-                            if let Some(ref req_tx) = libp2p_request_tx {
-                                let _ = req_tx.send((peer_id, msg.clone()));
-                                sent_direct = true;
-                            }
-                        }
-                        if !sent_direct {
-                            sync_manager.send_to_peer(&node_id, msg);
-                        }
-                    }
-                }
-                IpcMessage::IncomingFileOffer { node_id, offer } => {
-                    let file_hash = offer.file_hash.clone();
-                    info!("Daemon: Incoming file offer for {} from {}", offer.file_name, node_id);
-                    let completed_hashes = store.get_completed_chunks(&file_hash).unwrap_or_default();
-                    {
-                        let mut rm = received_manifests.lock().unwrap();
-                        rm.insert(
-                            file_hash.clone(),
-                            TransferProgress {
-                                node_id: node_id.clone(),
-                                manifest: None,
-                                completed_hashes,
-                                accepted: false,
-                            },
-                        );
-                    }
-                    broadcast_event(IpcMessage::IncomingFileOffer { node_id, offer });
-                }
-                IpcMessage::IncomingFileRequest { node_id, manifest } => {
-                    let file_hash = manifest.file_hash.clone();
-                    info!("Daemon: Incoming file request for {} from {}", manifest.file_name, node_id);
-                    let completed_hashes = store.get_completed_chunks(&file_hash).unwrap_or_default();
-                    let mut should_trigger_accept = false;
-                    {
-                        let mut rm = received_manifests.lock().unwrap();
-                        if let Some(progress) = rm.get_mut(&file_hash) {
-                            progress.manifest = Some(manifest.clone());
-                            if progress.completed_hashes.is_empty() {
-                                progress.completed_hashes = completed_hashes;
-                            }
-                            if progress.accepted {
-                                should_trigger_accept = true;
-                            }
-                        } else {
-                            rm.insert(
-                                file_hash.clone(),
-                                TransferProgress {
-                                    node_id: node_id.clone(),
-                                    manifest: Some(manifest.clone()),
-                                    completed_hashes,
-                                    accepted: false,
-                                },
-                            );
-                        }
-                    }
-
-                    if should_trigger_accept {
-                        let _ = tx.send(IpcMessage::AcceptFileTransfer { file_hash: file_hash.clone() });
-                    }
-                    
-                    broadcast_event(IpcMessage::IncomingFileRequest { node_id, manifest });
-                }
-                IpcMessage::FileTransferProgress {
-                    file_hash,
-                    progress,
-                } => {
-                    info!("Daemon: Broadcasting progress for {}: {}%", file_hash, progress);
-                    broadcast_event(IpcMessage::FileTransferProgress {
-                        file_hash,
-                        progress,
-                    });
-                }
-                IpcMessage::FileTransferComplete { file_hash } => {
-                    info!("Daemon: Broadcasting completion for {}", file_hash);
-                    broadcast_event(IpcMessage::FileTransferComplete { file_hash });
-                }
-                IpcMessage::FileTransferError { file_hash, error } => {
-                    error!("Daemon: Broadcasting error for {}: {}", file_hash, error);
-                    broadcast_event(IpcMessage::FileTransferError { file_hash, error });
-                }
-                IpcMessage::ManifestProgress { path, progress } => {
-                    broadcast_event(IpcMessage::ManifestProgress { path, progress });
-                }
-                IpcMessage::ChunkReceived {
-                    file_hash,
-                    chunk_hash,
-                    data,
-                } => {
-                    let mut rm = received_manifests.lock().unwrap();
-                    if let Some(progress) = rm.get_mut(&file_hash) {
-                        if let Some(manifest) = &progress.manifest {
-                            if let Some(chunk) = manifest
-                                .chunks
-                                .iter()
-                                .find(|c| c.hash == chunk_hash)
-                            {
-                                let actual_hash = blake3::hash(&data).to_string();
-                                if actual_hash == chunk_hash {
-                                    let mut path = std::env::temp_dir();
-                                    path.push(format!("{}.part", file_hash));
-
-                                    match std::fs::OpenOptions::new()
-                                        .create(true)
-                                        .write(true)
-                                        .open(&path)
-                                    {
-                                        Ok(mut file) => {
-                                            use std::io::{Seek, Write};
-                                            if let Err(e) = file.seek(std::io::SeekFrom::Start(chunk.offset)) {
-                                                error!("Failed to seek in part file: {}", e);
-                                                let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
-                                            } else if let Err(e) = file.write_all(&data) {
-                                                error!("Failed to write chunk to part file: {}", e);
-                                                let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
-                                            } else {
-                                                progress.completed_hashes.insert(chunk_hash.clone());
-                                                let _ = store.mark_chunk_completed(&file_hash, &chunk_hash);
-
-                                                let total = manifest.chunks.len();
-                                                let completed = progress.completed_hashes.len();
-                                                let percent = (completed as f32 / total as f32) * 100.0;
-                                                info!(
-                                                    "File {} progress: {}/{} ({:.2}%)",
-                                                    file_hash, completed, total, percent
-                                                );
-
-                                                let _ = tx.send(IpcMessage::FileTransferProgress {
-                                                    file_hash: file_hash.clone(),
-                                                    progress: percent,
-                                                });
-
-                                                if completed == total {
-                                                    info!("File {} download complete!", file_hash);
-                                                    window_controllers.remove(&file_hash);
-                                                    let _ = store.clear_file_chunks(&file_hash);
-                                                    // Resolve download directory
-                                                    let mut final_path = if let Some(user_dirs) = directories::UserDirs::new() {
-                                                        user_dirs.download_dir()
-                                                            .map(|d| d.to_path_buf())
-                                                            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-                                                    } else {
-                                                        std::env::current_dir().unwrap_or_default()
-                                                    };
-                                                    
-                                                    final_path.push(&manifest.file_name);
-                                                    
-                                                    // Handle filename collision
-                                                    let mut version = 1;
-                                                    let original_final_path = final_path.clone();
-                                                    while final_path.exists() {
-                                                        let stem = original_final_path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
-                                                        let ext = original_final_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                                                        let ext_suffix = if ext.is_empty() { String::new() } else { format!(".{}", ext) };
-                                                        final_path = original_final_path.with_file_name(format!("{} ({}){}", stem, version, ext_suffix));
-                                                        version += 1;
-                                                    }
-
-                                                    if let Err(e) = std::fs::rename(&path, &final_path) {
-                                                        error!("Failed to move completed file to final destination: {}", e);
-                                                        let _ = tx.send(IpcMessage::FileTransferError {
-                                                            file_hash: file_hash.clone(),
-                                                            error: format!("Failed to save file: {}", e),
-                                                        });
-                                                    } else {
-                                                        info!("Saved completed file to {:?}", final_path);
-                                                        let _ = tx.send(IpcMessage::FileTransferComplete {
-                                                            file_hash: file_hash.clone(),
-                                                        });
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!("Failed to open part file: {}", e);
-                                            let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
-                                        }
-                                    }
-                                } else {
-                                    error!("Chunk hash mismatch for {}: expected {}, got {}", file_hash, chunk_hash, actual_hash);
-                                    let _ = tx.send(IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: "Chunk integrity check failed".to_string() });
-                                }
-
-                                // ALWAYS release token for sliding window to avoid stalling
-                                if let Some(w_tx) = window_controllers.get(&file_hash) {
-                                    let _ = w_tx.try_send(());
-                                }
-                            }
-                        }
-                    }
-
-                    // Separate check for removal
-                    let mut complete = false;
-                    if let Some(p) = rm.get(&file_hash) {
-                        if let Some(manifest) = &p.manifest {
-                            if p.completed_hashes.len() == manifest.chunks.len() {
-                                complete = true;
-                            }
-                        }
-                    }
-                    if complete {
-                        rm.remove(&file_hash);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        thread::sleep(Duration::from_millis(100));
-        count += 1;
-    }
-}
-
 fn clipboard_watcher(tx: Sender<IpcMessage>, last_written: Arc<Mutex<Option<String>>>) {
     #[cfg(not(target_os = "android"))]
     {
@@ -1439,72 +755,8 @@ fn run_command(cmd: &str, args: &[&str]) {
     let status = std::process::Command::new(cmd)
         .args(args)
         .status()
-        .expect(&format!("Failed to execute {}", cmd));
+        .unwrap_or_else(|_| panic!("Failed to execute {}", cmd));
     if !status.success() {
         error!("Command {} {:?} failed", cmd, args);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_daemon_loop_ping_pong() {
-        let (agent_tx, daemon_rx) = flume::unbounded();
-        let (daemon_tx, agent_rx) = flume::unbounded();
-
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::init(dir.path()).unwrap();
-        let store = Arc::new(store);
-        let lw = Arc::new(Mutex::new(None));
-        let dd = Arc::new(Mutex::new(Vec::new()));
-        let ap = Arc::new(Mutex::new(None));
-        let tm = Arc::new(TurnManager::new().unwrap());
-        let (relay, _) = RelayManager::new(
-            "test".to_string(),
-            "http://localhost".to_string(),
-            daemon_tx.clone(),
-        );
-        let relay = Arc::new(relay);
-        let lpt = Arc::new(Mutex::new(0u64));
-
-        agent_tx.send(IpcMessage::Ping).unwrap();
-        let at = Arc::new(Mutex::new(std::collections::HashMap::new()));
-        let rm = Arc::new(Mutex::new(std::collections::HashMap::new()));
-        let pm = PairingManager::new(
-            Arc::clone(&store),
-            daemon_tx.clone(),
-            "test".to_string(),
-            vec![],
-            0,
-            Arc::clone(&ap),
-            Arc::new(SyncManager::new()),
-            Arc::clone(&relay),
-            tm,
-            Arc::clone(&at),
-        );
-        let pm = Arc::new(pm);
-
-        let pm_map = Arc::new(Mutex::new(std::collections::HashMap::new()));
-        daemon_loop(
-            daemon_tx,
-            daemon_rx,
-            Some(5),
-            store,
-            lw,
-            dd,
-            ap,
-            Arc::new(SyncManager::new()),
-            pm,
-            lpt,
-            pm_map,
-            None,
-            at,
-            rm,
-        );
-
-        let resp = agent_rx.try_recv().expect("Should have received a Pong");
-        assert_eq!(resp, IpcMessage::Pong);
     }
 }

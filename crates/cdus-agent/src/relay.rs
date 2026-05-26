@@ -70,7 +70,11 @@ impl RelayManager {
         let url = format!("{}/v1/turn?uuid={}", self.relay_url, self.node_id);
         info!("Fetching TURN credentials from relay at {}...", url);
 
-        let resp = ureq::get(&url).call()?;
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(5))
+            .build();
+
+        let resp = agent.get(&url).call()?;
 
         if resp.status() == 200 {
             let creds: TurnCredentials = resp.into_json()?;
@@ -108,7 +112,10 @@ impl RelayManager {
         };
 
         info!("Registering device with relay at {}...", url);
-        let resp = ureq::post(&url).send_json(&req)?;
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(5))
+            .build();
+        let resp = agent.post(&url).send_json(&req)?;
 
         if resp.status() == 201 || resp.status() == 200 {
             info!("Device registered successfully.");
@@ -128,7 +135,10 @@ impl RelayManager {
         let req = serde_json::json!({ "uuid": uuid });
 
         info!("Revoking device {} with relay at {}...", uuid, url);
-        let resp = ureq::post(&url).send_json(&req)?;
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(5))
+            .build();
+        let resp = agent.post(&url).send_json(&req)?;
 
         if resp.status() == 200 {
             info!("Device {} revoked successfully.", uuid);

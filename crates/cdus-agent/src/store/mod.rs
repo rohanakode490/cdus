@@ -9,6 +9,23 @@ pub struct Store {
     pub state_conn: Mutex<Connection>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TransferRecord {
+    pub transfer_id: String,
+    pub direction: String,
+    pub peer_node_id: String,
+    pub file_path: String,
+    pub file_name: String,
+    pub total_bytes: i64,
+    pub bytes_confirmed: i64,
+    pub chunk_size: i64,
+    pub file_hash: String,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 impl Store {
     pub fn init(data_dir: &Path) -> Result<Self> {
         let events_path = data_dir.join("events.db");
@@ -70,13 +87,46 @@ impl Store {
             [],
         )?;
 
-        // File chunks table for resumable transfers
-        events_conn.execute(
-            "CREATE TABLE IF NOT EXISTS file_chunks (
-                file_hash TEXT,
-                chunk_hash TEXT,
-                PRIMARY KEY (file_hash, chunk_hash)
+        // Phase 1.1: File Transfers tables in state.db
+        state_conn.execute(
+            "CREATE TABLE IF NOT EXISTS file_transfers (
+                transfer_id     TEXT PRIMARY KEY,         -- UUID v4
+                direction       TEXT NOT NULL,            -- 'outgoing' | 'incoming'
+                peer_node_id    TEXT NOT NULL,            -- who we're transferring with
+                file_path       TEXT NOT NULL,            -- absolute path on THIS device
+                file_name       TEXT NOT NULL,            -- original filename (display only)
+                total_bytes     INTEGER NOT NULL,
+                bytes_confirmed INTEGER NOT NULL DEFAULT 0, -- last ACKed offset
+                chunk_size      INTEGER NOT NULL DEFAULT 262144, -- 256KB default
+                file_hash       TEXT NOT NULL,            -- BLAKE3 hex of whole file
+                status          TEXT NOT NULL DEFAULT 'pending',
+                -- 'pending' | 'awaiting_acceptance' | 'in_progress' | 'paused' | 'complete' | 'failed' | 'declined'
+                error_message   TEXT,                     -- populated on 'failed'
+                created_at      INTEGER NOT NULL,         -- unix timestamp ms
+                updated_at      INTEGER NOT NULL
             )",
+            [],
+        )?;
+
+        state_conn.execute(
+            "CREATE TABLE IF NOT EXISTS file_chunks (
+                transfer_id     TEXT NOT NULL REFERENCES file_transfers(transfer_id),
+                chunk_index     INTEGER NOT NULL,
+                chunk_hash      TEXT NOT NULL,            -- BLAKE3 hex of this chunk's plaintext
+                byte_offset     INTEGER NOT NULL,         -- start byte of this chunk in file
+                byte_length     INTEGER NOT NULL,
+                verified        INTEGER NOT NULL DEFAULT 0, -- 0 = not verified, 1 = hash verified
+                PRIMARY KEY (transfer_id, chunk_index)
+            )",
+            [],
+        )?;
+
+        state_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_transfers_status ON file_transfers(status)",
+            [],
+        )?;
+        state_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_transfers_peer ON file_transfers(peer_node_id)",
             [],
         )?;
 
@@ -84,44 +134,241 @@ impl Store {
             events_conn: Mutex::new(events_conn),
             state_conn: Mutex::new(state_conn),
         })
-        }
+    }
 
-        pub fn mark_chunk_completed(&self, file_hash: &str, chunk_hash: &str) -> Result<()> {
-        let conn = self.events_conn.lock().unwrap();
+    // --- File Transfer Methods ---
+
+    pub fn create_transfer(
+        &self,
+        transfer_id: &str,
+        direction: &str,
+        peer_node_id: &str,
+        file_path: &str,
+        file_name: &str,
+        total_bytes: u64,
+        chunk_size: u32,
+        file_hash: &str,
+    ) -> Result<()> {
+        let conn = self.state_conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
         conn.execute(
-            "INSERT OR IGNORE INTO file_chunks (file_hash, chunk_hash) VALUES (?1, ?2)",
-            (file_hash, chunk_hash),
+            "INSERT INTO file_transfers (
+                transfer_id, direction, peer_node_id, file_path, file_name,
+                total_bytes, chunk_size, file_hash, status, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, ?9)",
+            (
+                transfer_id,
+                direction,
+                peer_node_id,
+                file_path,
+                file_name,
+                total_bytes as i64,
+                chunk_size as i64,
+                file_hash,
+                now,
+            ),
         )?;
         Ok(())
-        }
+    }
 
-        pub fn is_chunk_completed(&self, file_hash: &str, chunk_hash: &str) -> Result<bool> {
-        let conn = self.events_conn.lock().unwrap();
-        let count: i64 = conn.query_row(
-            "SELECT count(*) FROM file_chunks WHERE file_hash = ?1 AND chunk_hash = ?2",
-            (file_hash, chunk_hash),
-            |row| row.get(0),
+    pub fn update_transfer_status(&self, transfer_id: &str, status: &str) -> Result<()> {
+        let conn = self.state_conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        conn.execute(
+            "UPDATE file_transfers SET status = ?1, updated_at = ?2 WHERE transfer_id = ?3",
+            (status, now, transfer_id),
         )?;
-        Ok(count > 0)
+        Ok(())
+    }
+
+    pub fn update_transfer_status_error(&self, transfer_id: &str, error: &str) -> Result<()> {
+        let conn = self.state_conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        conn.execute(
+            "UPDATE file_transfers SET status = 'failed', error_message = ?1, updated_at = ?2 WHERE transfer_id = ?3",
+            (error, now, transfer_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn update_bytes_confirmed(&self, transfer_id: &str, bytes: u64) -> Result<()> {
+        let conn = self.state_conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        conn.execute(
+            "UPDATE file_transfers SET bytes_confirmed = ?1, updated_at = ?2 WHERE transfer_id = ?3",
+            (bytes as i64, now, transfer_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn insert_chunk(
+        &self,
+        transfer_id: &str,
+        index: u32,
+        hash: &str,
+        offset: u64,
+        length: u32,
+    ) -> Result<()> {
+        let conn = self.state_conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO file_chunks (transfer_id, chunk_index, chunk_hash, byte_offset, byte_length)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            (transfer_id, index, hash, offset as i64, length as i64),
+        )?;
+        Ok(())
+    }
+
+    pub fn insert_chunks_batch(
+        &self,
+        transfer_id: &str,
+        chunks: &[(u32, String, u64, u32)],
+    ) -> Result<()> {
+        let mut conn = self.state_conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO file_chunks (transfer_id, chunk_index, chunk_hash, byte_offset, byte_length)
+                 VALUES (?1, ?2, ?3, ?4, ?5)"
+            )?;
+            for (index, hash, offset, length) in chunks {
+                stmt.execute((transfer_id, index, hash, *offset as i64, *length as i64))?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_chunk_verified(&self, transfer_id: &str, index: u32) -> Result<()> {
+        let conn = self.state_conn.lock().unwrap();
+        conn.execute(
+            "UPDATE file_chunks SET verified = 1 WHERE transfer_id = ?1 AND chunk_index = ?2",
+            (transfer_id, index),
+        )?;
+        Ok(())
+    }
+
+    pub fn get_transfer(&self, transfer_id: &str) -> Result<Option<TransferRecord>> {
+        let conn = self.state_conn.lock().unwrap();
+        conn.query_row(
+            "SELECT transfer_id, direction, peer_node_id, file_path, file_name,
+                    total_bytes, bytes_confirmed, chunk_size, file_hash, status,
+                    error_message, created_at, updated_at
+             FROM file_transfers WHERE transfer_id = ?",
+            [transfer_id],
+            |row| {
+                Ok(TransferRecord {
+                    transfer_id: row.get(0)?,
+                    direction: row.get(1)?,
+                    peer_node_id: row.get(2)?,
+                    file_path: row.get(3)?,
+                    file_name: row.get(4)?,
+                    total_bytes: row.get(5)?,
+                    bytes_confirmed: row.get(6)?,
+                    chunk_size: row.get(7)?,
+                    file_hash: row.get(8)?,
+                    status: row.get(9)?,
+                    error_message: row.get(10)?,
+                    created_at: row.get(11)?,
+                    updated_at: row.get(12)?,
+                })
+            },
+        )
+        .optional()
+    }
+
+    pub fn get_transfers_older_than(&self, cutoff_ms: i64, statuses: &[&str]) -> Result<Vec<TransferRecord>> {
+        let conn = self.state_conn.lock().unwrap();
+
+        let status_placeholders: String = statuses.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let query = format!(
+            "SELECT transfer_id, direction, peer_node_id, file_path, file_name,
+                    total_bytes, bytes_confirmed, chunk_size, file_hash, status,
+                    error_message, created_at, updated_at
+             FROM file_transfers WHERE created_at < ?1 AND status IN ({})",
+            status_placeholders
+        );
+
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        params.push(Box::new(cutoff_ms));
+        for status in statuses {
+            params.push(Box::new(status.to_string()));
         }
 
-        pub fn get_completed_chunks(&self, file_hash: &str) -> Result<std::collections::HashSet<String>> {
-        let conn = self.events_conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT chunk_hash FROM file_chunks WHERE file_hash = ?")?;
-        let rows = stmt.query_map([file_hash], |row| row.get(0))?;
-        let mut hashes = std::collections::HashSet::new();
+        let mut stmt = conn.prepare(&query)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            Ok(TransferRecord {
+                transfer_id: row.get(0)?,
+                direction: row.get(1)?,
+                peer_node_id: row.get(2)?,
+                file_path: row.get(3)?,
+                file_name: row.get(4)?,
+                total_bytes: row.get(5)?,
+                bytes_confirmed: row.get(6)?,
+                chunk_size: row.get(7)?,
+                file_hash: row.get(8)?,
+                status: row.get(9)?,
+                error_message: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
         for row in rows {
-            hashes.insert(row?);
+            results.push(row?);
         }
-        Ok(hashes)
-        }
+        Ok(results)
+    }
 
-        pub fn clear_file_chunks(&self, file_hash: &str) -> Result<()> {
-        let conn = self.events_conn.lock().unwrap();
-        conn.execute("DELETE FROM file_chunks WHERE file_hash = ?", [file_hash])?;
-        Ok(())
-        }
+    pub fn get_transfer_history(&self, limit: u32) -> Result<Vec<TransferRecord>> {
+        let conn = self.state_conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT transfer_id, direction, peer_node_id, file_path, file_name,
+                    total_bytes, bytes_confirmed, chunk_size, file_hash, status,
+                    error_message, created_at, updated_at
+             FROM file_transfers ORDER BY created_at DESC LIMIT ?",
+        )?;
 
+        let rows = stmt.query_map([limit], |row| {
+            Ok(TransferRecord {
+                transfer_id: row.get(0)?,
+                direction: row.get(1)?,
+                peer_node_id: row.get(2)?,
+                file_path: row.get(3)?,
+                file_name: row.get(4)?,
+                total_bytes: row.get(5)?,
+                bytes_confirmed: row.get(6)?,
+                chunk_size: row.get(7)?,
+                file_hash: row.get(8)?,
+                status: row.get(9)?,
+                error_message: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
 
     pub fn append_event(&self, payload: &[u8], source: &str) -> Result<String> {
         let conn = self.events_conn.lock().unwrap();

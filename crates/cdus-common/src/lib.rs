@@ -101,124 +101,139 @@ pub enum IpcMessage {
         node_id: String,
         path: String,
     },
-    IncomingFileRequest {
-        node_id: String,
-        manifest: FileManifest,
-    },
-    IncomingFileOffer {
-        node_id: String,
-        offer: FileTransferOffer,
-    },
-    IncomingManifestRequest {
-        node_id: String,
-        file_hash: String,
-    },
     AcceptFileTransfer {
-        file_hash: String,
+        transfer_id: String,
     },
     RejectFileTransfer {
-        file_hash: String,
+        transfer_id: String,
     },
-    IncomingChunkRequest {
-        node_id: String,
-        file_hash: String,
-        chunk_hash: String,
-    },
-    PeerAcceptedFile {
-        node_id: String,
-        file_hash: String,
-    },
-    PeerRejectedFile {
-        node_id: String,
-        file_hash: String,
+    CancelFileTransfer {
+        transfer_id: String,
     },
     FileTransferProgress {
-        file_hash: String,
+        transfer_id: String,
         progress: f32,
     },
     FileTransferComplete {
-        file_hash: String,
+        transfer_id: String,
     },
     FileTransferError {
-        file_hash: String,
+        transfer_id: String,
         error: String,
     },
-    ManifestProgress {
-        path: String,
-        progress: f32,
+    // New File Transfer IPC
+    FileProgress(ProgressEvent),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum ProgressEvent {
+    Started {
+        transfer_id: String,
+        total_bytes: u64,
+        is_outgoing: bool,
     },
-    ChunkReceived {
-        file_hash: String,
-        chunk_hash: String,
-        #[serde(with = "serde_bytes")]
-        data: Vec<u8>,
+    Progress {
+        transfer_id: String,
+        bytes_confirmed: u64,
     },
-    ChunkServed {
-        file_hash: String,
-        chunk_hash: String,
+    Complete {
+        transfer_id: String,
+        dest_path: std::path::PathBuf,
+    },
+    Failed {
+        transfer_id: String,
+        reason: String,
+    },
+    IncomingRequest {
+        transfer_id: String,
+        file_name: String,
+        total_bytes: u64,
+        sender_label: String,
     },
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-pub struct FileChunk {
-    pub hash: String,
-    pub offset: u64,
-    pub size: u32,
+// --- New File Transfer Protocol (Phase 2) ---
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct TransferRequest {
+    pub transfer_id:  String,   // UUID
+    pub file_name:    String,   // display name only
+    pub total_bytes:  u64,
+    pub chunk_size:   u32,      // sender's preferred chunk size
+    pub file_hash:    String,   // BLAKE3 hex of whole file
+    pub sender_label: String,   // "Rahul's Laptop" — shown in accept dialog
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-pub struct FileManifest {
-    pub file_hash: String,
-    pub file_name: String,
-    pub total_size: u64,
-    pub chunks: Vec<FileChunk>,
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct TransferAcceptance {
+    pub transfer_id:  String,
+    pub accepted:     bool,
+    pub resume_from:  u64,      // byte offset — 0 for fresh, N for resume
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ChunkFrame {
+    pub transfer_id:  String,
+    pub chunk_index:  u32,
+    pub byte_offset:  u64,
+    #[serde(with = "serde_bytes")]
+    pub data:         Vec<u8>,  // encrypted chunk payload
+    pub chunk_hash:   String,   // BLAKE3 of plaintext (verify after decrypt)
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ChunkAck {
+    pub transfer_id:  String,
+    pub chunk_index:  u32,
+    pub bytes_confirmed: u64,   // cumulative confirmed offset
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct TransferComplete {
+    pub transfer_id:  String,
+    pub file_hash:    String,   // BLAKE3 of whole file — receiver verifies
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct TransferError {
+    pub transfer_id:  String,
+    pub reason:       String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "type")]
+pub enum FileMessage {
+    Request(TransferRequest),
+    Acceptance(TransferAcceptance),
+    Chunk(ChunkFrame),
+    Ack(ChunkAck),
+    Complete(TransferComplete),
+    Error(TransferError),
+    Cancel { transfer_id: String },
+}
+
+impl FileMessage {
+    pub fn to_vec(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+        rmp_serde::to_vec(self)
+    }
+
+    pub fn from_slice(slice: &[u8]) -> Result<Self, rmp_serde::decode::Error> {
+        rmp_serde::from_slice(slice)
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct TransferProgress {
     pub node_id: String,
-    pub manifest: Option<FileManifest>,
     pub completed_hashes: std::collections::HashSet<String>,
     pub accepted: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-pub struct FileTransferOffer {
-    pub file_hash: String,
-    pub file_name: String,
-    pub total_size: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum SyncMessage {
     ClipboardUpdate {
         content: String,
         timestamp: u64,
-    },
-    FileTransferOffer(FileTransferOffer),
-    RequestManifest {
-        file_hash: String,
-    },
-    FileTransferRequest(FileManifest),
-    FileTransferAccepted {
-        file_hash: String,
-    },
-    FileTransferRejected {
-        file_hash: String,
-    },
-    ChunkRequest {
-        file_hash: String,
-        chunk_hash: String,
-    },
-    ChunkResponse {
-        file_hash: String,
-        chunk_hash: String,
-        #[serde(with = "serde_bytes")]
-        data: Vec<u8>,
-    },
-    FileTransferError {
-        file_hash: String,
-        error: String,
     },
 }
 
