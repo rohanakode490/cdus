@@ -125,7 +125,7 @@ fun TransferItem(transfer: FileTransferInfo) {
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = { 
-                        uniffi.cdus_ffi.rejectFileTransfer(transfer.fileHash)
+                        uniffi.cdus_ffi.rejectFileTransfer(transfer.transferId)
                         FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.REJECTED))
                         // Dismiss notification
                         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -135,7 +135,7 @@ fun TransferItem(transfer: FileTransferInfo) {
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(onClick = { 
-                        uniffi.cdus_ffi.acceptFileTransfer(transfer.fileHash)
+                        uniffi.cdus_ffi.acceptFileTransfer(transfer.transferId)
                         FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.DOWNLOADING))
                         // Dismiss notification
                         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -147,7 +147,7 @@ fun TransferItem(transfer: FileTransferInfo) {
             } else if (transfer.status == TransferStatus.COMPLETE || transfer.status == TransferStatus.ERROR || transfer.status == TransferStatus.REJECTED) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = { FileTransferManager.removeTransfer(transfer.fileHash) }) {
+                    TextButton(onClick = { FileTransferManager.removeTransfer(transfer.transferId) }) {
                         Text("Dismiss")
                     }
                 }

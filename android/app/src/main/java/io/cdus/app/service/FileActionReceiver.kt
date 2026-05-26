@@ -9,21 +9,21 @@ import uniffi.cdus_ffi.rejectFileTransfer
 
 class FileActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val fileHash = intent.getStringExtra("file_hash") ?: return
+        val transferId = intent.getStringExtra("transfer_id") ?: return
         val action = intent.action
 
-        Logger.i("FileActionReceiver received: $action for $fileHash")
+        Logger.i("FileActionReceiver received: $action for $transferId")
 
         when (action) {
             "ACCEPT" -> {
-                acceptFileTransfer(fileHash)
-                io.cdus.app.data.FileTransferManager.transfers[fileHash]?.let {
+                acceptFileTransfer(transferId)
+                io.cdus.app.data.FileTransferManager.transfers[transferId]?.let {
                     io.cdus.app.data.FileTransferManager.updateTransfer(it.copy(status = io.cdus.app.data.TransferStatus.DOWNLOADING))
                 }
             }
             "DECLINE" -> {
-                rejectFileTransfer(fileHash)
-                io.cdus.app.data.FileTransferManager.transfers[fileHash]?.let {
+                rejectFileTransfer(transferId)
+                io.cdus.app.data.FileTransferManager.transfers[transferId]?.let {
                     io.cdus.app.data.FileTransferManager.updateTransfer(it.copy(status = io.cdus.app.data.TransferStatus.REJECTED))
                 }
             }

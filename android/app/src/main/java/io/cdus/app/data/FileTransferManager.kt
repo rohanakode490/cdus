@@ -7,7 +7,7 @@ enum class TransferStatus {
 }
 
 data class FileTransferInfo(
-    val fileHash: String,
+    val transferId: String,
     val fileName: String,
     val progress: Float,
     val status: TransferStatus,
@@ -18,41 +18,41 @@ object FileTransferManager {
     val transfers = mutableStateMapOf<String, FileTransferInfo>()
 
     fun updateTransfer(info: FileTransferInfo) {
-        transfers[info.fileHash] = info
+        transfers[info.transferId] = info
     }
 
-    fun linkPathToHash(path: String, fileHash: String) {
+    fun linkPathToId(path: String, transferId: String) {
         val current = transfers[path]
         if (current != null) {
             transfers.remove(path)
-            transfers[fileHash] = current.copy(fileHash = fileHash)
+            transfers[transferId] = current.copy(transferId = transferId)
         }
     }
 
-    fun updateProgress(fileHash: String, progress: Float) {
-        val current = transfers[fileHash]
+    fun updateProgress(transferId: String, progress: Float) {
+        val current = transfers[transferId]
         if (current != null) {
             val newStatus = if (current.status == TransferStatus.INCOMING) TransferStatus.DOWNLOADING else current.status
-            transfers[fileHash] = current.copy(progress = progress, status = newStatus)
+            transfers[transferId] = current.copy(progress = progress, status = newStatus)
         }
     }
 
-    fun markComplete(fileHash: String) {
-        val current = transfers[fileHash]
+    fun markComplete(transferId: String) {
+        val current = transfers[transferId]
         if (current != null) {
-            transfers[fileHash] = current.copy(progress = 100f, status = TransferStatus.COMPLETE)
+            transfers[transferId] = current.copy(progress = 100f, status = TransferStatus.COMPLETE)
         }
     }
 
-    fun markError(fileHash: String, error: String) {
-        val current = transfers[fileHash]
+    fun markError(transferId: String, error: String) {
+        val current = transfers[transferId]
         if (current != null) {
-            transfers[fileHash] = current.copy(status = TransferStatus.ERROR, error = error)
+            transfers[transferId] = current.copy(status = TransferStatus.ERROR, error = error)
         }
     }
 
-    fun removeTransfer(fileHash: String) {
-        transfers.remove(fileHash)
+    fun removeTransfer(transferId: String) {
+        transfers.remove(transferId)
     }
 
     fun clearFinished() {

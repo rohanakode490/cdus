@@ -4,6 +4,8 @@ use blake3;
 use once_cell::sync::Lazy;
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
+use cdus_common::{IpcMessage, SyncMessage, ProgressEvent};
+use cdus_agent::file_transfer::FileTransferManager;
 
 #[uniffi::export]
 pub fn init_logging() {
@@ -35,44 +37,21 @@ pub struct ClipboardHistoryItem {
     pub timestamp: String,
 }
 
-#[derive(uniffi::Record, Clone, Debug)]
-pub struct FileChunk {
-    pub hash: String,
-    pub offset: u64,
-    pub size: u32,
-}
-
-#[derive(uniffi::Record, Clone, Debug)]
-pub struct FileManifest {
-    pub file_hash: String,
-    pub file_name: String,
-    pub total_size: u64,
-    pub chunks: Vec<FileChunk>,
-}
-
 #[uniffi::export(callback_interface)]
 pub trait ClipboardListener: Send + Sync {
     fn on_clipboard_update(&self, content: String, source: String);
 }
 
-#[derive(uniffi::Record, Clone, Debug)]
-pub struct FileTransferOffer {
-    pub file_hash: String,
-    pub file_name: String,
-    pub total_size: u64,
-}
-
 #[uniffi::export(callback_interface)]
 pub trait FileTransferListener: Send + Sync {
-    fn on_incoming_offer(&self, node_id: String, offer: FileTransferOffer);
-    fn on_incoming_request(&self, node_id: String, manifest: FileManifest);
-    fn on_outgoing_transfer_started(&self, manifest: FileManifest);
-    fn on_manifest_progress(&self, path: String, progress: f32);
-    fn on_transfer_progress(&self, file_hash: String, progress: f32);
-    fn on_transfer_complete(&self, file_hash: String);
-    fn on_transfer_error(&self, file_hash: String, error: String);
-    fn on_peer_accepted(&self, node_id: String, file_hash: String);
-    fn on_peer_rejected(&self, node_id: String, file_hash: String);
+    fn on_incoming_request(&self, node_id: String, transfer_id: String, file_name: String, total_bytes: u64, sender_label: String);
+    fn on_incoming_transfer_started(&self, transfer_id: String, file_name: String, total_bytes: u64);
+    fn on_outgoing_transfer_started(&self, transfer_id: String, file_name: String, total_bytes: u64);
+    fn on_transfer_progress(&self, transfer_id: String, progress: f32);
+    fn on_transfer_complete(&self, transfer_id: String, dest_path: String);
+    fn on_transfer_error(&self, transfer_id: String, error: String);
+    fn on_peer_accepted(&self, node_id: String, transfer_id: String);
+    fn on_peer_rejected(&self, node_id: String, transfer_id: String);
     fn on_peer_disconnected(&self, node_id: String);
 }
 
@@ -120,20 +99,17 @@ static PAIRING_MANAGER: Lazy<Mutex<Option<Arc<cdus_agent::pairing::PairingManage
 static LIBP2P_MANAGER: Lazy<Mutex<Option<Arc<cdus_agent::libp2p_manager::Libp2pManager>>>> =
     Lazy::new(|| Mutex::new(None));
 
-static ACTIVE_TRANSFERS: Lazy<
-    Arc<Mutex<std::collections::HashMap<String, (std::path::PathBuf, cdus_common::FileManifest)>>>,
-> = Lazy::new(|| Arc::new(Mutex::new(std::collections::HashMap::new())));
-
-static RECEIVED_MANIFESTS: Lazy<
-    Arc<Mutex<std::collections::HashMap<String, cdus_common::TransferProgress>>>,
-> = Lazy::new(|| Arc::new(Mutex::new(std::collections::HashMap::new())));
-
-static WINDOW_CONTROLLERS: Lazy<Arc<Mutex<std::collections::HashMap<String, flume::Sender<()>>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(std::collections::HashMap::new())));
+static TRANSFER_MANAGER: Lazy<Mutex<Option<Arc<FileTransferManager>>>> =
+    Lazy::new(|| Mutex::new(None));
 
 static STORE: Lazy<Mutex<Option<Arc<cdus_agent::store::Store>>>> = Lazy::new(|| Mutex::new(None));
 
-static AGENT_TX: Lazy<Mutex<Option<flume::Sender<cdus_common::IpcMessage>>>> =
+static RELAY_MANAGER: Lazy<Mutex<Option<Arc<cdus_agent::relay::RelayManager>>>> =
+    Lazy::new(|| Mutex::new(None));
+static RELAY_RX: Lazy<Mutex<Option<flume::Receiver<cdus_agent::relay::SignalMessage>>>> =
+    Lazy::new(|| Mutex::new(None));
+
+static AGENT_TX: Lazy<Mutex<Option<flume::Sender<IpcMessage>>>> =
     Lazy::new(|| Mutex::new(None));
 
 #[uniffi::export]
@@ -156,13 +132,50 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
             match store.get_or_create_identity(path) {
                 Ok((node_id, private_key)) => {
                     *LOCAL_NODE_ID.lock().unwrap() = node_id.clone();
+                    
                     let label = store
                         .get_state("device_name")
                         .unwrap_or(None)
                         .unwrap_or_else(|| "Android Device".to_string());
-
+                    
                     let (tx, rx) = flume::unbounded();
                     *AGENT_TX.lock().unwrap() = Some(tx.clone());
+
+                    let (p_tx, p_rx) = flume::unbounded();
+                    let transfer_manager = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
+                    *TRANSFER_MANAGER.lock().unwrap() = Some(Arc::clone(&transfer_manager));
+
+                    // Forward progress events to listeners
+                    std::thread::spawn(move || {
+                        while let Ok(event) = p_rx.recv() {
+                            if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                                match event {
+                                    ProgressEvent::Started { transfer_id, total_bytes, is_outgoing } => {
+                                        // We don't have filename here easily, but for started it's okay
+                                        if is_outgoing {
+                                            listener.on_outgoing_transfer_started(transfer_id, "file".to_string(), total_bytes);
+                                        } else {
+                                            listener.on_incoming_transfer_started(transfer_id, "file".to_string(), total_bytes);
+                                        }
+                                    }
+                                    ProgressEvent::Progress { transfer_id, bytes_confirmed } => {
+                                        // Need to lookup total_bytes to give percentage if listener expects it
+                                        // For now just pass confirmed as raw or handle percent in listener
+                                        listener.on_transfer_progress(transfer_id, bytes_confirmed as f32);
+                                    }
+                                    ProgressEvent::Complete { transfer_id, dest_path } => {
+                                        listener.on_transfer_complete(transfer_id, dest_path.to_string_lossy().to_string());
+                                    }
+                                    ProgressEvent::Failed { transfer_id, reason } => {
+                                        listener.on_transfer_error(transfer_id, reason);
+                                    }
+                                    ProgressEvent::IncomingRequest { transfer_id, file_name, total_bytes, sender_label } => {
+                                        listener.on_incoming_request(String::new(), transfer_id, file_name, total_bytes, sender_label);
+                                    }
+                                }
+                            }
+                        }
+                    });
 
                     // Initialize Relay Manager with a default URL for now
                     let relay_url = if cfg!(target_os = "android") {
@@ -176,7 +189,8 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                         tx.clone(),
                     );
                     let relay = Arc::new(relay);
-                    relay.start_signaling_loop(relay_rx);
+                    *RELAY_MANAGER.lock().unwrap() = Some(Arc::clone(&relay));
+                    *RELAY_RX.lock().unwrap() = Some(relay_rx);
 
                     // Initialize Turn Manager
                     let turn = Arc::new(
@@ -186,12 +200,12 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
 
                     // Initialize Libp2p Manager
                     let libp2p_manager = Arc::new(
-                        cdus_agent::libp2p_manager::Libp2pManager::new(
+                        cdus_agent::libp2p_manager::Libp2pManager::new_with_download_dir(
                             private_key.clone(),
                             tx.clone(),
                             Arc::clone(&store),
-                            Arc::clone(&ACTIVE_TRANSFERS),
-                            Arc::clone(&RECEIVED_MANIFESTS),
+                            Arc::clone(&transfer_manager),
+                            Some(std::path::PathBuf::from(data_dir.clone())),
                         )
                         .expect("Failed to initialize Libp2pManager"),
                     );
@@ -217,7 +231,6 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                         sync_manager,
                         relay,
                         turn,
-                        Arc::clone(&ACTIVE_TRANSFERS),
                     );
 
                     let pm = Arc::new(pm);
@@ -228,268 +241,11 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
 
                     *PAIRING_MANAGER.lock().unwrap() = Some(pm);
 
-                    let libp2p_request_tx = libp2p_manager.get_request_tx();
-
                     // Background thread to drain messages and notify listeners
                     std::thread::spawn(move || {
                         while let Ok(msg) = rx.recv() {
                             match msg {
-                                cdus_common::IpcMessage::SendFile { node_id, path } => {
-                                    if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
-                                        let path_buf = std::path::PathBuf::from(&path);
-                                        let path_str = path.clone();
-                                        let tx_for_progress = AGENT_TX.lock().unwrap().clone();
-                                        
-                                        let progress_callback = move |p: f32| {
-                                            if let Some(tx) = tx_for_progress.as_ref() {
-                                                let _ = tx.send(cdus_common::IpcMessage::ManifestProgress {
-                                                    path: path_str.clone(),
-                                                    progress: p,
-                                                });
-                                            }
-                                        };
-
-                                        match cdus_agent::file_transfer::generate_manifest(&path_buf, progress_callback) {
-                                            Ok(manifest) => {
-                                                let mut at = ACTIVE_TRANSFERS.lock().unwrap();
-                                                at.insert(
-                                                    manifest.file_hash.clone(),
-                                                    (path_buf, manifest.clone()),
-                                                );
-
-                                                if let Some(listener) =
-                                                    FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
-                                                {
-                                                    let ffi_manifest = FileManifest {
-                                                        file_hash: manifest.file_hash.clone(),
-                                                        file_name: manifest.file_name.clone(),
-                                                        total_size: manifest.total_size,
-                                                        chunks: manifest
-                                                            .chunks
-                                                            .iter()
-                                                            .map(|c| FileChunk {
-                                                                hash: c.hash.clone(),
-                                                                offset: c.offset,
-                                                                size: c.size,
-                                                            })
-                                                            .collect(),
-                                                    };
-                                                    listener.on_outgoing_transfer_started(ffi_manifest);
-                                                }
-
-                                                let _ = libp2p_request_tx.send((
-                                                    peer_id,
-                                                    cdus_common::SyncMessage::FileTransferRequest(
-                                                        manifest,
-                                                    ),
-                                                ));
-                                            }
-                                            Err(e) => {
-                                                error!("FFI: Failed to generate manifest: {}", e);
-                                                if let Some(listener) =
-                                                    FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
-                                                {
-                                                    listener.on_transfer_error(path, e.to_string());
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        error!("FFI: Failed to parse PeerId: {}", node_id);
-                                        if let Some(listener) =
-                                            FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
-                                        {
-                                            listener.on_transfer_error(path, "Invalid PeerId".to_string());
-                                        }
-                                    }
-                                }
-                                cdus_common::IpcMessage::AcceptFileTransfer { file_hash } => {
-                                    let progress_data = {
-                                        let rm = RECEIVED_MANIFESTS.lock().unwrap();
-                                        rm.get(&file_hash)
-                                            .map(|p| (p.node_id.clone(), p.manifest.clone()))
-                                    };
-
-                                    if let Some((node_id, manifest_opt)) = progress_data {
-                                        if let Some(manifest) = manifest_opt {
-                                            if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
-                                                pm.sync_manager.broadcast(
-                                                    cdus_common::SyncMessage::FileTransferAccepted {
-                                                        file_hash: file_hash.clone(),
-                                                    },
-                                                );
-                                            }
-
-                                            // Start requesting chunks with sliding window
-                                            let (window_tx, window_rx) = flume::bounded(50);
-                                            for _ in 0..50 {
-                                                let _ = window_tx.send(());
-                                            }
-                                            WINDOW_CONTROLLERS.lock().unwrap().insert(file_hash.clone(), window_tx);
-
-                                            if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
-                                                let req_tx_clone = libp2p_request_tx.clone();
-                                                let file_hash_clone = file_hash.clone();
-                                                std::thread::spawn(move || {
-                                                    for chunk in manifest.chunks {
-                                                        if let Err(_) = window_rx.recv() {
-                                                            break;
-                                                        }
-                                                        let _ = req_tx_clone.send((
-                                                            peer_id,
-                                                            cdus_common::SyncMessage::ChunkRequest {
-                                                                file_hash: file_hash_clone.clone(),
-                                                                chunk_hash: chunk.hash.clone(),
-                                                            },
-                                                        ));
-                                                    }
-                                                });
-                                            }
-                                        } else {
-                                            // Request manifest
-                                            if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
-                                                pm.sync_manager.send_to_peer(&node_id, cdus_common::SyncMessage::RequestManifest { file_hash: file_hash.clone() });
-                                            }
-                                        }
-                                    } else {
-                                        error!("FFI: Failed to accept transfer, manifest not found for {}", file_hash);
-                                        if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
-                                            listener.on_transfer_error(file_hash, "Manifest not found".to_string());
-                                        }
-                                    }
-                                }
-                                cdus_common::IpcMessage::RejectFileTransfer { file_hash } => {
-                                    let node_id = {
-                                        let rm = RECEIVED_MANIFESTS.lock().unwrap();
-                                        rm.get(&file_hash).map(|p| p.node_id.clone())
-                                    };
-
-                                    if let Some(node_id) = node_id {
-                                        if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
-                                            pm.sync_manager.send_to_peer(
-                                                &node_id,
-                                                cdus_common::SyncMessage::FileTransferRejected {
-                                                    file_hash,
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
-                                cdus_common::IpcMessage::ChunkReceived {
-                                    file_hash,
-                                    chunk_hash,
-                                    data,
-                                } => {
-                                    let mut rm = RECEIVED_MANIFESTS.lock().unwrap();
-                                    if let Some(progress) = rm.get_mut(&file_hash) {
-                                        if let Some(manifest) = &progress.manifest {
-                                            if let Some(chunk) = manifest
-                                                .chunks
-                                                .iter()
-                                                .find(|c| c.hash == chunk_hash)
-                                            {
-                                                let actual_hash = blake3::hash(&data).to_string();
-                                                if actual_hash == chunk_hash {
-                                                    // Save chunk to disk
-                                                    // For mobile, we'll save in the data dir
-                                                    let mut path =
-                                                        std::path::PathBuf::from(&data_dir);
-                                                    path.push(format!("{}.part", file_hash));
-
-                                                    match std::fs::OpenOptions::new()
-                                                        .create(true)
-                                                        .write(true)
-                                                        .open(&path)
-                                                    {
-                                                        Ok(mut file) => {
-                                                            use std::io::{Seek, Write};
-                                                            let _ = file.seek(
-                                                                std::io::SeekFrom::Start(
-                                                                    chunk.offset,
-                                                                ),
-                                                            );
-                                                            if let Err(e) = file.write_all(&data) {
-                                                                error!("FFI: Failed to write chunk: {}", e);
-                                                                if let Some(tx) = AGENT_TX.lock().unwrap().as_ref() {
-                                                                    let _ = tx.send(cdus_common::IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
-                                                                }
-                                                                continue;
-                                                            }
-
-                                                            progress
-                                                                .completed_hashes
-                                                                .insert(chunk_hash.clone());
-
-                                                            let total = manifest.chunks.len();
-                                                            let completed =
-                                                                progress.completed_hashes.len();
-                                                            let percent = (completed as f32
-                                                                / total as f32)
-                                                                * 100.0;
-
-                                                            if let Some(tx) =
-                                                                AGENT_TX.lock().unwrap().as_ref()
-                                                            {
-                                                                let _ = tx.send(cdus_common::IpcMessage::FileTransferProgress { file_hash: file_hash.clone(), progress: percent });
-
-                                                                if completed == total {
-                                                                    WINDOW_CONTROLLERS
-                                                                        .lock()
-                                                                        .unwrap()
-                                                                        .remove(&file_hash);
-
-                                                                    // Move to final destination
-                                                                    let mut final_path =
-                                                                        std::path::PathBuf::from(
-                                                                            &data_dir,
-                                                                        );
-                                                                    final_path
-                                                                        .push(&manifest.file_name);
-                                                                    if let Err(e) =
-                                                                        std::fs::rename(
-                                                                            &path,
-                                                                            &final_path,
-                                                                        )
-                                                                    {
-                                                                        error!("FFI: Failed to rename file: {}", e);
-                                                                        let _ = tx.send(cdus_common::IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
-                                                                    } else {
-                                                                        let _ = tx.send(cdus_common::IpcMessage::FileTransferComplete { file_hash: file_hash.clone() });
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                        Err(e) => {
-                                                            error!(
-                                                                "FFI: Failed to open part file: {}",
-                                                                e
-                                                            );
-                                                            if let Some(tx) =
-                                                                AGENT_TX.lock().unwrap().as_ref()
-                                                            {
-                                                                let _ = tx.send(cdus_common::IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: e.to_string() });
-                                                            }
-                                                        }
-                                                    }
-                                                } else {
-                                                    error!("FFI: Hash mismatch for chunk {} of file {}", chunk_hash, file_hash);
-                                                    if let Some(tx) = AGENT_TX.lock().unwrap().as_ref() {
-                                                        let _ = tx.send(cdus_common::IpcMessage::FileTransferError { file_hash: file_hash.clone(), error: "Chunk corruption detected".to_string() });
-                                                    }
-                                                }
-
-                                                // ALWAYS release token for sliding window to avoid stalling
-                                                if let Some(w_tx) = WINDOW_CONTROLLERS
-                                                    .lock()
-                                                    .unwrap()
-                                                    .get(&file_hash)
-                                                {
-                                                    let _ = w_tx.try_send(());
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                cdus_common::IpcMessage::SetClipboard {
+                                IpcMessage::SetClipboard {
                                     content, source, ..
                                 } => {
                                     if let Some(listener) =
@@ -498,130 +254,44 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                         listener.on_clipboard_update(content, source);
                                     }
                                 }
-                                cdus_common::IpcMessage::IncomingFileOffer {
-                                   node_id,
-                                   offer,
+                                IpcMessage::DeviceDiscovered {
+                                    node_id,
+                                    label,
+                                    os,
+                                    ip,
+                                    port,
                                 } => {
-                                   let file_hash = offer.file_hash.clone();
-                                   {
-                                       let mut rm = RECEIVED_MANIFESTS.lock().unwrap();
-                                       rm.insert(
-                                           file_hash.clone(),
-                                           cdus_common::TransferProgress {
-                                               node_id: node_id.clone(),
-                                               manifest: None,
-                                               completed_hashes: std::collections::HashSet::new(),
-                                               accepted: false,
-                                           },
-                                       );                                   }
+                                    let local_id = LOCAL_NODE_ID.lock().unwrap().clone();
+                                    if !local_id.is_empty() && node_id == local_id {
+                                        continue;
+                                    }
 
-                                   if let Some(listener) =
-                                       FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
-                                   {
-                                       let ffi_offer = FileTransferOffer {
-                                           file_hash: offer.file_hash,
-                                           file_name: offer.file_name,
-                                           total_size: offer.total_size,
-                                       };
-                                       listener.on_incoming_offer(node_id, ffi_offer);
-                                   }
-                                }
-                                cdus_common::IpcMessage::IncomingFileRequest {
-                                   node_id,
-                                   manifest,
-                                } => {
-                                   let file_hash = manifest.file_hash.clone();
-                                   {
-                                       let mut rm = RECEIVED_MANIFESTS.lock().unwrap();
-                                       if let Some(progress) = rm.get_mut(&file_hash) {
-                                           progress.manifest = Some(manifest.clone());
-                                       } else {
-                                           rm.insert(
-                                               file_hash.clone(),
-                                               cdus_common::TransferProgress {
-                                                   node_id: node_id.clone(),
-                                                   manifest: Some(manifest.clone()),
-                                                   completed_hashes: std::collections::HashSet::new(),
-                                                   accepted: false,
-                                               },
-                                           );                                       }
-                                   }
+                                    let device = DiscoveredDevice {
+                                        node_id: node_id.clone(),
+                                        label: label.clone(),
+                                        os: os.clone(),
+                                        ip: ip.clone(),
+                                        port,
+                                    };
 
-                                   if let Some(listener) =
-                                       FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
-                                   {
-                                       let ffi_manifest = FileManifest {
-                                           file_hash: manifest.file_hash,
-                                           file_name: manifest.file_name,
-                                           total_size: manifest.total_size,
-                                           chunks: manifest
-                                               .chunks
-                                               .into_iter()
-                                               .map(|c| FileChunk {
-                                                   hash: c.hash,
-                                                   offset: c.offset,
-                                                   size: c.size,
-                                               })
-                                               .collect(),
-                                       };
-                                       listener.on_incoming_request(node_id, ffi_manifest);
-                                   }
-                                }
+                                    // Update global peer map (always, even if paired)
+                                    {
+                                        let mut map = PEER_MAP.lock().unwrap();
+                                        map.insert(node_id.clone(), (device.clone(), std::time::Instant::now()));
+                                    }
 
-                                cdus_common::IpcMessage::FileTransferProgress {
-                                    file_hash,
-                                    progress,
-                                } => {
-                                    if let Some(listener) =
-                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
-                                    {
-                                        listener.on_transfer_progress(file_hash, progress);
+                                    let mut list = DISCOVERED.lock().unwrap();
+                                    if !list.iter().any(|d| d.node_id == node_id) {
+                                        info!(
+                                            "FFI: Discovered device: {} ({}) at {}:{}",
+                                            label, node_id, ip, port
+                                        );
+                                        list.push(device);
                                     }
                                 }
-                                cdus_common::IpcMessage::ManifestProgress {
-                                    path,
-                                    progress,
-                                } => {
-                                    if let Some(listener) =
-                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
-                                    {
-                                        listener.on_manifest_progress(path, progress);
-                                    }
-                                }
-                                cdus_common::IpcMessage::FileTransferComplete { file_hash } => {
-                                    if let Some(listener) =
-                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
-                                    {
-                                        listener.on_transfer_complete(file_hash);
-                                    }
-                                }
-                                cdus_common::IpcMessage::FileTransferError { file_hash, error } => {
-                                    if let Some(listener) =
-                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
-                                    {
-                                        listener.on_transfer_error(file_hash, error);
-                                    }
-                                }
-                                cdus_common::IpcMessage::PeerAcceptedFile { node_id, file_hash } => {
-                                    if let Some(listener) =
-                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
-                                    {
-                                        listener.on_peer_accepted(node_id, file_hash);
-                                    }
-                                }
-                                cdus_common::IpcMessage::PeerRejectedFile { node_id, file_hash } => {
-                                    if let Some(listener) =
-                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
-                                    {
-                                        listener.on_peer_rejected(node_id, file_hash);
-                                    }
-                                }
-                                cdus_common::IpcMessage::PeerDisconnected { node_id } => {
-                                    if let Some(listener) =
-                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
-                                    {
-                                        listener.on_peer_disconnected(node_id);
-                                    }
+                                IpcMessage::FileProgress(event) => {
+                                    // These are already handled by the SEPARATE progress forwarder thread spawned above
+                                    // But we could also handle them here if we didn't have that.
                                 }
                                 _ => {
                                     info!("FFI Core: Received IPC message: {:?}", msg);
@@ -641,22 +311,65 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
 
 #[uniffi::export]
 pub fn send_file(node_id: String, path: String) {
-    if let Some(tx) = AGENT_TX.lock().unwrap().as_ref() {
-        let _ = tx.send(cdus_common::IpcMessage::SendFile { node_id, path });
+    let path_buf = std::path::PathBuf::from(path);
+    let store_opt = STORE.lock().unwrap();
+    let lm_opt = LIBP2P_MANAGER.lock().unwrap();
+    let tm_opt = TRANSFER_MANAGER.lock().unwrap();
+    
+    if let (Some(store), Some(lm), Some(tm)) = (store_opt.as_ref(), lm_opt.as_ref(), tm_opt.as_ref()) {
+        let store_clone = Arc::clone(store);
+        let lm_clone = Arc::clone(lm);
+        let tm_clone = Arc::clone(tm);
+        
+        std::thread::spawn(move || {
+            let file_name = path_buf.file_name().unwrap().to_string_lossy().to_string();
+            let total_bytes = path_buf.metadata().unwrap().len();
+            let file_hash = cdus_agent::file_transfer::hash_file(&path_buf).unwrap();
+            let transfer_id = uuid::Uuid::new_v4().to_string();
+            
+            store_clone.create_transfer(
+                &transfer_id,
+                "outgoing",
+                &node_id,
+                &path_buf.to_string_lossy(),
+                &file_name,
+                total_bytes,
+                262144,
+                &file_hash,
+            ).unwrap();
+
+            if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
+                if let Ok(stream) = lm_clone.open_file_stream(peer_id) {
+                    let wrapped_stream = cdus_agent::file_transfer::Libp2pFileStream { 
+                        stream, 
+                        runtime: lm_clone.runtime_handle() 
+                    };
+
+                    let session_key = cdus_agent::file_transfer::SessionKey([0u8; 32]);
+                    let _ = cdus_agent::file_transfer::handle_outgoing_transfer(
+                        Box::new(wrapped_stream),
+                        store_clone,
+                        transfer_id,
+                        session_key,
+                        tm_clone,
+                    );
+                }
+            }
+        });
     }
 }
 
 #[uniffi::export]
-pub fn accept_file_transfer(file_hash: String) {
-    if let Some(tx) = AGENT_TX.lock().unwrap().as_ref() {
-        let _ = tx.send(cdus_common::IpcMessage::AcceptFileTransfer { file_hash });
+pub fn accept_file_transfer(transfer_id: String) {
+    if let Some(tm) = TRANSFER_MANAGER.lock().unwrap().as_ref() {
+        tm.handle_decision(&transfer_id, true);
     }
 }
 
 #[uniffi::export]
-pub fn reject_file_transfer(file_hash: String) {
-    if let Some(tx) = AGENT_TX.lock().unwrap().as_ref() {
-        let _ = tx.send(cdus_common::IpcMessage::RejectFileTransfer { file_hash });
+pub fn reject_file_transfer(transfer_id: String) {
+    if let Some(tm) = TRANSFER_MANAGER.lock().unwrap().as_ref() {
+        tm.handle_decision(&transfer_id, false);
     }
 }
 
@@ -682,7 +395,6 @@ pub fn get_clipboard_history(limit: u32) -> Vec<ClipboardHistoryItem> {
 
 #[uniffi::export]
 pub fn broadcast_clipboard(content: String) {
-    info!("FFI: broadcast_clipboard called (len={})", content.len());
     if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -691,18 +403,11 @@ pub fn broadcast_clipboard(content: String) {
 
         // Save to local store first
         if let Some(store) = STORE.lock().unwrap().as_ref() {
-            if let Err(e) = store.append_event(content.as_bytes(), "Local") {
-                error!("FFI: Failed to append local event to store: {}", e);
-            } else {
-                info!("FFI: Appended local clipboard event to store");
-            }
+            let _ = store.append_event(content.as_bytes(), "Local");
         }
 
         pm.sync_manager
-            .broadcast(cdus_common::SyncMessage::ClipboardUpdate { content, timestamp });
-        info!("FFI: Broadcasted clipboard update to connected peers");
-    } else {
-        warn!("FFI: broadcast_clipboard called but PAIRING_MANAGER is None");
+            .broadcast(SyncMessage::ClipboardUpdate { content, timestamp });
     }
 }
 
@@ -737,10 +442,7 @@ pub fn get_paired_devices() -> Vec<PairedDevice> {
                     })
                     .collect()
             }
-            Err(e) => {
-                error!("FFI: Failed to get paired devices: {}", e);
-                Vec::new()
-            }
+            Err(_) => Vec::new(),
         }
     } else {
         Vec::new()
@@ -750,9 +452,7 @@ pub fn get_paired_devices() -> Vec<PairedDevice> {
 #[uniffi::export]
 pub fn unpair_device(node_id: String) {
     if let Some(store) = STORE.lock().unwrap().as_ref() {
-        if let Err(e) = store.remove_paired_device(&node_id) {
-            error!("FFI: Failed to unpair device {}: {}", node_id, e);
-        }
+        let _ = store.remove_paired_device(&node_id);
     }
 }
 
@@ -771,7 +471,6 @@ static RECV_THREAD_STARTED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
 #[uniffi::export]
 pub fn initiate_pairing(node_id: String) {
-    info!("FFI: initiate_pairing called for node_id: {}", node_id);
     if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
         let device = {
             let discovered = DISCOVERED.lock().unwrap();
@@ -781,69 +480,56 @@ pub fn initiate_pairing(node_id: String) {
         };
 
         if let Some(device) = device {
-            info!(
-                "FFI: Found device, starting pairing thread for {}",
-                device.ip
-            );
             if let Ok(ip_addr) = device.ip.parse() {
                 let addr = std::net::SocketAddr::new(ip_addr, device.port);
                 let pm_clone = Arc::clone(pm);
                 std::thread::spawn(move || {
-                    info!("FFI: Initiating pairing with {} at {}", node_id, addr);
                     pm_clone.initiate_pairing(addr);
                 });
-            } else {
-                error!("FFI: Failed to parse IP: {}", device.ip);
             }
-        } else {
-            warn!(
-                "FFI: Device {} not found in discovered list or peer map.",
-                node_id
-            );
         }
-    } else {
-        error!("FFI: PAIRING_MANAGER is None!");
     }
 }
 
 #[uniffi::export]
 pub fn confirm_pairing(accepted: bool) {
-    info!("FFI: confirm_pairing called with: {}", accepted);
     let ap = ACTIVE_PAIRING.lock().unwrap();
     if let Some(state) = ap.as_ref() {
         let mut confirmed = state.confirmed.lock().unwrap();
         *confirmed = Some(accepted);
-        info!(
-            "FFI: Pairing {} by user",
-            if accepted { "confirmed" } else { "declined" }
-        );
-    } else {
-        warn!("FFI: confirm_pairing called but no active pairing state found");
     }
 }
 
 #[uniffi::export]
 pub fn cancel_pairing() {
-    info!("FFI: cancel_pairing called");
     let mut ap = ACTIVE_PAIRING.lock().unwrap();
     *ap = None;
-    info!("FFI: Pairing cancelled/cleared");
 }
 
 #[uniffi::export]
 pub fn register_device(node_id: String, label: String, port: u16) {
-    info!(
-        "FFI: Registering device: {} ({}) on port {}",
-        node_id, label, port
-    );
     MDNS.register_device(&node_id, &label, port);
 }
 
 #[uniffi::export]
-pub fn start_discovery() {
-    info!("FFI: Starting mDNS discovery");
-    let (tx, rx) = flume::unbounded();
+pub fn connect_relay() {
+    if let Some(tx) = AGENT_TX.lock().unwrap().as_ref() {
+        let _ = tx.send(IpcMessage::ConnectRelay);
+    }
+}
 
+#[uniffi::export]
+pub fn start_discovery() {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let node_id = LOCAL_NODE_ID.lock().unwrap().clone();
+        let label = store
+            .get_state("device_name")
+            .unwrap_or(None)
+            .unwrap_or_else(|| "Android Device".to_string());
+        MDNS.register_device(&node_id, &label, 5200);
+    }
+
+    let (tx, rx) = flume::unbounded();
     let discovered_clone = Arc::clone(&DISCOVERED);
     let local_id = LOCAL_NODE_ID.lock().unwrap().clone();
 
@@ -852,14 +538,8 @@ pub fn start_discovery() {
         if !*started {
             spawn_mdns_receiver(rx, discovered_clone, local_id);
             *started = true;
-            info!("FFI: mDNS receiver thread spawned");
         } else {
-            // If already started, we need to handle the new rx or just use the old one.
-            // Actually, MdnsManager::start_discovery takes a tx.
-            // If we already have a thread, it's listening to an OLD rx.
-            // Let's refactor spawn_mdns_receiver to be more robust or just always spawn for now but log it.
             spawn_mdns_receiver(rx, discovered_clone, local_id);
-            info!("FFI: mDNS receiver thread spawned (additional)");
         }
     }
 
@@ -868,20 +548,18 @@ pub fn start_discovery() {
 
 #[uniffi::export]
 pub fn stop_discovery() {
-    info!("FFI: Stopping mDNS discovery");
     MDNS.stop_discovery();
 }
 
-// Internal bridge for mDNS events to FFI records
 fn spawn_mdns_receiver(
-    rx: flume::Receiver<cdus_common::IpcMessage>,
+    rx: flume::Receiver<IpcMessage>,
     discovered: Arc<Mutex<Vec<DiscoveredDevice>>>,
     local_id: String,
 ) {
     std::thread::spawn(move || {
         while let Ok(msg) = rx.recv() {
             match msg {
-                cdus_common::IpcMessage::DeviceDiscovered {
+                IpcMessage::DeviceDiscovered {
                     node_id,
                     label,
                     os,
@@ -900,7 +578,6 @@ fn spawn_mdns_receiver(
                         port,
                     };
 
-                    // Update global peer map (always, even if paired)
                     {
                         let mut map = PEER_MAP.lock().unwrap();
                         map.insert(node_id.clone(), (device.clone(), std::time::Instant::now()));
@@ -908,14 +585,9 @@ fn spawn_mdns_receiver(
 
                     let mut list = discovered.lock().unwrap();
                     if !list.iter().any(|d| d.node_id == node_id) {
-                        info!(
-                            "FFI: Discovered device: {} ({}) at {}:{}",
-                            label, node_id, ip, port
-                        );
                         list.push(device);
                     }
 
-                    // Auto-connect to trusted peers if not already connected
                     let pm_lock = PAIRING_MANAGER.lock().unwrap();
                     if let Some(pm) = pm_lock.as_ref() {
                         if !pm.sync_manager.is_connected(&node_id) {
@@ -924,7 +596,6 @@ fn spawn_mdns_receiver(
                                     if let Ok(ip_addr) = ip.parse() {
                                         let addr = std::net::SocketAddr::new(ip_addr, port);
                                         let pm_clone = Arc::clone(pm);
-                                        info!("FFI: Auto-connecting to trusted peer {} at {}", node_id, addr);
                                         std::thread::spawn(move || {
                                             pm_clone.initiate_pairing(addr);
                                         });
@@ -934,14 +605,13 @@ fn spawn_mdns_receiver(
                         }
                     }
                 }
-                cdus_common::IpcMessage::DeviceLost { node_id } => {
+                IpcMessage::DeviceLost { node_id } => {
                     {
                         let mut map = PEER_MAP.lock().unwrap();
                         map.remove(&node_id);
                     }
                     let mut list = discovered.lock().unwrap();
                     list.retain(|d| !d.node_id.starts_with(&node_id));
-                    info!("FFI: Removed device: {} (prefix)", node_id);
                 }
                 _ => {}
             }
@@ -960,9 +630,7 @@ pub fn clear_discovered_devices() {
 }
 
 #[uniffi::export]
-#[tracing::instrument]
 pub fn greet_from_rust(name: String) -> String {
-    info!("Greeting requested for: {}", name);
     format!(
         "Hello, {}! This is CDUS core running on Android via Rust.",
         name
