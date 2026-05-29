@@ -139,7 +139,7 @@ async fn stop_scan() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn get_discovered_devices() -> Result<Vec<(String, String, String, String, u16)>, String> {
+async fn get_discovered_devices() -> Result<Vec<(String, String, String, Vec<String>, u16)>, String> {
     let msg = IpcMessage::GetDiscovered;
     match send_ipc_message(msg)? {
         IpcMessage::DiscoveredResponse(list) => Ok(list),
@@ -233,6 +233,15 @@ async fn reject_file_transfer(transfer_id: String) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+async fn start_benchmark(node_id: String) -> Result<String, String> {
+    let msg = IpcMessage::StartBenchmark { node_id };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -241,6 +250,13 @@ pub fn run() {
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                window.hide().unwrap();
+                api.prevent_close();
+            }
+            _ => {}
+        })
         .setup(|app| {
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let status_i =
@@ -252,7 +268,20 @@ pub fn run() {
             let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
-                .show_menu_on_left_click(true)
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
                         app.exit(0);
@@ -317,14 +346,15 @@ pub fn run() {
                                                 match progress_event {
                                                     ProgressEvent::IncomingRequest {
                                                         transfer_id,
+                                                        node_id,
                                                         file_name,
                                                         total_bytes,
-                                                        sender_label,
+                                                        sender_label: _,
                                                     } => {
                                                         let _ = app_handle_events.emit(
                                                             "incoming-file-request",
                                                             (
-                                                                sender_label.clone(),
+                                                                node_id,
                                                                 serde_json::json!({
                                                                     "file_hash": transfer_id,
                                                                     "file_name": file_name,
@@ -335,13 +365,14 @@ pub fn run() {
                                                     }
                                                     ProgressEvent::Started {
                                                         transfer_id,
+                                                        file_name: _,
                                                         total_bytes: _,
                                                         is_outgoing,
                                                     } => {
                                                         let event_name = if is_outgoing {
                                                             "file-transfer-progress"
                                                         } else {
-                                                            "file-transfer-progress" // Or "incoming-transfer-started"?
+                                                            "file-transfer-progress"
                                                         };
                                                         let _ = app_handle_events.emit(
                                                             event_name,
@@ -351,13 +382,16 @@ pub fn run() {
                                                     ProgressEvent::Progress {
                                                         transfer_id,
                                                         bytes_confirmed,
+                                                        total_bytes,
                                                     } => {
-                                                        // Note: bytes_confirmed is absolute, but UI expects percentage?
-                                                        // Actually UI expects progress as f32 which is likely percentage.
-                                                        // Let's check how FileTransferProgress was used.
+                                                        let progress = if total_bytes > 0 {
+                                                            (bytes_confirmed as f32 / total_bytes as f32) * 100.0
+                                                        } else {
+                                                            0.0
+                                                        };
                                                         let _ = app_handle_events.emit(
                                                             "file-transfer-progress",
-                                                            (transfer_id, bytes_confirmed as f32),
+                                                            (transfer_id, progress),
                                                         );
                                                     }
                                                     ProgressEvent::Complete {
@@ -437,7 +471,8 @@ pub fn run() {
             unpair_device,
             send_file,
             accept_file_transfer,
-            reject_file_transfer
+            reject_file_transfer,
+            start_benchmark
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
