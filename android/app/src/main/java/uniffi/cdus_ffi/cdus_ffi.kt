@@ -683,6 +683,9 @@ internal interface UniffiCallbackInterfaceFileTransferListenerMethod7 : com.sun.
 internal interface UniffiCallbackInterfaceFileTransferListenerMethod8 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`nodeId`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
+internal interface UniffiCallbackInterfaceFileTransferListenerMethod9 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`transferId`: RustBuffer.ByValue,`state`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
 @Structure.FieldOrder("onClipboardUpdate", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceClipboardListener(
     @JvmField internal var `onClipboardUpdate`: UniffiCallbackInterfaceClipboardListenerMethod0? = null,
@@ -699,7 +702,7 @@ internal open class UniffiVTableCallbackInterfaceClipboardListener(
     }
 
 }
-@Structure.FieldOrder("onIncomingRequest", "onIncomingTransferStarted", "onOutgoingTransferStarted", "onTransferProgress", "onTransferComplete", "onTransferError", "onPeerAccepted", "onPeerRejected", "onPeerDisconnected", "uniffiFree")
+@Structure.FieldOrder("onIncomingRequest", "onIncomingTransferStarted", "onOutgoingTransferStarted", "onTransferProgress", "onTransferComplete", "onTransferError", "onPeerAccepted", "onPeerRejected", "onPeerDisconnected", "onTransferStateChanged", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceFileTransferListener(
     @JvmField internal var `onIncomingRequest`: UniffiCallbackInterfaceFileTransferListenerMethod0? = null,
     @JvmField internal var `onIncomingTransferStarted`: UniffiCallbackInterfaceFileTransferListenerMethod1? = null,
@@ -710,6 +713,7 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
     @JvmField internal var `onPeerAccepted`: UniffiCallbackInterfaceFileTransferListenerMethod6? = null,
     @JvmField internal var `onPeerRejected`: UniffiCallbackInterfaceFileTransferListenerMethod7? = null,
     @JvmField internal var `onPeerDisconnected`: UniffiCallbackInterfaceFileTransferListenerMethod8? = null,
+    @JvmField internal var `onTransferStateChanged`: UniffiCallbackInterfaceFileTransferListenerMethod9? = null,
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
 ) : Structure() {
     class UniffiByValue(
@@ -722,8 +726,9 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
         `onPeerAccepted`: UniffiCallbackInterfaceFileTransferListenerMethod6? = null,
         `onPeerRejected`: UniffiCallbackInterfaceFileTransferListenerMethod7? = null,
         `onPeerDisconnected`: UniffiCallbackInterfaceFileTransferListenerMethod8? = null,
+        `onTransferStateChanged`: UniffiCallbackInterfaceFileTransferListenerMethod9? = null,
         `uniffiFree`: UniffiCallbackInterfaceFree? = null,
-    ): UniffiVTableCallbackInterfaceFileTransferListener(`onIncomingRequest`,`onIncomingTransferStarted`,`onOutgoingTransferStarted`,`onTransferProgress`,`onTransferComplete`,`onTransferError`,`onPeerAccepted`,`onPeerRejected`,`onPeerDisconnected`,`uniffiFree`,), Structure.ByValue
+    ): UniffiVTableCallbackInterfaceFileTransferListener(`onIncomingRequest`,`onIncomingTransferStarted`,`onOutgoingTransferStarted`,`onTransferProgress`,`onTransferComplete`,`onTransferError`,`onPeerAccepted`,`onPeerRejected`,`onPeerDisconnected`,`onTransferStateChanged`,`uniffiFree`,), Structure.ByValue
 
    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceFileTransferListener) {
         `onIncomingRequest` = other.`onIncomingRequest`
@@ -735,10 +740,12 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
         `onPeerAccepted` = other.`onPeerAccepted`
         `onPeerRejected` = other.`onPeerRejected`
         `onPeerDisconnected` = other.`onPeerDisconnected`
+        `onTransferStateChanged` = other.`onTransferStateChanged`
         `uniffiFree` = other.`uniffiFree`
     }
 
 }
+
 
 
 
@@ -1112,6 +1119,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_peer_disconnected(
     ): Short
+    fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_transfer_state_changed(
+    ): Short
     fun ffi_cdus_ffi_uniffi_contract_version(
     ): Int
     
@@ -1232,6 +1241,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_peer_disconnected() != 8312.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_transfer_state_changed() != 29122.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1809,6 +1821,8 @@ public interface FileTransferListener {
     
     fun `onPeerDisconnected`(`nodeId`: kotlin.String)
     
+    fun `onTransferStateChanged`(`transferId`: kotlin.String, `state`: kotlin.String)
+    
     companion object
 }
 
@@ -1937,6 +1951,19 @@ internal object uniffiCallbackInterfaceFileTransferListener {
             uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
         }
     }
+    internal object `onTransferStateChanged`: UniffiCallbackInterfaceFileTransferListenerMethod9 {
+        override fun callback(`uniffiHandle`: Long,`transferId`: RustBuffer.ByValue,`state`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFileTransferListener.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onTransferStateChanged`(
+                    FfiConverterString.lift(`transferId`),
+                    FfiConverterString.lift(`state`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
 
     internal object uniffiFree: UniffiCallbackInterfaceFree {
         override fun callback(handle: Long) {
@@ -1954,6 +1981,7 @@ internal object uniffiCallbackInterfaceFileTransferListener {
         `onPeerAccepted`,
         `onPeerRejected`,
         `onPeerDisconnected`,
+        `onTransferStateChanged`,
         uniffiFree,
     )
 

@@ -24,6 +24,11 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".service.FileTransferForegroundService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <receiver android:name=".service.FileActionReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="ACCEPT" />

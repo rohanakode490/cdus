@@ -65,7 +65,7 @@ object FileTransferManager {
 
     fun loadHistory() {
         try {
-            val history = uniffi.cdus_ffi.getFileTransferHistory(50)
+            val history = uniffi.cdus_ffi.getFileTransferHistory(50u)
             history.forEach { record ->
                 val status = when (record.status) {
                     "complete" -> TransferStatus.COMPLETE

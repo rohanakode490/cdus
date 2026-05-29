@@ -351,6 +351,30 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         }
     }
 
+    override fun onTransferStateChanged(transferId: String, state: String) {
+        Logger.i("Transfer state changed: $transferId -> $state")
+        when (state) {
+            "started" -> {
+                val serviceIntent = Intent(this, FileTransferForegroundService::class.java).apply {
+                    action = FileTransferForegroundService.ACTION_START
+                    putExtra(FileTransferForegroundService.EXTRA_TRANSFER_ID, transferId)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(serviceIntent)
+                } else {
+                    startService(serviceIntent)
+                }
+            }
+            "completed", "failed" -> {
+                val serviceIntent = Intent(this, FileTransferForegroundService::class.java).apply {
+                    action = FileTransferForegroundService.ACTION_STOP
+                    putExtra(FileTransferForegroundService.EXTRA_TRANSFER_ID, transferId)
+                }
+                startService(serviceIntent)
+            }
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_popup_sync)

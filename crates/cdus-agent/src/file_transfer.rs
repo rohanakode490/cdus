@@ -33,6 +33,7 @@ pub struct FileTransferManager {
     pub pending_decisions: Mutex<HashMap<String, Sender<bool>>>,
     pub cancel_tokens: Mutex<HashMap<String, Sender<()>>>,
     pub active_transfers: Mutex<usize>,
+    #[cfg(not(target_os = "android"))]
     pub power_lock: Mutex<Option<keepawake::KeepAwake>>,
 }
 
@@ -44,6 +45,7 @@ impl FileTransferManager {
             pending_decisions: Mutex::new(HashMap::new()),
             cancel_tokens: Mutex::new(HashMap::new()),
             active_transfers: Mutex::new(0),
+            #[cfg(not(target_os = "android"))]
             power_lock: Mutex::new(None),
         }
     }
@@ -75,6 +77,7 @@ impl FileTransferManager {
         // Update power lock
         let mut active = self.active_transfers.lock();
         *active += 1;
+        #[cfg(not(target_os = "android"))]
         if *active == 1 {
             let mut lock = self.power_lock.lock();
             match keepawake::Builder::default()
@@ -101,6 +104,7 @@ impl FileTransferManager {
         let mut active = self.active_transfers.lock();
         if *active > 0 {
             *active -= 1;
+            #[cfg(not(target_os = "android"))]
             if *active == 0 {
                 let mut lock = self.power_lock.lock();
                 *lock = None;
