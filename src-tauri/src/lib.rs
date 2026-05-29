@@ -253,6 +253,8 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 window.hide().unwrap();
+                #[cfg(target_os = "macos")]
+                window.app_handle().set_activation_policy(tauri::ActivationPolicy::Accessory);
                 api.prevent_close();
             }
             _ => {}
@@ -277,6 +279,8 @@ pub fn run() {
                     {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
+                            #[cfg(target_os = "macos")]
+                            let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
