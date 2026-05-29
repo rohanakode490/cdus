@@ -52,6 +52,7 @@ pub trait FileTransferListener: Send + Sync {
     fn on_peer_accepted(&self, node_id: String, transfer_id: String);
     fn on_peer_rejected(&self, node_id: String, transfer_id: String);
     fn on_peer_disconnected(&self, node_id: String);
+    fn on_transfer_state_changed(&self, transfer_id: String, state: String);
 }
 
 static CLIPBOARD_LISTENER: Lazy<Mutex<Option<Box<dyn ClipboardListener>>>> =
@@ -87,13 +88,13 @@ static DISCOVERED: Lazy<Arc<Mutex<Vec<DiscoveredDevice>>>> =
 static PEER_MAP: Lazy<Arc<Mutex<std::collections::HashMap<String, (DiscoveredDevice, std::time::Instant)>>>> =
     Lazy::new(|| Arc::new(Mutex::new(std::collections::HashMap::new())));
 
-static LOCAL_NODE_ID: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(String::new()));
+static LOCAL_NODE_ID: Lazy<std::sync::Mutex<String>> = Lazy::new(|| std::sync::Mutex::new(String::new()));
 
-static ACTIVE_PAIRING: Lazy<Arc<Mutex<Option<cdus_agent::pairing::ActivePairingState>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(None)));
+static ACTIVE_PAIRING: Lazy<Arc<parking_lot::Mutex<Option<cdus_agent::pairing::ActivePairingState>>>> =
+    Lazy::new(|| Arc::new(parking_lot::Mutex::new(None)));
 
-static PAIRING_MANAGER: Lazy<Mutex<Option<Arc<cdus_agent::pairing::PairingManager>>>> =
-    Lazy::new(|| Mutex::new(None));
+static PAIRING_MANAGER: Lazy<std::sync::Mutex<Option<Arc<cdus_agent::pairing::PairingManager>>>> =
+    Lazy::new(|| std::sync::Mutex::new(None));
 
 static LIBP2P_MANAGER: Lazy<Mutex<Option<Arc<cdus_agent::libp2p_manager::Libp2pManager>>>> =
     Lazy::new(|| Mutex::new(None));
@@ -178,10 +179,11 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                 match event {
                                     ProgressEvent::Started { transfer_id, file_name, total_bytes, is_outgoing } => {
                                         if is_outgoing {
-                                            listener.on_outgoing_transfer_started(transfer_id, file_name, total_bytes);
+                                            listener.on_outgoing_transfer_started(transfer_id.clone(), file_name, total_bytes);
                                         } else {
-                                            listener.on_incoming_transfer_started(transfer_id, file_name, total_bytes);
+                                            listener.on_incoming_transfer_started(transfer_id.clone(), file_name, total_bytes);
                                         }
+                                        listener.on_transfer_state_changed(transfer_id, "started".to_string());
                                     }
                                     ProgressEvent::Progress { transfer_id, bytes_confirmed, total_bytes } => {
                                         let progress = if total_bytes > 0 {
@@ -192,10 +194,12 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                         listener.on_transfer_progress(transfer_id, progress);
                                     }
                                     ProgressEvent::Complete { transfer_id, dest_path } => {
-                                        listener.on_transfer_complete(transfer_id, dest_path.to_string_lossy().to_string());
+                                        listener.on_transfer_complete(transfer_id.clone(), dest_path.to_string_lossy().to_string());
+                                        listener.on_transfer_state_changed(transfer_id, "completed".to_string());
                                     }
                                     ProgressEvent::Failed { transfer_id, reason } => {
-                                        listener.on_transfer_error(transfer_id, reason);
+                                        listener.on_transfer_error(transfer_id.clone(), reason);
+                                        listener.on_transfer_state_changed(transfer_id, "failed".to_string());
                                     }
                                     ProgressEvent::IncomingRequest { transfer_id, node_id, file_name, total_bytes, sender_label } => {
                                         listener.on_incoming_request(node_id, transfer_id, file_name, total_bytes, sender_label);
@@ -255,7 +259,7 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                         node_id.clone(),
                         private_key,
                         5200,
-                        Arc::clone(&ACTIVE_PAIRING),
+                        Arc::clone(&*ACTIVE_PAIRING),
                         sync_manager,
                         relay,
                         turn,
@@ -566,7 +570,7 @@ pub fn unpair_device(node_id: String) {
 
 #[uniffi::export]
 pub fn get_pairing_status() -> Option<PairingStatus> {
-    let ap = ACTIVE_PAIRING.lock().unwrap();
+    let ap = ACTIVE_PAIRING.lock();
     ap.as_ref().map(|s| PairingStatus {
         active: true,
         pin: s.pin.clone(),
@@ -605,16 +609,16 @@ pub fn initiate_pairing(node_id: String) {
 
 #[uniffi::export]
 pub fn confirm_pairing(accepted: bool) {
-    let ap = ACTIVE_PAIRING.lock().unwrap();
+    let ap = ACTIVE_PAIRING.lock();
     if let Some(state) = ap.as_ref() {
-        let mut confirmed = state.confirmed.lock().unwrap();
+        let mut confirmed = state.confirmed.lock();
         *confirmed = Some(accepted);
     }
 }
 
 #[uniffi::export]
 pub fn cancel_pairing() {
-    let mut ap = ACTIVE_PAIRING.lock().unwrap();
+    let mut ap = ACTIVE_PAIRING.lock();
     *ap = None;
 }
 

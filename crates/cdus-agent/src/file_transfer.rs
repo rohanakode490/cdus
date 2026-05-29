@@ -32,6 +32,8 @@ pub struct FileTransferManager {
     pub progress_tx: Sender<ProgressEvent>,
     pub pending_decisions: Mutex<HashMap<String, Sender<bool>>>,
     pub cancel_tokens: Mutex<HashMap<String, Sender<()>>>,
+    pub active_transfers: Mutex<usize>,
+    pub power_lock: Mutex<Option<keepawake::KeepAwake>>,
 }
 
 impl FileTransferManager {
@@ -41,6 +43,8 @@ impl FileTransferManager {
             progress_tx,
             pending_decisions: Mutex::new(HashMap::new()),
             cancel_tokens: Mutex::new(HashMap::new()),
+            active_transfers: Mutex::new(0),
+            power_lock: Mutex::new(None),
         }
     }
 
@@ -67,12 +71,41 @@ impl FileTransferManager {
         let (tx, rx) = flume::bounded(1);
         let mut tokens = self.cancel_tokens.lock();
         tokens.insert(transfer_id, tx);
+        
+        // Update power lock
+        let mut active = self.active_transfers.lock();
+        *active += 1;
+        if *active == 1 {
+            let mut lock = self.power_lock.lock();
+            match keepawake::Builder::default()
+                .display(false)
+                .idle(true)
+                .sleep(true)
+                .reason("CDUS File Transfer Active")
+                .app_name("CDUS")
+                .create()
+            {
+                Ok(awake) => *lock = Some(awake),
+                Err(e) => error!("Failed to acquire power lock: {}", e),
+            }
+        }
+        
         rx
     }
 
     pub fn unregister_transfer(&self, transfer_id: &str) {
         let mut tokens = self.cancel_tokens.lock();
         tokens.remove(transfer_id);
+        
+        // Update power lock
+        let mut active = self.active_transfers.lock();
+        if *active > 0 {
+            *active -= 1;
+            if *active == 0 {
+                let mut lock = self.power_lock.lock();
+                *lock = None;
+            }
+        }
     }
 
     pub fn cancel_transfer(&self, transfer_id: &str) {
