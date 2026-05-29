@@ -9,6 +9,7 @@ let scanInterval: any = null;
 let pairingInterval: any = null;
 let currentPairingDevice: any = null;
 const transfers = new Map<string, any>();
+let isDeveloperMode = false;
 let currentIncomingTransferId = "";
 
 // --- UI Elements (initialized in DOMContentLoaded) ---
@@ -36,6 +37,9 @@ async function renderClipboard() {
   const listContainer = document.querySelector("#clipboard-list");
   const emptyState = document.querySelector("#clipboard-empty");
   if (!listContainer) return;
+
+  // Proactively check system clipboard and broadcast if new
+  await checkSystemClipboard();
 
   try {
     const history: any[] = await invoke("get_clipboard_history", { limit: 50 });
@@ -98,6 +102,48 @@ async function loadSettings() {
   }
 }
 
+let lastLocalClipboard = "";
+async function checkSystemClipboard() {
+  try {
+    const syncEnabled: string | null = await invoke("get_state", { key: "sync_enabled" });
+    if (syncEnabled !== "true") return;
+
+    const content = await navigator.clipboard.readText();
+    if (content && content !== lastLocalClipboard) {
+      lastLocalClipboard = content;
+      console.log("New system clipboard detected on Desktop, broadcasting");
+      await invoke("broadcast_clipboard", { content });
+    }
+  } catch (err) {
+    // Might fail if window not focused, ignore
+  }
+}
+
+async function loadFileHistory() {
+  try {
+    const history: any[] = await invoke("get_file_transfer_history", { limit: 50 });
+    history.forEach((record) => {
+      let status = record.status;
+      if (status === "in_progress" || status === "paused" || status === "awaiting_acceptance") {
+        status = "paused";
+      }
+
+      transfers.set(record.transfer_id, {
+        transferId: record.transfer_id,
+        fileName: record.file_name,
+        nodeId: record.peer_node_id,
+        progress: record.total_bytes > 0 ? Math.round((Number(record.bytes_confirmed) / Number(record.total_bytes)) * 100) : 0,
+        status: status,
+        direction: record.direction,
+        error: record.error_message
+      });
+    });
+    renderFiles();
+  } catch (err) {
+    console.error("Failed to load file history:", err);
+  }
+}
+
 function renderFiles() {
   const listContainer = document.querySelector("#files-list");
   const emptyState = document.querySelector("#files-empty");
@@ -123,6 +169,8 @@ function renderFiles() {
     if (transfer.status === "complete") statusIcon = "✓";
     if (transfer.status === "error") statusIcon = "!";
 
+    const isFinished = transfer.status === "error" || transfer.status === "complete" || transfer.status === "rejected";
+    
     itemEl.innerHTML = `
       <div class="transfer-icon">${statusIcon}</div>
       <div class="transfer-details">
@@ -135,17 +183,37 @@ function renderFiles() {
           <div class="progress-bar" style="width: ${transfer.progress}%"></div>
         </div>
         <div class="transfer-meta">
-          <span>${transfer.direction === "incoming" ? "from" : "to"} ${transfer.nodeId}</span>
+          <span>${transfer.direction === "incoming" ? "from" : "to"} ${getDeviceLabel(transfer.nodeId)}</span>
+          <span style="color: var(--tertiary-color);">${transfer.speedMbps ? transfer.speedMbps.toFixed(1) + " Mbps" : ""}</span>
           <span>${transfer.progress}%</span>
-          ${transfer.status === "error" || transfer.status === "complete" ? `<button class="text-btn dismiss-btn" data-id="${transfer.transferId}">Dismiss</button>` : ""}
+          <button class="text-btn action-btn ${isFinished ? "dismiss-btn" : "cancel-btn"}" data-id="${transfer.transferId}">
+            ${isFinished ? "Dismiss" : "Cancel"}
+          </button>
         </div>
       </div>
     `;
 
-    itemEl.querySelector(".dismiss-btn")?.addEventListener("click", () => {
-      transfers.delete(transfer.transferId);
-      renderFiles();
-    });
+    if (isFinished) {
+      itemEl.querySelector(".dismiss-btn")?.addEventListener("click", () => {
+        transfers.delete(transfer.transferId);
+        renderFiles();
+      });
+    } else {
+      itemEl.querySelector(".cancel-btn")?.addEventListener("click", async () => {
+        const id = transfer.transferId;
+        try {
+          await invoke("cancel_file_transfer", { transferId: id });
+          const t = transfers.get(id);
+          if (t) {
+            t.status = "error";
+            t.error = "Cancelled";
+            renderFiles();
+          }
+        } catch (err) {
+          console.error("Failed to cancel transfer:", err);
+        }
+      });
+    }
     listContainer.appendChild(itemEl);
   });
 }
@@ -212,9 +280,19 @@ async function renderPairedDevices() {
         </div>
         <div class="device-actions">
           ${isOnline ? `<button class="primary-btn send-file-btn" data-id="${id}">Send File</button>` : `<button class="primary-btn connect-btn" data-id="${id}">Connect</button>`}
+          ${(isOnline && isDeveloperMode) ? `<button class="tertiary-btn benchmark-btn" data-id="${id}" style="margin-right: 8px;">Benchmark</button>` : ""}
           <button class="secondary-btn unpair-btn" data-id="${id}">Unpair</button>
         </div>
       `;
+
+      row.querySelector(".benchmark-btn")?.addEventListener("click", async () => {
+        try {
+          await invoke("start_benchmark", { nodeId: id });
+          alert("1GB Network Benchmark started. Watch progress in the Files tab.");
+        } catch (err) {
+          console.error("Failed to start benchmark:", err);
+        }
+      });
 
       row.querySelector(".unpair-btn")?.addEventListener("click", () => {
         unpairDevice(id);
@@ -291,16 +369,15 @@ async function updateDiscoveryList() {
   if (!discoveryList) return;
   
   try {
-    const discovered: [string, string, string, string, number][] = await invoke("get_discovered_devices");
+    const discovered: [string, string, string, string[], number][] = await invoke("get_discovered_devices");
     const selfNodeId: string | null = await invoke("get_state", { key: "node_id" });
 
     const availableDevices = discovered.filter(([id]) => !pairedDeviceIds.includes(id) && id !== selfNodeId);
     
+    discoveryList.innerHTML = "";
     if (availableDevices.length === 0) {
       return;
     }
-
-    discoveryList.innerHTML = "";
     availableDevices.forEach(([id, name, os]) => {
       const row = document.createElement("div");
       row.className = "device-row";
@@ -406,6 +483,7 @@ window.addEventListener("DOMContentLoaded", () => {
   confirmPairingBtn = document.querySelector("#pairing-confirm-btn") as HTMLButtonElement;
 
   loadSettings();
+  loadFileHistory();
   document.querySelector("#clear-finished-btn")?.addEventListener("click", () => {
     transfers.forEach((transfer, hash) => {
       if (transfer.status === "complete" || transfer.status === "error") {
@@ -454,6 +532,17 @@ window.addEventListener("DOMContentLoaded", () => {
   const limitSlider = document.querySelector("#clipboard-limit") as HTMLInputElement;
   const limitValue = document.querySelector("#limit-value");
   
+  let tapCount = 0;
+  document.querySelector("#version-text")?.addEventListener("click", () => {
+    tapCount++;
+    if (tapCount >= 7) {
+      isDeveloperMode = true;
+      alert("Developer Mode enabled!");
+      tapCount = 0;
+      renderPairedDevices();
+    }
+  });
+
   limitSlider?.addEventListener("input", (e) => {
     const val = (e.target as HTMLInputElement).value;
     if (limitValue) limitValue.textContent = `${val} items`;
@@ -689,6 +778,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   listen("file-transfer-progress", (event: any) => {
     const [transferId, progress] = event.payload;
+    const now = Date.now();
     
     // Check if we have it by ID
     let transfer = transfers.get(transferId);
@@ -705,6 +795,19 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     if (transfer) {
+      if (transfer.lastUpdate) {
+        const timeDiff = (now - transfer.lastUpdate) / 1000;
+        const progressDiff = progress - transfer.progress;
+        if (progressDiff > 0 && timeDiff > 0) {
+          // Assume 1GB for benchmark, 10MB for others as estimate
+          const isBenchmark = transferId === "ffffffff-ffff-ffff-ffff-ffffffffffff";
+          const totalSize = isBenchmark ? 1024 * 1024 * 1024 : 10 * 1024 * 1024;
+          const bytesDiff = (progressDiff / 100) * totalSize;
+          transfer.speedMbps = (bytesDiff * 8 / (1024 * 1024)) / timeDiff;
+        }
+      }
+      transfer.lastUpdate = now;
+      
       updateProgress(progress);
       if (progressFilename) progressFilename.textContent = transfer.fileName;
       
@@ -749,6 +852,10 @@ window.addEventListener("DOMContentLoaded", () => {
     renderPairedDevices();
   });
 
+  window.addEventListener("focus", () => {
+    checkSystemClipboard();
+  });
+
   // Initial load
   renderPairedDevices();
 
@@ -762,6 +869,9 @@ window.addEventListener("DOMContentLoaded", () => {
     const clipboardView = document.querySelector("#view-clipboard");
     if (clipboardView?.classList.contains("active")) {
       renderClipboard();
+    } else {
+      // Check system clipboard even if view not active
+      checkSystemClipboard();
     }
   }, 5000);
 });
