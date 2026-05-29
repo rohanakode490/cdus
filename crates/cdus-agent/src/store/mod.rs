@@ -1,7 +1,7 @@
 use cdus_common::ClipboardEvent;
 use rusqlite::{Connection, OptionalExtension, Result};
 use std::path::Path;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use tracing::info;
 
 pub struct Store {
@@ -24,6 +24,14 @@ pub struct TransferRecord {
     pub error_message: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PairedDeviceRecord {
+    pub node_id: String,
+    pub label: String,
+    pub last_known_ips: Option<Vec<String>>,
+    pub last_known_port: Option<u16>,
 }
 
 impl Store {
@@ -82,10 +90,33 @@ impl Store {
         state_conn.execute(
             "CREATE TABLE IF NOT EXISTS paired_devices (
                 node_id TEXT PRIMARY KEY,
-                label TEXT
+                label TEXT,
+                last_known_ips TEXT,
+                last_known_port INTEGER
             )",
             [],
         )?;
+
+        // Migration: Add network info to paired_devices if it doesn't exist
+        let has_network_info: bool = state_conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('paired_devices') WHERE name='last_known_ips'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+
+        if !has_network_info {
+            info!("Migrating paired_devices table: adding network info columns...");
+            let _ = state_conn.execute(
+                "ALTER TABLE paired_devices ADD COLUMN last_known_ips TEXT",
+                [],
+            );
+            let _ = state_conn.execute(
+                "ALTER TABLE paired_devices ADD COLUMN last_known_port INTEGER",
+                [],
+            );
+        }
 
         // Phase 1.1: File Transfers tables in state.db
         state_conn.execute(
@@ -149,14 +180,14 @@ impl Store {
         chunk_size: u32,
         file_hash: &str,
     ) -> Result<()> {
-        let conn = self.state_conn.lock().unwrap();
+        let conn = self.state_conn.lock();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as i64;
 
         conn.execute(
-            "INSERT INTO file_transfers (
+            "INSERT OR REPLACE INTO file_transfers (
                 transfer_id, direction, peer_node_id, file_path, file_name,
                 total_bytes, chunk_size, file_hash, status, created_at, updated_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, ?9)",
@@ -175,8 +206,15 @@ impl Store {
         Ok(())
     }
 
+    pub fn delete_transfer(&self, transfer_id: &str) -> Result<()> {
+        let conn = self.state_conn.lock();
+        conn.execute("DELETE FROM file_chunks WHERE transfer_id = ?1", [transfer_id])?;
+        conn.execute("DELETE FROM file_transfers WHERE transfer_id = ?1", [transfer_id])?;
+        Ok(())
+    }
+
     pub fn update_transfer_status(&self, transfer_id: &str, status: &str) -> Result<()> {
-        let conn = self.state_conn.lock().unwrap();
+        let conn = self.state_conn.lock();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -190,7 +228,7 @@ impl Store {
     }
 
     pub fn update_transfer_status_error(&self, transfer_id: &str, error: &str) -> Result<()> {
-        let conn = self.state_conn.lock().unwrap();
+        let conn = self.state_conn.lock();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -204,7 +242,7 @@ impl Store {
     }
 
     pub fn update_bytes_confirmed(&self, transfer_id: &str, bytes: u64) -> Result<()> {
-        let conn = self.state_conn.lock().unwrap();
+        let conn = self.state_conn.lock();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -225,7 +263,7 @@ impl Store {
         offset: u64,
         length: u32,
     ) -> Result<()> {
-        let conn = self.state_conn.lock().unwrap();
+        let conn = self.state_conn.lock();
         conn.execute(
             "INSERT OR REPLACE INTO file_chunks (transfer_id, chunk_index, chunk_hash, byte_offset, byte_length)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -239,7 +277,7 @@ impl Store {
         transfer_id: &str,
         chunks: &[(u32, String, u64, u32)],
     ) -> Result<()> {
-        let mut conn = self.state_conn.lock().unwrap();
+        let mut conn = self.state_conn.lock();
         let tx = conn.transaction()?;
         {
             let mut stmt = tx.prepare(
@@ -255,7 +293,7 @@ impl Store {
     }
 
     pub fn mark_chunk_verified(&self, transfer_id: &str, index: u32) -> Result<()> {
-        let conn = self.state_conn.lock().unwrap();
+        let conn = self.state_conn.lock();
         conn.execute(
             "UPDATE file_chunks SET verified = 1 WHERE transfer_id = ?1 AND chunk_index = ?2",
             (transfer_id, index),
@@ -264,7 +302,7 @@ impl Store {
     }
 
     pub fn get_transfer(&self, transfer_id: &str) -> Result<Option<TransferRecord>> {
-        let conn = self.state_conn.lock().unwrap();
+        let conn = self.state_conn.lock();
         conn.query_row(
             "SELECT transfer_id, direction, peer_node_id, file_path, file_name,
                     total_bytes, bytes_confirmed, chunk_size, file_hash, status,
@@ -293,7 +331,7 @@ impl Store {
     }
 
     pub fn get_transfers_older_than(&self, cutoff_ms: i64, statuses: &[&str]) -> Result<Vec<TransferRecord>> {
-        let conn = self.state_conn.lock().unwrap();
+        let conn = self.state_conn.lock();
 
         let status_placeholders: String = statuses.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let query = format!(
@@ -337,7 +375,7 @@ impl Store {
     }
 
     pub fn get_transfer_history(&self, limit: u32) -> Result<Vec<TransferRecord>> {
-        let conn = self.state_conn.lock().unwrap();
+        let conn = self.state_conn.lock();
         let mut stmt = conn.prepare(
             "SELECT transfer_id, direction, peer_node_id, file_path, file_name,
                     total_bytes, bytes_confirmed, chunk_size, file_hash, status,
@@ -371,7 +409,7 @@ impl Store {
     }
 
     pub fn append_event(&self, payload: &[u8], source: &str) -> Result<String> {
-        let conn = self.events_conn.lock().unwrap();
+        let conn = self.events_conn.lock();
 
         let last_hash: Option<String> = conn
             .query_row(
@@ -401,7 +439,7 @@ impl Store {
     }
 
     pub fn get_recent_events(&self, limit: u32) -> Result<Vec<ClipboardEvent>> {
-        let conn = self.events_conn.lock().unwrap();
+        let conn = self.events_conn.lock();
 
         let mut stmt = conn.prepare(
             "SELECT id, payload, source, timestamp FROM events ORDER BY id DESC LIMIT ?",
@@ -426,7 +464,7 @@ impl Store {
     }
 
     pub fn set_state(&self, key: &str, value: &str) -> Result<()> {
-        let conn = self.state_conn.lock().unwrap();
+        let conn = self.state_conn.lock();
         conn.execute(
             "INSERT OR REPLACE INTO state (key, value) VALUES (?1, ?2)",
             (key, value),
@@ -435,7 +473,7 @@ impl Store {
     }
 
     pub fn get_state(&self, key: &str) -> Result<Option<String>> {
-        let conn = self.state_conn.lock().unwrap();
+        let conn = self.state_conn.lock();
         conn.query_row("SELECT value FROM state WHERE key = ?", [key], |row| {
             row.get(0)
         })
@@ -514,25 +552,57 @@ impl Store {
     }
 
     pub fn add_paired_device(&self, node_id: &str, label: &str) -> Result<()> {
-        let conn = self.state_conn.lock().unwrap();
+        let conn = self.state_conn.lock();
         conn.execute(
-            "INSERT OR REPLACE INTO paired_devices (node_id, label) VALUES (?1, ?2)",
+            "INSERT INTO paired_devices (node_id, label) VALUES (?1, ?2)
+             ON CONFLICT(node_id) DO UPDATE SET label = excluded.label",
             (node_id, label),
         )?;
         Ok(())
     }
 
+    pub fn update_paired_device_network_info(
+        &self,
+        node_id: &str,
+        ips: &[String],
+        port: u16,
+    ) -> Result<()> {
+        let conn = self.state_conn.lock();
+        let ips_str = ips.join(",");
+        conn.execute(
+            "UPDATE paired_devices SET last_known_ips = ?1, last_known_port = ?2 WHERE node_id = ?3",
+            (ips_str, port as i64, node_id),
+        )?;
+        Ok(())
+    }
+
     pub fn remove_paired_device(&self, node_id: &str) -> Result<()> {
-        let conn = self.state_conn.lock().unwrap();
+        let conn = self.state_conn.lock();
         conn.execute("DELETE FROM paired_devices WHERE node_id = ?", [node_id])?;
         Ok(())
     }
 
-    pub fn get_paired_devices(&self) -> Result<Vec<(String, String)>> {
-        let conn = self.state_conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT node_id, label FROM paired_devices WHERE node_id != 'unknown'")?;
-        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    pub fn get_paired_devices(&self) -> Result<Vec<PairedDeviceRecord>> {
+        let conn = self.state_conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT node_id, label, last_known_ips, last_known_port FROM paired_devices WHERE node_id != 'unknown'",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let ips_str: Option<String> = row.get(2)?;
+            let last_known_ips = ips_str.map(|s| {
+                s.split(',')
+                    .filter(|ss| !ss.is_empty())
+                    .map(|ss| ss.to_string())
+                    .collect()
+            });
+
+            Ok(PairedDeviceRecord {
+                node_id: row.get(0)?,
+                label: row.get(1)?,
+                last_known_ips,
+                last_known_port: row.get::<_, Option<i64>>(3)?.map(|p| p as u16),
+            })
+        })?;
 
         let mut devices = Vec::new();
         for row in rows {
@@ -542,7 +612,7 @@ impl Store {
     }
 
     pub fn is_device_paired(&self, node_id: &str) -> Result<bool> {
-        let conn = self.state_conn.lock().unwrap();
+        let conn = self.state_conn.lock();
         let count: i64 = conn.query_row(
             "SELECT count(*) FROM paired_devices WHERE node_id = ?",
             [node_id],

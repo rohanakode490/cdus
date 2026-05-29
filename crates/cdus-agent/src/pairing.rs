@@ -6,7 +6,7 @@ use snow::{params::NoiseParams, Builder, HandshakeState, TransportState};
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::thread;
 use std::time::Duration;
 use tracing::{error, info, warn};
@@ -61,19 +61,19 @@ impl Default for SyncManager {
 impl SyncManager {
     #[tracing::instrument(skip(self, tx))]
     pub fn add_peer(&self, node_id: String, tx: Sender<SyncMessage>, transport: TransportType) {
-        let mut peers = self.peers.lock().unwrap();
+        let mut peers = self.peers.lock();
         peers.insert(node_id, (tx, transport));
     }
 
     #[tracing::instrument(skip(self))]
     pub fn remove_peer(&self, node_id: &str) {
-        let mut peers = self.peers.lock().unwrap();
+        let mut peers = self.peers.lock();
         peers.remove(node_id);
     }
 
     #[tracing::instrument(skip(self))]
     pub fn broadcast(&self, msg: SyncMessage) {
-        let peers = self.peers.lock().unwrap();
+        let peers = self.peers.lock();
         for (id, (tx, _)) in peers.iter() {
             if let Err(e) = tx.send(msg.clone()) {
                 error!("Failed to send sync message to peer {}: {}", id, e);
@@ -83,7 +83,7 @@ impl SyncManager {
 
     #[tracing::instrument(skip(self))]
     pub fn send_to_peer(&self, node_id: &str, msg: SyncMessage) -> bool {
-        let peers = self.peers.lock().unwrap();
+        let peers = self.peers.lock();
         if let Some((tx, _)) = peers.get(node_id) {
             if let Err(e) = tx.send(msg) {
                 error!(
@@ -101,12 +101,12 @@ impl SyncManager {
     }
 
     pub fn is_connected(&self, node_id: &str) -> bool {
-        let peers = self.peers.lock().unwrap();
+        let peers = self.peers.lock();
         peers.contains_key(node_id)
     }
 
     pub fn get_peer_transport(&self, node_id: &str) -> Option<TransportType> {
-        let peers = self.peers.lock().unwrap();
+        let peers = self.peers.lock();
         peers.get(node_id).map(|(_, t)| t.clone())
     }
 }
@@ -181,7 +181,7 @@ impl PairingManager {
     }
 
     fn handle_noise_signal(&self, source_uuid: String, payload: Vec<u8>) -> Result<()> {
-        let mut ap = self.active_pairing.lock().unwrap();
+        let mut ap = self.active_pairing.lock();
 
         // 1. If no active pairing, this might be a new incoming pairing request (Responder Message 1)
         if ap.is_none() {
@@ -257,7 +257,7 @@ impl PairingManager {
                 return Ok(());
             }
 
-            let mut handshake_lock = state.handshake.lock().unwrap();
+            let mut handshake_lock = state.handshake.lock();
             if let Some(ref mut noise) = *handshake_lock {
                 let mut buf = [0u8; 1024];
                 match noise.read_message(&payload, &mut buf) {
@@ -379,16 +379,15 @@ impl PairingManager {
         // (Wait, my start_session doesn't allow updating remote_addr after start)
         // I'll store it in a map for now.
 
-        let mut ap = self.active_pairing.lock().unwrap();
+        let mut ap = self.active_pairing.lock();
         if let Some(ref mut state) = *ap {
             if state.remote_id == source_uuid {
-                let confirmed = state.confirmed.lock().unwrap();
+                let confirmed = state.confirmed.lock();
                 if let Some(true) = *confirmed {
                     // Start TURN session if we haven't already
                     if !self
                         .pending_turn_sessions
                         .lock()
-                        .unwrap()
                         .contains_key(&source_uuid)
                     {
                         if let Ok(creds) = self.relay_manager.get_turn_credentials() {
@@ -404,7 +403,7 @@ impl PairingManager {
                                         .send_signal(source_uuid.clone(), sig_bytes);
 
                                     // Initiate sync session
-                                    let mut hs = state.handshake.lock().unwrap();
+                                    let mut hs = state.handshake.lock();
                                     if let Some(noise) = hs.take() {
                                         if let Ok(transport) = noise.into_transport_mode() {
                                             let remote_node_id = state.remote_id.clone();
@@ -469,10 +468,10 @@ impl PairingManager {
             info!("Monitoring relay pairing for {}", remote_uuid);
             loop {
                 let status = {
-                    let ap = active_pairing.lock().unwrap();
+                    let ap = active_pairing.lock();
                     if let Some(ref state) = *ap {
                         if state.remote_id == remote_uuid {
-                            let res = state.confirmed.lock().unwrap();
+                            let res = state.confirmed.lock();
                             *res
                         } else {
                             break;
@@ -539,7 +538,7 @@ impl PairingManager {
                     return;
                 }
 
-                let mut ap = self.active_pairing.lock().unwrap();
+                let mut ap = self.active_pairing.lock();
                 *ap = Some(ActivePairingState {
                     pin: String::new(),
                     is_initiator: true,
@@ -604,12 +603,12 @@ impl PairingManager {
         }
     }
 
-    pub fn initiate_pairing(&self, target_addr: SocketAddr) {
+    pub fn initiate_pairing(&self, target_addr: SocketAddr) -> bool {
         let stream = match TcpStream::connect_timeout(&target_addr, Duration::from_secs(5)) {
             Ok(s) => s,
             Err(e) => {
                 error!("Failed to connect to target {}: {}", target_addr, e);
-                return;
+                return false;
             }
         };
 
@@ -640,6 +639,7 @@ impl PairingManager {
                 Err(e) => error!("WebSocket client handshake failed: {}", e),
             }
         });
+        true
     }
 }
 
@@ -665,14 +665,13 @@ fn run_turn_sync_session(
                 Ok(n) => {
                     out.truncate(n);
                     if let Ok(msg) = SyncMessage::from_slice(&out) {
-                        if let SyncMessage::ClipboardUpdate { content, timestamp } = msg {
-                            info!("Received clipboard update from peer {} via TURN: {}", label, content);
-                            let _ = ipc_tx.send(IpcMessage::SetClipboard {
-                                content,
-                                timestamp,
-                                source: label.clone(),
-                            });
-                        }
+                        let SyncMessage::ClipboardUpdate { content, timestamp } = msg;
+                        info!("Received clipboard update from peer {} via TURN: {}", label, content);
+                        let _ = ipc_tx.send(IpcMessage::SetClipboard {
+                            content,
+                            timestamp,
+                            source: label.clone(),
+                        });
                     }
                 }
                 Err(e) => {
@@ -863,7 +862,7 @@ fn handle_incoming_connection_inner(
             // Update state for UI
             let confirmed = Arc::new(Mutex::new(None::<bool>));
             {
-                let mut ap = active_pairing.lock().unwrap();
+                let mut ap = active_pairing.lock();
                 *ap = Some(ActivePairingState {
                     pin: pin.clone(),
                     is_initiator: false,
@@ -885,7 +884,7 @@ fn handle_incoming_connection_inner(
             loop {
                 // Check local confirmation
                 {
-                    let res = confirmed.lock().unwrap();
+                    let res = confirmed.lock();
                     if let Some(accepted) = *res {
                         if accepted {
                             if !local_confirmed {
@@ -935,7 +934,7 @@ fn handle_incoming_connection_inner(
 
             // Clear UI state
             {
-                let mut ap = active_pairing.lock().unwrap();
+                let mut ap = active_pairing.lock();
                 *ap = None;
             }
 
@@ -1124,7 +1123,7 @@ fn handle_outgoing_connection_inner(
             // Update state for UI
             let confirmed = Arc::new(Mutex::new(None::<bool>));
             {
-                let mut ap = active_pairing.lock().unwrap();
+                let mut ap = active_pairing.lock();
                 *ap = Some(ActivePairingState {
                     pin: pin.clone(),
                     is_initiator: true,
@@ -1167,7 +1166,7 @@ fn handle_outgoing_connection_inner(
 
                 // Check local confirmation
                 {
-                    let res = confirmed.lock().unwrap();
+                    let res = confirmed.lock();
                     if let Some(accepted) = *res {
                         if accepted {
                             if !local_confirmed {
@@ -1193,7 +1192,7 @@ fn handle_outgoing_connection_inner(
 
             // Clear UI state
             {
-                let mut ap = active_pairing.lock().unwrap();
+                let mut ap = active_pairing.lock();
                 *ap = None;
             }
 
@@ -1262,14 +1261,13 @@ fn run_sync_session(
         match read_ws_framed(&mut ws, &mut transport) {
             Ok(data) => {
                 if let Ok(msg) = SyncMessage::from_slice(&data) {
-                    if let SyncMessage::ClipboardUpdate { content, timestamp } = msg {
-                        info!("Received clipboard update from peer {}: {}", label, content);
-                        let _ = ipc_tx.send(IpcMessage::SetClipboard {
-                            content,
-                            timestamp,
-                            source: label.clone(),
-                        });
-                    }
+                    let SyncMessage::ClipboardUpdate { content, timestamp } = msg;
+                    info!("Received clipboard update from peer {}: {}", label, content);
+                    let _ = ipc_tx.send(IpcMessage::SetClipboard {
+                        content,
+                        timestamp,
+                        source: label.clone(),
+                    });
                 }
             }
             Err(e) => {

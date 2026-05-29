@@ -7,7 +7,7 @@ mod tests {
     use crate::{daemon_loop, EVENT_BUS};
     use cdus_common::{IpcMessage, SyncMessage, TransportType, ProgressEvent};
     use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc; use parking_lot::Mutex;
     use std::thread;
     use std::time::Duration;
     use tempfile::tempdir;
@@ -87,8 +87,8 @@ mod tests {
         // Wait for both to see active pairing
         let mut attempts = 0;
         while attempts < 50 {
-            let p1 = ap1.lock().unwrap().is_some();
-            let p2 = ap2.lock().unwrap().is_some();
+            let p1 = ap1.lock().is_some();
+            let p2 = ap2.lock().is_some();
             if p1 && p2 {
                 break;
             }
@@ -97,23 +97,23 @@ mod tests {
         }
 
         assert!(
-            ap1.lock().unwrap().is_some(),
+            ap1.lock().is_some(),
             "Initiator should have active pairing"
         );
         assert!(
-            ap2.lock().unwrap().is_some(),
+            ap2.lock().is_some(),
             "Responder should have active pairing"
         );
 
         // Confirm on both sides
         {
-            let s1 = ap1.lock().unwrap();
-            let mut res1 = s1.as_ref().unwrap().confirmed.lock().unwrap();
+            let s1 = ap1.lock();
+            let mut res1 = s1.as_ref().unwrap().confirmed.lock();
             *res1 = Some(true);
         }
         {
-            let s2 = ap2.lock().unwrap();
-            let mut res2 = s2.as_ref().unwrap().confirmed.lock().unwrap();
+            let s2 = ap2.lock();
+            let mut res2 = s2.as_ref().unwrap().confirmed.lock();
             *res2 = Some(true);
         }
 
@@ -254,7 +254,7 @@ mod tests {
         .unwrap();
 
         // Reset lw for check
-        *lw.lock().unwrap() = None;
+        *lw.lock() = None;
         daemon_loop(
             tx.clone(),
             rx2,
@@ -271,7 +271,7 @@ mod tests {
             lm.clone(),
         );
         assert_eq!(
-            *lw.lock().unwrap(),
+            *lw.lock(),
             None,
             "Older message should not have been written to clipboard"
         );
@@ -302,7 +302,7 @@ mod tests {
             lm.clone(),
         );
         assert_eq!(
-            *lw.lock().unwrap(),
+            *lw.lock(),
             Some("Newer".to_string()),
             "Newer message should have been written to clipboard"
         );
@@ -362,15 +362,15 @@ mod tests {
 
         // Wait for responder to see pairing
         let mut attempts = 0;
-        while attempts < 10 && ap2.lock().unwrap().is_none() {
+        while attempts < 10 && ap2.lock().is_none() {
             thread::sleep(Duration::from_millis(100));
             attempts += 1;
         }
 
         // Responder rejects
         {
-            let s2 = ap2.lock().unwrap();
-            let mut res2 = s2.as_ref().unwrap().confirmed.lock().unwrap();
+            let s2 = ap2.lock();
+            let mut res2 = s2.as_ref().unwrap().confirmed.lock();
             *res2 = Some(false);
         }
 
@@ -424,7 +424,7 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
         // We expect it to fail gracefully and not set an active pairing forever
         assert!(
-            ap.lock().unwrap().is_none(),
+            ap.lock().is_none(),
             "Active pairing should be None after self-connection attempt"
         );
     }
@@ -461,7 +461,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(100));
         assert!(
-            ap.lock().unwrap().is_none(),
+            ap.lock().is_none(),
             "Should not crash or hang on malformed data"
         );
     }
@@ -560,13 +560,13 @@ mod tests {
 
         while attempts < 20 {
             {
-                let s1 = ap1.lock().unwrap();
+                let s1 = ap1.lock();
                 if let Some(ref st) = *s1 {
                     pin1 = st.pin.clone();
                 }
             }
             {
-                let s2 = ap2.lock().unwrap();
+                let s2 = ap2.lock();
                 if let Some(ref st) = *s2 {
                     pin2 = st.pin.clone();
                 }
@@ -585,8 +585,8 @@ mod tests {
         let label1 = store1.get_state("device_name").unwrap().unwrap();
         let label2 = store2.get_state("device_name").unwrap().unwrap();
 
-        assert_eq!(ap1.lock().unwrap().as_ref().unwrap().remote_label, label2);
-        assert_eq!(ap2.lock().unwrap().as_ref().unwrap().remote_label, label1);
+        assert_eq!(ap1.lock().as_ref().unwrap().remote_label, label2);
+        assert_eq!(ap2.lock().as_ref().unwrap().remote_label, label1);
     }
 
     #[test]
@@ -598,7 +598,7 @@ mod tests {
 
         // Subscribe to events
         {
-            let mut bus = EVENT_BUS.lock().unwrap();
+            let mut bus = EVENT_BUS.lock();
             bus.push(tx_event);
         }
 
@@ -641,7 +641,7 @@ mod tests {
             node_id: id.clone(),
             label: label.clone(),
             os: "Linux".to_string(),
-            ip: "127.0.0.1".to_string(),
+            ips: vec!["127.0.0.1".to_string()],
             port: 5200,
         })
         .unwrap();
@@ -664,7 +664,7 @@ mod tests {
         );
 
         // 3. Verify it's NOT in discovered_devices list
-        let discovered = dd.lock().unwrap();
+        let discovered = dd.lock();
         assert!(
             !discovered.iter().any(|(node_id, _, _, _, _)| node_id == &id),
             "Paired device should not be added to discovered list"
@@ -718,12 +718,12 @@ mod tests {
 
         // Auto-confirm for test
         let mut attempts = 0;
-        while attempts < 20 && (ap1.lock().unwrap().is_none() || ap2.lock().unwrap().is_none()) {
+        while attempts < 20 && (ap1.lock().is_none() || ap2.lock().is_none()) {
             thread::sleep(Duration::from_millis(100));
             attempts += 1;
         }
-        { *ap1.lock().unwrap().as_ref().unwrap().confirmed.lock().unwrap() = Some(true); }
-        { *ap2.lock().unwrap().as_ref().unwrap().confirmed.lock().unwrap() = Some(true); }
+        { *ap1.lock().as_ref().unwrap().confirmed.lock() = Some(true); }
+        { *ap2.lock().as_ref().unwrap().confirmed.lock() = Some(true); }
 
         thread::sleep(Duration::from_millis(500));
         assert!(sm1.is_connected(&id2));

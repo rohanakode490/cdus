@@ -981,6 +981,7 @@ dependencies = [
  "libp2p-stream",
  "mdns-sd",
  "once_cell",
+ "parking_lot",
  "rand 0.8.6",
  "rmp-serde",
  "rusqlite",

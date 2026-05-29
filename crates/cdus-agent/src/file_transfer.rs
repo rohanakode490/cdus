@@ -14,7 +14,7 @@ use flume::{Sender, Receiver};
 use tracing::{info, error};
 use futures::{AsyncReadExt, AsyncWriteExt};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use sysinfo::Disks;
 
 /// Metadata for a single chunk of a file
@@ -46,8 +46,9 @@ impl FileTransferManager {
 
     pub fn handle_decision(&self, transfer_id: &str, accepted: bool) {
         info!("FileTransferManager: user decision for {}: accepted={}", transfer_id, accepted);
-        let mut decisions = self.pending_decisions.lock().unwrap();
-        if let Some(tx) = decisions.remove(transfer_id) {
+        let mut decisions = self.pending_decisions.lock();
+        let tx_opt: Option<Sender<bool>> = decisions.remove(transfer_id);
+        if let Some(tx) = tx_opt {
             info!("FileTransferManager: found pending decision for {}, sending {}", transfer_id, accepted);
             let _ = tx.send(accepted);
         } else {
@@ -57,26 +58,27 @@ impl FileTransferManager {
 
     pub fn add_pending_decision(&self, transfer_id: String) -> Receiver<bool> {
         let (tx, rx) = flume::bounded(1);
-        let mut decisions = self.pending_decisions.lock().unwrap();
+        let mut decisions = self.pending_decisions.lock();
         decisions.insert(transfer_id, tx);
         rx
     }
 
     pub fn register_transfer(&self, transfer_id: String) -> Receiver<()> {
         let (tx, rx) = flume::bounded(1);
-        let mut tokens = self.cancel_tokens.lock().unwrap();
+        let mut tokens = self.cancel_tokens.lock();
         tokens.insert(transfer_id, tx);
         rx
     }
 
     pub fn unregister_transfer(&self, transfer_id: &str) {
-        let mut tokens = self.cancel_tokens.lock().unwrap();
+        let mut tokens = self.cancel_tokens.lock();
         tokens.remove(transfer_id);
     }
 
     pub fn cancel_transfer(&self, transfer_id: &str) {
-        let mut tokens = self.cancel_tokens.lock().unwrap();
-        if let Some(tx) = tokens.remove(transfer_id) {
+        let mut tokens = self.cancel_tokens.lock();
+        let tx_opt: Option<Sender<()>> = tokens.remove(transfer_id);
+        if let Some(tx) = tx_opt {
             let _ = tx.send(());
         }
         self.handle_decision(transfer_id, false);
@@ -129,11 +131,13 @@ impl FileStream for Libp2pFileStream {
     fn write_message(&mut self, msg: &FileMessage) -> Result<()> {
         let data = msg.to_vec()?;
         let len = data.len() as u32;
-        info!("Libp2pStream: writing message {:?} ({} bytes)", msg, len);
+        match msg {
+            FileMessage::Chunk(ref c) => info!("Libp2pStream: writing Chunk(index={}, offset={}) ({} bytes)", c.chunk_index, c.byte_offset, len),
+            _ => info!("Libp2pStream: writing message {:?} ({} bytes)", msg, len),
+        }
         self.runtime.block_on(async {
             self.stream.write_all(&len.to_be_bytes()).await?;
             self.stream.write_all(&data).await?;
-            self.stream.flush().await?;
             Ok::<(), std::io::Error>(())
         })?;
         info!("Libp2pStream: message written successfully");
@@ -151,9 +155,12 @@ impl FileStream for Libp2pFileStream {
             self.stream.read_exact(&mut data).await?;
             
             let msg = FileMessage::from_slice(&data)?;
+            match msg {
+                FileMessage::Chunk(ref c) => info!("Libp2pStream: read Chunk(index={}, offset={})", c.chunk_index, c.byte_offset),
+                _ => info!("Libp2pStream: read message: {:?}", msg),
+            }
             Ok::<FileMessage, anyhow::Error>(msg)
         })?;
-        info!("Libp2pStream: read message: {:?}", msg);
         Ok(msg)
     }
 
@@ -175,6 +182,10 @@ impl FileStream for Libp2pFileStream {
                     tokio::time::timeout(Duration::from_secs(30), self.stream.read_exact(&mut data)).await??;
                     
                     let msg = FileMessage::from_slice(&data)?;
+                    match msg {
+                        FileMessage::Chunk(ref c) => info!("Libp2pStream: read Chunk(index={}, offset={})", c.chunk_index, c.byte_offset),
+                        _ => info!("Libp2pStream: read message: {:?}", msg),
+                    }
                     Ok::<FileMessage, anyhow::Error>(msg)
                 }
                 Ok(Err(e)) => {
@@ -273,6 +284,20 @@ pub fn handle_incoming_transfer_with_manager(
     res
 }
 
+pub const BENCHMARK_ID: &str = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+
+fn generate_benchmark_chunk(index: u32, length: u32) -> Vec<u8> {
+    let mut data = vec![0u8; length as usize];
+    // Seed with index for determinism
+    let mut state = index as u64;
+    for byte in data.iter_mut() {
+        // Simple LCG: state = (a * state + c) % m
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        *byte = (state >> 32) as u8;
+    }
+    data
+}
+
 fn handle_incoming_transfer_inner(
     stream: &mut dyn FileStream,
     db: Arc<Store>,
@@ -293,18 +318,22 @@ fn handle_incoming_transfer_inner(
         }
     };
     let transfer_id = req.transfer_id.clone();
+    let is_benchmark = transfer_id == BENCHMARK_ID;
+
     info!("Received TransferRequest for {} ({} bytes). Processing...", transfer_id, req.total_bytes);
 
-    let disks = Disks::new_with_refreshed_list();
-    let available_space = disks.iter()
-        .filter(|d| download_dir.starts_with(d.mount_point()))
-        .map(|d| d.available_space())
-        .max()
-        .unwrap_or(u64::MAX);
+    if !is_benchmark {
+        let disks = Disks::new_with_refreshed_list();
+        let available_space = disks.iter()
+            .filter(|d| download_dir.starts_with(d.mount_point()))
+            .map(|d| d.available_space())
+            .max()
+            .unwrap_or(u64::MAX);
 
-    if req.total_bytes > (available_space as f64 * 0.9) as u64 {
-        let _ = stream.write_message(&FileMessage::Error(TransferError { transfer_id: transfer_id.clone(), reason: "Insufficient disk space".to_string() }));
-        return Err(anyhow!("Insufficient disk space"));
+        if req.total_bytes > (available_space as f64 * 0.9) as u64 {
+            let _ = stream.write_message(&FileMessage::Error(TransferError { transfer_id: transfer_id.clone(), reason: "Insufficient disk space".to_string() }));
+            return Err(anyhow!("Insufficient disk space"));
+        }
     }
 
     if db.get_transfer(&transfer_id)?.is_none() {
@@ -313,21 +342,32 @@ fn handle_incoming_transfer_inner(
 
     let decision_rx = manager.add_pending_decision(transfer_id.clone());
     let cancel_rx = manager.register_transfer(transfer_id.clone());
-    manager.progress_tx.send(ProgressEvent::IncomingRequest { transfer_id: transfer_id.clone(), file_name: req.file_name.clone(), total_bytes: req.total_bytes, sender_label: req.sender_label.clone() })?;
+    manager.progress_tx.send(ProgressEvent::IncomingRequest { 
+        transfer_id: transfer_id.clone(), 
+        node_id: peer_id.to_string(),
+        file_name: req.file_name.clone(), 
+        total_bytes: req.total_bytes, 
+        sender_label: req.sender_label.clone() 
+    })?;
 
     info!("Waiting for user decision on transfer {}", transfer_id);
-    let accepted = match decision_rx.recv_timeout(Duration::from_secs(120)) {
-        Ok(a) => a,
-        Err(_) => { 
-            error!("User decision timeout for {}", transfer_id);
-            manager.unregister_transfer(&transfer_id); 
-            return Err(anyhow!("User decision timeout")); 
+    let accepted = if is_benchmark {
+        info!("Auto-accepting benchmark transfer {}", transfer_id);
+        true
+    } else {
+        match decision_rx.recv_timeout(Duration::from_secs(120)) {
+            Ok(a) => a,
+            Err(_) => { 
+                error!("User decision timeout for {}", transfer_id);
+                manager.unregister_transfer(&transfer_id); 
+                return Err(anyhow!("User decision timeout")); 
+            }
         }
     };
     info!("User decision for {}: accepted={}", transfer_id, accepted);
 
     let mut resume_from = 0;
-    if accepted {
+    if accepted && !is_benchmark {
         if let Some(existing) = db.get_transfer(&transfer_id)? {
             if existing.status == "in_progress" || existing.status == "paused" {
                 resume_from = existing.bytes_confirmed as u64;
@@ -344,22 +384,37 @@ fn handle_incoming_transfer_inner(
         return Ok(());
     }
 
-    let dest_path = safe_destination_path(&download_dir, &req.file_name)?;
+    let dest_path = if is_benchmark {
+        PathBuf::from("/dev/null")
+    } else {
+        safe_destination_path(&download_dir, &req.file_name)?
+    };
+    
     let part_path = dest_path.with_extension("cdus.part");
-    {
-        let conn = db.state_conn.lock().unwrap();
+    if !is_benchmark {
+        let conn = db.state_conn.lock();
         conn.execute("UPDATE file_transfers SET file_path = ?1 WHERE transfer_id = ?2", (dest_path.to_string_lossy(), &transfer_id))?;
     }
 
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&part_path)?;
-    if resume_from > 0 { file.seek(SeekFrom::Start(resume_from))?; }
+    let mut file_opt = if !is_benchmark {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&part_path)?;
+        if resume_from > 0 { f.seek(SeekFrom::Start(resume_from))?; }
+        Some(f)
+    } else {
+        None
+    };
 
     db.update_transfer_status(&transfer_id, "in_progress")?;
-    manager.progress_tx.send(ProgressEvent::Started { transfer_id: transfer_id.clone(), total_bytes: req.total_bytes, is_outgoing: false })?;
+    manager.progress_tx.send(ProgressEvent::Started { 
+        transfer_id: transfer_id.clone(), 
+        file_name: req.file_name.clone(),
+        total_bytes: req.total_bytes, 
+        is_outgoing: false 
+    })?;
 
     info!("Starting receive loop for {}", transfer_id);
     let loop_res = loop {
@@ -379,30 +434,41 @@ fn handle_incoming_transfer_inner(
                 if computed_hash != chunk.chunk_hash {
                     let _ = stream.write_message(&FileMessage::Error(TransferError { transfer_id: transfer_id.clone(), reason: format!("chunk {} hash mismatch", chunk.chunk_index) }));
                     db.update_transfer_status_error(&transfer_id, "chunk hash mismatch")?;
-                    let _ = fs::remove_file(&part_path);
+                    if !is_benchmark { let _ = fs::remove_file(&part_path); }
                     break Err(anyhow!("Chunk hash mismatch"));
                 }
-                file.seek(SeekFrom::Start(chunk.byte_offset))?;
-                file.write_all(&plaintext)?;
-                file.flush()?;
+                if let Some(ref mut f) = file_opt {
+                    f.seek(SeekFrom::Start(chunk.byte_offset))?;
+                    f.write_all(&plaintext)?;
+                    f.flush()?;
+                }
                 let new_confirmed = chunk.byte_offset + plaintext.len() as u64;
                 db.update_bytes_confirmed(&transfer_id, new_confirmed)?;
-                let _ = manager.progress_tx.send(ProgressEvent::Progress { transfer_id: transfer_id.clone(), bytes_confirmed: new_confirmed });
+                let _ = manager.progress_tx.send(ProgressEvent::Progress { 
+                    transfer_id: transfer_id.clone(), 
+                    bytes_confirmed: new_confirmed,
+                    total_bytes: req.total_bytes
+                });
                 if let Err(e) = stream.write_message(&FileMessage::Ack(ChunkAck { transfer_id: transfer_id.clone(), chunk_index: chunk.chunk_index, bytes_confirmed: new_confirmed })) {
                     error!("Failed to send ACK for {}: {}", transfer_id, e);
                     break Err(e);
                 }
             }
             Ok(FileMessage::Complete(complete)) => {
-                file.sync_all()?;
-                let actual_hash = hash_file(&part_path)?;
-                if actual_hash != complete.file_hash {
-                    let _ = stream.write_message(&FileMessage::Error(TransferError { transfer_id: transfer_id.clone(), reason: "whole file hash mismatch".into() }));
-                    db.update_transfer_status_error(&transfer_id, "file hash mismatch")?;
-                    let _ = fs::remove_file(&part_path);
-                    break Err(anyhow!("Whole file hash mismatch"));
+                if !is_benchmark {
+                    if let Some(f) = file_opt.take() {
+                        f.sync_all()?;
+                    }
+
+                    let actual_hash = hash_file(&part_path)?;
+                    if actual_hash != complete.file_hash {
+                        let _ = stream.write_message(&FileMessage::Error(TransferError { transfer_id: transfer_id.clone(), reason: "whole file hash mismatch".into() }));
+                        db.update_transfer_status_error(&transfer_id, "file hash mismatch")?;
+                        let _ = fs::remove_file(&part_path);
+                        break Err(anyhow!("Whole file hash mismatch"));
+                    }
+                    fs::rename(&part_path, &dest_path)?;
                 }
-                fs::rename(&part_path, &dest_path)?;
                 db.update_transfer_status(&transfer_id, "complete")?;
                 let _ = stream.write_message(&FileMessage::Ack(ChunkAck { transfer_id: transfer_id.clone(), chunk_index: u32::MAX, bytes_confirmed: req.total_bytes }));
                 let _ = manager.progress_tx.send(ProgressEvent::Complete { transfer_id: transfer_id.clone(), dest_path });
@@ -450,15 +516,29 @@ fn handle_outgoing_transfer_inner(
 ) -> Result<()> {
     info!("handle_outgoing_transfer_inner started for {}", transfer_id);
     let record = db.get_transfer(&transfer_id)?.ok_or_else(|| anyhow!("Transfer not found in DB"))?;
-    let file_path = PathBuf::from(&record.file_path);
-    let mut file = File::open(&file_path)?;
+    let is_benchmark = transfer_id == BENCHMARK_ID;
+    
+    let mut file_opt = if !is_benchmark {
+        let file_path = PathBuf::from(&record.file_path);
+        Some(File::open(&file_path)?)
+    } else {
+        None
+    };
     
     let chunk_plan = compute_chunk_plan(record.total_bytes as u64, record.chunk_size as u32);
     let db_chunks: Vec<(u32, String, u64, u32)> = chunk_plan.iter().map(|c| (c.index, String::new(), c.offset, c.length)).collect();
     db.insert_chunks_batch(&transfer_id, &db_chunks)?;
 
-    info!("Sending TransferRequest for {}", transfer_id);
-    stream.write_message(&FileMessage::Request(TransferRequest { transfer_id: transfer_id.clone(), file_name: record.file_name.clone(), total_bytes: record.total_bytes as u64, chunk_size: record.chunk_size as u32, file_hash: record.file_hash.clone(), sender_label: "This Device".to_string() }))?;
+    let sender_label = db.get_state("device_name").unwrap_or(None).unwrap_or_else(|| "This Device".to_string());
+    info!("Sending TransferRequest for {} with sender_label '{}'", transfer_id, sender_label);
+    stream.write_message(&FileMessage::Request(TransferRequest { 
+        transfer_id: transfer_id.clone(), 
+        file_name: record.file_name.clone(), 
+        total_bytes: record.total_bytes as u64, 
+        chunk_size: record.chunk_size as u32, 
+        file_hash: record.file_hash.clone(), 
+        sender_label 
+    }))?;
     db.update_transfer_status(&transfer_id, "awaiting_acceptance")?;
     
     info!("Waiting for Acceptance message for {}...", transfer_id);
@@ -476,9 +556,14 @@ fn handle_outgoing_transfer_inner(
     let resume_from = acceptance.resume_from;
     db.update_bytes_confirmed(&transfer_id, resume_from)?;
     db.update_transfer_status(&transfer_id, "in_progress")?;
-    let _ = manager.progress_tx.send(ProgressEvent::Started { transfer_id: transfer_id.clone(), total_bytes: record.total_bytes as u64, is_outgoing: true });
+    let _ = manager.progress_tx.send(ProgressEvent::Started { 
+        transfer_id: transfer_id.clone(), 
+        file_name: record.file_name.clone(),
+        total_bytes: record.total_bytes as u64, 
+        is_outgoing: true 
+    });
 
-    const MAX_IN_FLIGHT_BYTES: usize = 2 * 1024 * 1024;
+    let max_in_flight_bytes: usize = 50 * record.chunk_size as usize;
     let mut in_flight: usize = 0;
 
     for chunk_meta in chunk_plan {
@@ -491,7 +576,7 @@ fn handle_outgoing_transfer_inner(
 
         if chunk_meta.offset + chunk_meta.length as u64 <= resume_from { continue; }
 
-        while in_flight >= MAX_IN_FLIGHT_BYTES {
+        while in_flight >= max_in_flight_bytes {
             if cancel_rx.try_recv().is_ok() {
                 info!("Outgoing transfer {} cancelled by user (during flow control)", transfer_id);
                 let _ = stream.write_message(&FileMessage::Cancel { transfer_id: transfer_id.clone() });
@@ -502,7 +587,11 @@ fn handle_outgoing_transfer_inner(
                 Ok(FileMessage::Ack(a)) => {
                     in_flight = in_flight.saturating_sub(record.chunk_size as usize);
                     db.update_bytes_confirmed(&transfer_id, a.bytes_confirmed)?;
-                    let _ = manager.progress_tx.send(ProgressEvent::Progress { transfer_id: transfer_id.clone(), bytes_confirmed: a.bytes_confirmed });
+                    let _ = manager.progress_tx.send(ProgressEvent::Progress { 
+    transfer_id: transfer_id.clone(), 
+    bytes_confirmed: a.bytes_confirmed,
+    total_bytes: record.total_bytes as u64
+});
                 }
                 Ok(FileMessage::Error(e)) => return Err(anyhow!("Receiver error: {}", e.reason)),
                 Ok(FileMessage::Cancel { .. }) => return Ok(()),
@@ -512,9 +601,16 @@ fn handle_outgoing_transfer_inner(
             }
         }
 
-        let mut chunk_data = vec![0u8; chunk_meta.length as usize];
-        file.seek(SeekFrom::Start(chunk_meta.offset))?;
-        file.read_exact(&mut chunk_data)?;
+        let chunk_data = if is_benchmark {
+            generate_benchmark_chunk(chunk_meta.index, chunk_meta.length)
+        } else {
+            let mut data = vec![0u8; chunk_meta.length as usize];
+            let file = file_opt.as_mut().unwrap();
+            file.seek(SeekFrom::Start(chunk_meta.offset))?;
+            file.read_exact(&mut data)?;
+            data
+        };
+
         let chunk_hash = blake3::hash(&chunk_data).to_hex().to_string();
         let encrypted = session_key.encrypt(&chunk_data)?;
         stream.write_message(&FileMessage::Chunk(ChunkFrame { transfer_id: transfer_id.clone(), chunk_index: chunk_meta.index, byte_offset: chunk_meta.offset, data: encrypted, chunk_hash }))?;
@@ -532,7 +628,11 @@ fn handle_outgoing_transfer_inner(
             Ok(FileMessage::Ack(a)) => {
                 in_flight = in_flight.saturating_sub(record.chunk_size as usize);
                 db.update_bytes_confirmed(&transfer_id, a.bytes_confirmed)?;
-                let _ = manager.progress_tx.send(ProgressEvent::Progress { transfer_id: transfer_id.clone(), bytes_confirmed: a.bytes_confirmed });
+                let _ = manager.progress_tx.send(ProgressEvent::Progress { 
+    transfer_id: transfer_id.clone(), 
+    bytes_confirmed: a.bytes_confirmed,
+    total_bytes: record.total_bytes as u64
+});
             }
             Ok(FileMessage::Error(e)) => return Err(anyhow!("Receiver error: {}", e.reason)),
             Ok(FileMessage::Cancel { .. }) => return Ok(()),
@@ -546,7 +646,7 @@ fn handle_outgoing_transfer_inner(
     match stream.read_message_timeout(Duration::from_secs(60))? {
         FileMessage::Ack(_) => {
             db.update_transfer_status(&transfer_id, "complete")?;
-            let _ = manager.progress_tx.send(ProgressEvent::Complete { transfer_id, dest_path: file_path });
+            let _ = manager.progress_tx.send(ProgressEvent::Complete { transfer_id, dest_path: if is_benchmark { PathBuf::from("/dev/null") } else { PathBuf::from(&record.file_path) } });
         }
         FileMessage::Error(e) => {
             db.update_transfer_status_error(&transfer_id, &e.reason)?;
@@ -956,7 +1056,7 @@ mod tests {
         let eight_days_ago = now - (8 * 24 * 60 * 60 * 1000);
         
         {
-            let conn = store.state_conn.lock().unwrap();
+            let conn = store.state_conn.lock();
             conn.execute(
                 "INSERT INTO file_transfers (transfer_id, direction, peer_node_id, file_path, file_name, total_bytes, chunk_size, file_hash, status, created_at, updated_at)
                  VALUES (?1, 'incoming', 'peer', '/some/path/file.txt', 'file.txt', 100, 1024, 'hash', 'paused', ?2, ?2)",
@@ -972,7 +1072,7 @@ mod tests {
         std::fs::write(&real_part_path, "partial data")?;
         
         {
-            let conn = store.state_conn.lock().unwrap();
+            let conn = store.state_conn.lock();
             conn.execute("UPDATE file_transfers SET file_path = ?1 WHERE transfer_id = ?2", (real_path.to_string_lossy(), &transfer_id))?;
         }
 
@@ -1060,7 +1160,7 @@ mod tests {
             
             pool.execute(move || {
                 {
-                    let mut count = started_count_c.lock().unwrap();
+                    let mut count = started_count_c.lock();
                     *count += 1;
                     info!("Transfer {} started (total active: {})", i, *count);
                 }
@@ -1070,7 +1170,7 @@ mod tests {
                 thread::sleep(Duration::from_millis(500));
                 
                 {
-                    let mut count = started_count_c.lock().unwrap();
+                    let mut count = started_count_c.lock();
                     *count -= 1;
                 }
             });
@@ -1083,7 +1183,7 @@ mod tests {
         
         // 5th should NOT have started yet
         assert!(start_rx.try_recv().is_err(), "5th transfer should be queued");
-        assert_eq!(*started_count.lock().unwrap(), 4);
+        assert_eq!(*started_count.lock(), 4);
 
         // Wait for one to finish
         thread::sleep(Duration::from_millis(600));

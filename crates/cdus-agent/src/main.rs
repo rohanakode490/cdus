@@ -4,7 +4,7 @@ use flume::Sender;
 use interprocess::local_socket::LocalSocketListener;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc; use parking_lot::Mutex;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{error, info};
@@ -174,7 +174,7 @@ fn main() {
     // Initialize timestamp from store if available
     if let Ok(Some(ts_str)) = store.get_state("last_sync_timestamp") {
         if let Ok(ts) = ts_str.parse::<u64>() {
-            *last_processed_timestamp.lock().unwrap() = ts;
+            *last_processed_timestamp.lock() = ts;
             info!("Initialized LWW timestamp from store: {}", ts);
         }
     }
@@ -187,9 +187,29 @@ fn main() {
     });
 
     let discovered_devices = Arc::new(Mutex::new(
-        Vec::<(String, String, String, String, u16)>::new(),
+        Vec::<(String, String, String, Vec<String>, u16)>::new(),
     ));
-    let peer_map = Arc::new(Mutex::new(std::collections::HashMap::<String, (String, String, String, u16, std::time::Instant)>::new()));
+    let peer_map = Arc::new(Mutex::new(std::collections::HashMap::<String, (String, String, Vec<String>, u16, std::time::Instant)>::new()));
+    
+    // Populate peer_map from store for paired devices to enable reconnection after restart
+    if let Ok(paired_devices) = store.get_paired_devices() {
+        let mut map = peer_map.lock();
+        for record in paired_devices {
+            if let (Some(ips), Some(port)) = (record.last_known_ips, record.last_known_port) {
+                map.insert(
+                    record.node_id,
+                    (
+                        record.label,
+                        "Unknown".to_string(),
+                        ips,
+                        port,
+                        std::time::Instant::now() - std::time::Duration::from_secs(3600),
+                    ),
+                );
+            }
+        }
+    }
+
     let discovered_devices_daemon = Arc::clone(&discovered_devices);
     let peer_map_daemon = Arc::clone(&peer_map);
 
@@ -261,7 +281,7 @@ fn main() {
                                             info!("IPC: Client subscribed to event stream");
                                             let (event_tx, event_rx) = flume::unbounded();
                                             {
-                                                let mut bus = EVENT_BUS.lock().unwrap();
+                                                let mut bus = EVENT_BUS.lock();
                                                 bus.push(event_tx);
                                             }
                                             while let Ok(event) = event_rx.recv() {
@@ -279,7 +299,7 @@ fn main() {
                                             mdns_clone.register_device(&node_id_clone, &label_clone, port);
                                             {
                                                 let mut list =
-                                                    discovered_devices_clone.lock().unwrap();
+                                                    discovered_devices_clone.lock();
                                                 list.clear();
                                             }
                                             mdns_clone.start_discovery(tx_clone.clone());
@@ -298,7 +318,7 @@ fn main() {
                                                     error!("Failed to register with relay: {}", e);
                                                 }
                                                 let rx = {
-                                                    let mut opt = relay_rx_opt.lock().unwrap();
+                                                    let mut opt = relay_rx_opt.lock();
                                                     opt.take()
                                                 };
                                                 if let Some(rx) = rx {
@@ -321,7 +341,7 @@ fn main() {
                                             let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::GetDiscovered => {
-                                            let list = discovered_devices_clone.lock().unwrap();
+                                            let list = discovered_devices_clone.lock();
                                             let resp_bytes = serde_json::to_vec(
                                                 &IpcMessage::DiscoveredResponse(list.clone()),
                                             )
@@ -330,30 +350,37 @@ fn main() {
                                         }
                                         IpcMessage::PairWith { node_id } => {
                                             let device_info = {
-                                                let list = discovered_devices_clone.lock().unwrap();
+                                                let list = discovered_devices_clone.lock();
                                                 let found_in_list = list.iter().find(|(id, _, _, _, _)| id == &node_id)
-                                                    .map(|(_, _, _, ip, port)| (ip.clone(), *port));
+                                                    .map(|(_, _, _, ips, port)| (ips.clone(), *port));
 
                                                 found_in_list.or_else(|| {
-                                                    let map = peer_map_clone.lock().unwrap();
-                                                    map.get(&node_id).map(|(_, _, ip, port, _)| (ip.clone(), *port))
+                                                    let map = peer_map_clone.lock();
+                                                    map.get(&node_id).map(|(_, _, ips, port, _)| (ips.clone(), *port))
                                                 })
                                             };
 
-                                            if let Some((ip, port)) = device_info {
-                                                if let Ok(ip_addr) = ip.parse() {
-                                                    let addr = SocketAddr::new(ip_addr, port);
-                                                    let pm_init = Arc::clone(&pm_clone);
-                                                    thread::spawn(move || {
-                                                        pm_init.initiate_pairing(addr);
-                                                    });
-                                                    let resp_bytes =
-                                                        serde_json::to_vec(&IpcMessage::Log(
-                                                            "Pairing initiated".to_string(),
-                                                        ))
-                                                        .unwrap();
-                                                    let _ = stream.write_all(&resp_bytes);
-                                                }
+                                            if let Some((ips, port)) = device_info {
+                                                let pm_init = Arc::clone(&pm_clone);
+                                                let node_id_clone = node_id.clone();
+                                                thread::spawn(move || {
+                                                    for ip in ips {
+                                                        if let Ok(ip_addr) = ip.parse() {
+                                                            let addr = SocketAddr::new(ip_addr, port);
+                                                            info!("Attempting manual pairing with {} at {}", node_id_clone, addr);
+                                                            if pm_init.initiate_pairing(addr) {
+                                                                info!("Manual pairing initiated with {} at {}", node_id_clone, addr);
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                });
+                                                let resp_bytes =
+                                                    serde_json::to_vec(&IpcMessage::Log(
+                                                        "Pairing process started".to_string(),
+                                                    ))
+                                                    .unwrap();
+                                                let _ = stream.write_all(&resp_bytes);
                                             }
                                         }
                                         IpcMessage::PairWithIp { ip, port } => {
@@ -383,9 +410,9 @@ fn main() {
                                             let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::ConfirmPairing(accepted) => {
-                                            let ap = active_pairing_clone.lock().unwrap();
+                                            let ap = active_pairing_clone.lock();
                                             if let Some(ref state) = *ap {
-                                                let mut res = state.confirmed.lock().unwrap();
+                                                let mut res = state.confirmed.lock();
                                                 *res = Some(accepted);
                                             }
                                             let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
@@ -431,7 +458,7 @@ fn main() {
                                             let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::GetPairingStatus => {
-                                            let ap = active_pairing_clone.lock().unwrap();
+                                            let ap = active_pairing_clone.lock();
                                             let resp = match *ap {
                                                 Some(ref state) => {
                                                     IpcMessage::PairingStatusResponse {
@@ -460,18 +487,18 @@ fn main() {
                                                         Option<cdus_common::TransportType>,
                                                     )> = devices
                                                         .into_iter()
-                                                        .map(|(id, label)| {
+                                                        .map(|record| {
                                                             let mut transport = sync_manager_ipc
-                                                                .get_peer_transport(&id);
+                                                                .get_peer_transport(&record.node_id);
                                                             if transport.is_none() {
-                                                                let map = peer_map_clone.lock().unwrap();
-                                                                if let Some((_, _, _, _, last_seen)) = map.get(&id) {
+                                                                let map = peer_map_clone.lock();
+                                                                if let Some((_, _, _, _, last_seen)) = map.get(&record.node_id) {
                                                                     if last_seen.elapsed() < std::time::Duration::from_secs(30) {
                                                                         transport = Some(cdus_common::TransportType::Lan);
                                                                     }
                                                                 }
                                                             }
-                                                            (id, label, transport)
+                                                            (record.node_id, record.label, transport)
                                                         })
                                                         .collect();
                                                     let resp_bytes = serde_json::to_vec(
@@ -493,6 +520,14 @@ fn main() {
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                             }
+                                        }
+                                        IpcMessage::StartBenchmark { node_id } => {
+                                            let _ = tx_clone.send(IpcMessage::StartBenchmark { node_id });
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
+                                                "Benchmark initiated".to_string(),
+                                            ))
+                                            .unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::UnpairDevice { node_id } => {
                                             match store_clone.remove_paired_device(&node_id) {
@@ -660,7 +695,7 @@ fn clipboard_watcher(tx: Sender<IpcMessage>, last_written: Arc<Mutex<Option<Stri
         loop {
             if let Ok(current_content) = clipboard.get_text() {
                 if current_content != last_content {
-                    let mut lw = last_written.lock().unwrap();
+                    let mut lw = last_written.lock();
                     if let Some(ref val) = *lw {
                         if val == &current_content {
                             info!("Ignoring clipboard change (self-triggered)");

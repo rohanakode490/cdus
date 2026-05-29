@@ -43,11 +43,20 @@ if __name__ == "__main__":
     elif cmd == "pair":
         node_id = sys.argv[3]
         print(send_ipc(sock, {"PairWith": {"node_id": node_id}}))
+    elif cmd == "pair_ip":
+        ip = sys.argv[3]
+        port = int(sys.argv[4])
+        print(send_ipc(sock, {"PairWithIp": {"ip": ip, "port": port}}))
     elif cmd == "confirm":
         accepted = sys.argv[3].lower() == "true"
         print(send_ipc(sock, {"ConfirmPairing": accepted}))
     elif cmd == "get_status":
         print(send_ipc(sock, "GetPairingStatus"))
+    elif cmd == "get_paired":
+        print(send_ipc(sock, "GetPairedDevices"))
+    elif cmd == "get_history":
+        limit = int(sys.argv[3]) if len(sys.argv) > 3 else 10
+        print(send_ipc(sock, {"GetHistory": {"limit": limit}}))
     elif cmd == "send_file":
         node_id = sys.argv[3]
         path = sys.argv[4]
@@ -55,6 +64,9 @@ if __name__ == "__main__":
     elif cmd == "accept":
         file_hash = sys.argv[3]
         print(send_ipc(sock, {"AcceptFileTransfer": {"file_hash": file_hash}}))
+    elif cmd == "benchmark":
+        node_id = sys.argv[3]
+        print(send_ipc(sock, {"StartBenchmark": {"node_id": node_id}}))
     elif cmd == "listen":
         duration = int(sys.argv[3]) if len(sys.argv) > 3 else 5
         for event in listen_events(sock, duration):

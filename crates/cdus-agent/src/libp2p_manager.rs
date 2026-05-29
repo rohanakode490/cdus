@@ -9,7 +9,7 @@ use libp2p::{
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, PeerId,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Arc; use parking_lot::Mutex;
 use std::thread;
 use std::time::Duration;
 use tokio::runtime::Runtime;
@@ -263,13 +263,12 @@ impl Libp2pManager {
                                             if let Ok(sync_msg) = SyncMessage::from_slice(&message.data) {
                                                 // Verify peer is paired
                                                 if let Ok(true) = store.is_device_paired(&propagation_source.to_string()) {
-                                                    if let SyncMessage::ClipboardUpdate { content, timestamp } = sync_msg {
-                                                        let _ = tx.send(IpcMessage::SetClipboard {
-                                                            content,
-                                                            timestamp,
-                                                            source: format!("libp2p:{}", propagation_source)
-                                                        });
-                                                    }
+                                                    let SyncMessage::ClipboardUpdate { content, timestamp } = sync_msg;
+                                                    let _ = tx.send(IpcMessage::SetClipboard {
+                                                        content,
+                                                        timestamp,
+                                                        source: format!("libp2p:{}", propagation_source)
+                                                    });
                                                 }
                                             }
                                         }
@@ -299,12 +298,12 @@ impl Libp2pManager {
         });
 
         if let Ok(control) = control_rx.recv() {
-            *self.stream_control.lock().unwrap() = Some(control);
+            *self.stream_control.lock() = Some(control);
         }
     }
 
     pub fn open_file_stream(&self, peer_id: PeerId) -> Result<libp2p::Stream> {
-        let control = self.stream_control.lock().unwrap().clone()
+        let control = self.stream_control.lock().clone()
             .ok_or_else(|| anyhow::anyhow!("Stream control not initialized"))?;
         let protocol = libp2p::StreamProtocol::new("/cdus/file/1.0.0");
         
