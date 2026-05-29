@@ -29,3 +29,8 @@ GEMINI.md
 
 # Android JNI binaries
 android/app/src/main/jniLibs/**/*.so
+
+# Relay artifacts
+relay/cdus-relay
+relay/*.db
+
