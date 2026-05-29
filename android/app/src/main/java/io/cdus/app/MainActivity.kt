@@ -37,9 +37,12 @@ import uniffi.cdus_ffi.initCore
 import uniffi.cdus_ffi.registerDevice
 import android.net.wifi.WifiManager
 import android.content.Context
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 
 import io.cdus.app.utils.FileUtils
 import io.cdus.app.utils.Logger
+import io.cdus.app.data.FileTransferManager
 import io.cdus.app.ui.components.DevicePickerDialog
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
@@ -47,6 +50,8 @@ import androidx.compose.runtime.setValue
 
 class MainActivity : ComponentActivity() {
     private var multicastLock: WifiManager.MulticastLock? = null
+    private var nsdManager: NsdManager? = null
+    private var registrationListener: NsdManager.RegistrationListener? = null
     private var sharedFilePath by mutableStateOf<String?>(null)
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -144,9 +149,16 @@ class MainActivity : ComponentActivity() {
             if (parts.size >= 2) {
                 val nodeId = parts[0]
                 val label = parts[1]
-                registerDevice(nodeId, label, 5200.toUShort())
-                Logger.i("Device registered: $nodeId ($label)")
+                val port = 5200
+                registerDevice(nodeId, label, port.toUShort())
+                Logger.i("Device registered in Rust: $nodeId ($label)")
+
+                // Native Android mDNS Registration (fixes Asymmetric Visibility Bug #10)
+                registerNativeMdnsService(nodeId, label, port)
                 
+                // Load file transfer history (Bug #11)
+                FileTransferManager.loadHistory()
+
                 // Start sync service if enabled (always start for now to handle file transfers)
                 val intent = Intent(this, io.cdus.app.service.SyncService::class.java)
                 androidx.core.content.ContextCompat.startForegroundService(this, intent)
@@ -172,8 +184,59 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun registerNativeMdnsService(nodeId: String, label: String, port: Int) {
+        nsdManager = getSystemService(Context.NSD_SERVICE) as NsdManager
+
+        val serviceInfo = NsdServiceInfo().apply {
+            // Service name should be short. Using truncated node ID.
+            serviceName = if (nodeId.length > 32) nodeId.substring(0, 32) else nodeId
+            serviceType = "_cdus._tcp."
+            setPort(port)
+
+            // Set properties to match Rust mdns.rs expectations
+            setAttribute("node_id", nodeId)
+            setAttribute("label", label)
+            setAttribute("os", "Android")
+        }
+
+        registrationListener = object : NsdManager.RegistrationListener {
+            override fun onServiceRegistered(NsdServiceInfo: NsdServiceInfo) {
+                val name = NsdServiceInfo.serviceName
+                Logger.i("Native Android mDNS registered successfully: $name")
+            }
+
+            override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                Logger.e("Native Android mDNS registration failed: Error code $errorCode")
+            }
+
+            override fun onServiceUnregistered(arg0: NsdServiceInfo) {
+                Logger.i("Native Android mDNS service unregistered.")
+            }
+
+            override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                Logger.e("Native Android mDNS unregistration failed: Error code $errorCode")
+            }
+        }
+
+        try {
+            nsdManager?.registerService(
+                serviceInfo, NsdManager.PROTOCOL_DNS_SD, registrationListener
+            )
+            Logger.i("Requested native Android mDNS registration")
+        } catch (e: Exception) {
+            Logger.e("Exception during native mDNS registration: ${e.message}")
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        registrationListener?.let {
+            try {
+                nsdManager?.unregisterService(it)
+            } catch (e: Exception) {
+                Logger.e("Error unregistering NSD service: ${e.message}")
+            }
+        }
         multicastLock?.let {
             if (it.isHeld) {
                 it.release()

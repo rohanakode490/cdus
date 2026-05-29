@@ -853,6 +853,12 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
 
 
 
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -878,6 +884,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_broadcast_clipboard(`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_fn_func_cancel_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_cdus_ffi_fn_func_cancel_pairing(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_clear_discovered_devices(uniffi_out_err: UniffiRustCallStatus, 
@@ -889,6 +897,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_get_clipboard_history(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_discovered_devices(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_cdus_ffi_fn_func_get_file_transfer_history(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_paired_devices(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -911,6 +921,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_set_clipboard_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_set_file_transfer_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_start_benchmark(`nodeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_start_discovery(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1034,6 +1046,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_broadcast_clipboard(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_cancel_file_transfer(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_cancel_pairing(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_clear_discovered_devices(
@@ -1045,6 +1059,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_func_get_clipboard_history(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_discovered_devices(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_get_file_transfer_history(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_paired_devices(
     ): Short
@@ -1067,6 +1083,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_func_set_clipboard_listener(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_set_file_transfer_listener(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_start_benchmark(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_start_discovery(
     ): Short
@@ -1117,6 +1135,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_broadcast_clipboard() != 52173.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_cancel_file_transfer() != 32279.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_cancel_pairing() != 27523.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1133,6 +1154,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_get_discovered_devices() != 33769.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_get_file_transfer_history() != 50618.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_get_paired_devices() != 8212.toShort()) {
@@ -1166,6 +1190,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_set_file_transfer_listener() != 44860.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_start_benchmark() != 28371.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_start_discovery() != 43924.toShort()) {
@@ -1495,7 +1522,7 @@ data class DiscoveredDevice (
     var `nodeId`: kotlin.String, 
     var `label`: kotlin.String, 
     var `os`: kotlin.String, 
-    var `ip`: kotlin.String, 
+    var `ips`: List<kotlin.String>, 
     var `port`: kotlin.UShort
 ) {
     
@@ -1511,7 +1538,7 @@ public object FfiConverterTypeDiscoveredDevice: FfiConverterRustBuffer<Discovere
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
+            FfiConverterSequenceString.read(buf),
             FfiConverterUShort.read(buf),
         )
     }
@@ -1520,7 +1547,7 @@ public object FfiConverterTypeDiscoveredDevice: FfiConverterRustBuffer<Discovere
             FfiConverterString.allocationSize(value.`nodeId`) +
             FfiConverterString.allocationSize(value.`label`) +
             FfiConverterString.allocationSize(value.`os`) +
-            FfiConverterString.allocationSize(value.`ip`) +
+            FfiConverterSequenceString.allocationSize(value.`ips`) +
             FfiConverterUShort.allocationSize(value.`port`)
     )
 
@@ -1528,8 +1555,72 @@ public object FfiConverterTypeDiscoveredDevice: FfiConverterRustBuffer<Discovere
             FfiConverterString.write(value.`nodeId`, buf)
             FfiConverterString.write(value.`label`, buf)
             FfiConverterString.write(value.`os`, buf)
-            FfiConverterString.write(value.`ip`, buf)
+            FfiConverterSequenceString.write(value.`ips`, buf)
             FfiConverterUShort.write(value.`port`, buf)
+    }
+}
+
+
+
+data class FileTransferRecord (
+    var `transferId`: kotlin.String, 
+    var `direction`: kotlin.String, 
+    var `peerNodeId`: kotlin.String, 
+    var `filePath`: kotlin.String, 
+    var `fileName`: kotlin.String, 
+    var `totalBytes`: kotlin.ULong, 
+    var `bytesConfirmed`: kotlin.ULong, 
+    var `status`: kotlin.String, 
+    var `errorMessage`: kotlin.String?, 
+    var `createdAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFileTransferRecord: FfiConverterRustBuffer<FileTransferRecord> {
+    override fun read(buf: ByteBuffer): FileTransferRecord {
+        return FileTransferRecord(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FileTransferRecord) = (
+            FfiConverterString.allocationSize(value.`transferId`) +
+            FfiConverterString.allocationSize(value.`direction`) +
+            FfiConverterString.allocationSize(value.`peerNodeId`) +
+            FfiConverterString.allocationSize(value.`filePath`) +
+            FfiConverterString.allocationSize(value.`fileName`) +
+            FfiConverterULong.allocationSize(value.`totalBytes`) +
+            FfiConverterULong.allocationSize(value.`bytesConfirmed`) +
+            FfiConverterString.allocationSize(value.`status`) +
+            FfiConverterOptionalString.allocationSize(value.`errorMessage`) +
+            FfiConverterULong.allocationSize(value.`createdAt`)
+    )
+
+    override fun write(value: FileTransferRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`transferId`, buf)
+            FfiConverterString.write(value.`direction`, buf)
+            FfiConverterString.write(value.`peerNodeId`, buf)
+            FfiConverterString.write(value.`filePath`, buf)
+            FfiConverterString.write(value.`fileName`, buf)
+            FfiConverterULong.write(value.`totalBytes`, buf)
+            FfiConverterULong.write(value.`bytesConfirmed`, buf)
+            FfiConverterString.write(value.`status`, buf)
+            FfiConverterOptionalString.write(value.`errorMessage`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
     }
 }
 
@@ -1886,6 +1977,38 @@ public object FfiConverterTypeFileTransferListener: FfiConverterCallbackInterfac
 /**
  * @suppress
  */
+public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
+    override fun read(buf: ByteBuffer): kotlin.String? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterString.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.String?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterString.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.String?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalTypePairingStatus: FfiConverterRustBuffer<PairingStatus?> {
     override fun read(buf: ByteBuffer): PairingStatus? {
         if (buf.get().toInt() == 0) {
@@ -1908,6 +2031,34 @@ public object FfiConverterOptionalTypePairingStatus: FfiConverterRustBuffer<Pair
         } else {
             buf.put(1)
             FfiConverterTypePairingStatus.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
         }
     }
 }
@@ -1974,6 +2125,34 @@ public object FfiConverterSequenceTypeDiscoveredDevice: FfiConverterRustBuffer<L
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeFileTransferRecord: FfiConverterRustBuffer<List<FileTransferRecord>> {
+    override fun read(buf: ByteBuffer): List<FileTransferRecord> {
+        val len = buf.getInt()
+        return List<FileTransferRecord>(len) {
+            FfiConverterTypeFileTransferRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FileTransferRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFileTransferRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FileTransferRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFileTransferRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<PairedDevice>> {
     override fun read(buf: ByteBuffer): List<PairedDevice> {
         val len = buf.getInt()
@@ -2007,6 +2186,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_broadcast_clipboard(
         FfiConverterString.lower(`content`),_status)
+}
+    
+    
+ fun `cancelFileTransfer`(`transferId`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_cancel_file_transfer(
+        FfiConverterString.lower(`transferId`),_status)
 }
     
     
@@ -2056,6 +2243,15 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_discovered_devices(
         _status)
+}
+    )
+    }
+    
+ fun `getFileTransferHistory`(`limit`: kotlin.UInt): List<FileTransferRecord> {
+            return FfiConverterSequenceTypeFileTransferRecord.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_file_transfer_history(
+        FfiConverterUInt.lower(`limit`),_status)
 }
     )
     }
@@ -2149,6 +2345,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_set_file_transfer_listener(
         FfiConverterTypeFileTransferListener.lower(`listener`),_status)
+}
+    
+    
+ fun `startBenchmark`(`nodeId`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_start_benchmark(
+        FfiConverterString.lower(`nodeId`),_status)
 }
     
     

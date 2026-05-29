@@ -1,9 +1,8 @@
 uniffi::setup_scaffolding!();
 
-use blake3;
 use once_cell::sync::Lazy;
 use std::sync::{Arc, Mutex};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use cdus_common::{IpcMessage, SyncMessage, ProgressEvent};
 use cdus_agent::file_transfer::FileTransferManager;
 
@@ -25,7 +24,7 @@ pub struct DiscoveredDevice {
     pub node_id: String,
     pub label: String,
     pub os: String,
-    pub ip: String,
+    pub ips: Vec<String>,
     pub port: u16,
 }
 
@@ -132,8 +131,35 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
             match store.get_or_create_identity(path) {
                 Ok((node_id, private_key)) => {
                     *LOCAL_NODE_ID.lock().unwrap() = node_id.clone();
-                    
+
+                    // Populate PEER_MAP from store for paired devices to enable reconnection after restart
+                    if let Ok(paired_devices) = store.get_paired_devices() {
+                        let mut map = PEER_MAP.lock().unwrap();
+                        for record in paired_devices {
+                            if let (Some(ips), Some(port)) =
+                                (record.last_known_ips, record.last_known_port)
+                            {
+                                let device = DiscoveredDevice {
+                                    node_id: record.node_id.clone(),
+                                    label: record.label,
+                                    os: "Unknown".to_string(),
+                                    ips,
+                                    port,
+                                };
+                                map.insert(
+                                    record.node_id,
+                                    (
+                                        device,
+                                        std::time::Instant::now()
+                                            - std::time::Duration::from_secs(3600),
+                                    ),
+                                );
+                            }
+                        }
+                    }
+
                     let label = store
+
                         .get_state("device_name")
                         .unwrap_or(None)
                         .unwrap_or_else(|| "Android Device".to_string());
@@ -150,18 +176,20 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                         while let Ok(event) = p_rx.recv() {
                             if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
                                 match event {
-                                    ProgressEvent::Started { transfer_id, total_bytes, is_outgoing } => {
-                                        // We don't have filename here easily, but for started it's okay
+                                    ProgressEvent::Started { transfer_id, file_name, total_bytes, is_outgoing } => {
                                         if is_outgoing {
-                                            listener.on_outgoing_transfer_started(transfer_id, "file".to_string(), total_bytes);
+                                            listener.on_outgoing_transfer_started(transfer_id, file_name, total_bytes);
                                         } else {
-                                            listener.on_incoming_transfer_started(transfer_id, "file".to_string(), total_bytes);
+                                            listener.on_incoming_transfer_started(transfer_id, file_name, total_bytes);
                                         }
                                     }
-                                    ProgressEvent::Progress { transfer_id, bytes_confirmed } => {
-                                        // Need to lookup total_bytes to give percentage if listener expects it
-                                        // For now just pass confirmed as raw or handle percent in listener
-                                        listener.on_transfer_progress(transfer_id, bytes_confirmed as f32);
+                                    ProgressEvent::Progress { transfer_id, bytes_confirmed, total_bytes } => {
+                                        let progress = if total_bytes > 0 {
+                                            (bytes_confirmed as f32 / total_bytes as f32) * 100.0
+                                        } else {
+                                            0.0
+                                        };
+                                        listener.on_transfer_progress(transfer_id, progress);
                                     }
                                     ProgressEvent::Complete { transfer_id, dest_path } => {
                                         listener.on_transfer_complete(transfer_id, dest_path.to_string_lossy().to_string());
@@ -169,8 +197,8 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                     ProgressEvent::Failed { transfer_id, reason } => {
                                         listener.on_transfer_error(transfer_id, reason);
                                     }
-                                    ProgressEvent::IncomingRequest { transfer_id, file_name, total_bytes, sender_label } => {
-                                        listener.on_incoming_request(String::new(), transfer_id, file_name, total_bytes, sender_label);
+                                    ProgressEvent::IncomingRequest { transfer_id, node_id, file_name, total_bytes, sender_label } => {
+                                        listener.on_incoming_request(node_id, transfer_id, file_name, total_bytes, sender_label);
                                     }
                                 }
                             }
@@ -258,7 +286,7 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                     node_id,
                                     label,
                                     os,
-                                    ip,
+                                    ips,
                                     port,
                                 } => {
                                     let local_id = LOCAL_NODE_ID.lock().unwrap().clone();
@@ -270,26 +298,38 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                         node_id: node_id.clone(),
                                         label: label.clone(),
                                         os: os.clone(),
-                                        ip: ip.clone(),
+                                        ips: ips.clone(),
                                         port,
                                     };
 
                                     // Update global peer map (always, even if paired)
                                     {
                                         let mut map = PEER_MAP.lock().unwrap();
-                                        map.insert(node_id.clone(), (device.clone(), std::time::Instant::now()));
+                                        map.insert(
+                                            node_id.clone(),
+                                            (device.clone(), std::time::Instant::now()),
+                                        );
+                                    }
+
+                                    // Persist network info for paired devices
+                                    if let Some(store) = STORE.lock().unwrap().as_ref() {
+                                        if let Ok(true) = store.is_device_paired(&node_id) {
+                                            let _ = store.update_paired_device_network_info(
+                                                &node_id, &ips, port,
+                                            );
+                                        }
                                     }
 
                                     let mut list = DISCOVERED.lock().unwrap();
                                     if !list.iter().any(|d| d.node_id == node_id) {
                                         info!(
-                                            "FFI: Discovered device: {} ({}) at {}:{}",
-                                            label, node_id, ip, port
+                                            "FFI: Discovered device: {} ({}) at {:?}:{}",
+                                            label, node_id, ips, port
                                         );
                                         list.push(device);
                                     }
                                 }
-                                IpcMessage::FileProgress(event) => {
+                                IpcMessage::FileProgress(_event) => {
                                     // These are already handled by the SEPARATE progress forwarder thread spawned above
                                     // But we could also handle them here if we didn't have that.
                                 }
@@ -306,6 +346,20 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
             }
         }
         Err(e) => format!("error:Failed to init store: {}", e),
+    }
+}
+
+#[uniffi::export]
+pub fn start_benchmark(node_id: String) {
+    if let Some(tx) = AGENT_TX.lock().unwrap().as_ref() {
+        let _ = tx.send(IpcMessage::StartBenchmark { node_id });
+    }
+}
+
+#[uniffi::export]
+pub fn cancel_file_transfer(transfer_id: String) {
+    if let Some(tm) = TRANSFER_MANAGER.lock().unwrap().as_ref() {
+        tm.cancel_transfer(&transfer_id);
     }
 }
 
@@ -339,20 +393,34 @@ pub fn send_file(node_id: String, path: String) {
             ).unwrap();
 
             if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
-                if let Ok(stream) = lm_clone.open_file_stream(peer_id) {
-                    let wrapped_stream = cdus_agent::file_transfer::Libp2pFileStream { 
-                        stream, 
-                        runtime: lm_clone.runtime_handle() 
-                    };
+                match lm_clone.open_file_stream(peer_id) {
+                    Ok(stream) => {
+                        let wrapped_stream = cdus_agent::file_transfer::Libp2pFileStream { 
+                            stream, 
+                            runtime: lm_clone.runtime_handle() 
+                        };
 
-                    let session_key = cdus_agent::file_transfer::SessionKey([0u8; 32]);
-                    let _ = cdus_agent::file_transfer::handle_outgoing_transfer(
-                        Box::new(wrapped_stream),
-                        store_clone,
-                        transfer_id,
-                        session_key,
-                        tm_clone,
-                    );
+                        let session_key = cdus_agent::file_transfer::SessionKey([0u8; 32]);
+                        let _ = cdus_agent::file_transfer::handle_outgoing_transfer(
+                            Box::new(wrapped_stream),
+                            store_clone,
+                            transfer_id,
+                            session_key,
+                            tm_clone,
+                        );
+                    }
+                    Err(e) => {
+                        error!("Failed to open file stream to {}: {}", peer_id, e);
+                        let _ = tm_clone.progress_tx.send(ProgressEvent::Failed { 
+                            transfer_id, 
+                            reason: format!("Connection failed: {}", e) 
+                        });
+                        if e.to_string().contains("Dial error") || e.to_string().contains("no addresses") {
+                            if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                                listener.on_peer_disconnected(node_id);
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -412,6 +480,46 @@ pub fn broadcast_clipboard(content: String) {
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
+pub struct FileTransferRecord {
+    pub transfer_id: String,
+    pub direction: String,
+    pub peer_node_id: String,
+    pub file_path: String,
+    pub file_name: String,
+    pub total_bytes: u64,
+    pub bytes_confirmed: u64,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub created_at: u64,
+}
+
+#[uniffi::export]
+pub fn get_file_transfer_history(limit: u32) -> Vec<FileTransferRecord> {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        match store.get_transfer_history(limit) {
+            Ok(history) => history
+                .into_iter()
+                .map(|r| FileTransferRecord {
+                    transfer_id: r.transfer_id,
+                    direction: r.direction,
+                    peer_node_id: r.peer_node_id,
+                    file_path: r.file_path,
+                    file_name: r.file_name,
+                    total_bytes: r.total_bytes as u64,
+                    bytes_confirmed: r.bytes_confirmed as u64,
+                    status: r.status,
+                    error_message: r.error_message,
+                    created_at: r.created_at as u64,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    }
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
 pub struct PairedDevice {
     pub node_id: String,
     pub label: String,
@@ -429,14 +537,14 @@ pub fn get_paired_devices() -> Vec<PairedDevice> {
 
                 devices
                     .into_iter()
-                    .map(|(node_id, label)| {
+                    .map(|record| {
                         let is_online = sync_manager
-                            .map(|sm| sm.is_connected(&node_id))
+                            .map(|sm| sm.is_connected(&record.node_id))
                             .unwrap_or(false)
-                            || peer_map.get(&node_id).map(|(_, instant)| instant.elapsed() < std::time::Duration::from_secs(30)).unwrap_or(false);
+                            || peer_map.get(&record.node_id).map(|(_, instant)| instant.elapsed() < std::time::Duration::from_secs(30)).unwrap_or(false);
                         PairedDevice {
-                            node_id,
-                            label,
+                            node_id: record.node_id,
+                            label: record.label,
                             is_online,
                         }
                     })
@@ -480,13 +588,17 @@ pub fn initiate_pairing(node_id: String) {
         };
 
         if let Some(device) = device {
-            if let Ok(ip_addr) = device.ip.parse() {
-                let addr = std::net::SocketAddr::new(ip_addr, device.port);
-                let pm_clone = Arc::clone(pm);
-                std::thread::spawn(move || {
-                    pm_clone.initiate_pairing(addr);
-                });
-            }
+            let pm_clone = Arc::clone(pm);
+            std::thread::spawn(move || {
+                for ip in device.ips {
+                    if let Ok(ip_addr) = ip.parse() {
+                        let addr = std::net::SocketAddr::new(ip_addr, device.port);
+                        if pm_clone.initiate_pairing(addr) {
+                            break;
+                        }
+                    }
+                }
+            });
         }
     }
 }
@@ -563,7 +675,7 @@ fn spawn_mdns_receiver(
                     node_id,
                     label,
                     os,
-                    ip,
+                    ips,
                     port,
                 } => {
                     if !local_id.is_empty() && node_id == local_id {
@@ -574,7 +686,7 @@ fn spawn_mdns_receiver(
                         node_id: node_id.clone(),
                         label: label.clone(),
                         os: os.clone(),
-                        ip: ip.clone(),
+                        ips: ips.clone(),
                         port,
                     };
 
@@ -593,13 +705,18 @@ fn spawn_mdns_receiver(
                         if !pm.sync_manager.is_connected(&node_id) {
                             if let Some(store) = STORE.lock().unwrap().as_ref() {
                                 if let Ok(true) = store.is_device_paired(&node_id) {
-                                    if let Ok(ip_addr) = ip.parse() {
-                                        let addr = std::net::SocketAddr::new(ip_addr, port);
-                                        let pm_clone = Arc::clone(pm);
-                                        std::thread::spawn(move || {
-                                            pm_clone.initiate_pairing(addr);
-                                        });
-                                    }
+                                    let pm_clone = Arc::clone(pm);
+                                    let ips_clone = ips.clone();
+                                    std::thread::spawn(move || {
+                                        for ip in ips_clone {
+                                            if let Ok(ip_addr) = ip.parse() {
+                                                let addr = std::net::SocketAddr::new(ip_addr, port);
+                                                if pm_clone.initiate_pairing(addr) {
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    });
                                 }
                             }
                         }

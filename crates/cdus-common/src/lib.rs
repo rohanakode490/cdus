@@ -47,7 +47,7 @@ pub enum IpcMessage {
         node_id: String,
         label: String,
         os: String,
-        ip: String,
+        ips: Vec<String>,
         port: u16,
     },
     DeviceLost {
@@ -57,7 +57,7 @@ pub enum IpcMessage {
         node_id: String,
     },
     GetDiscovered,
-    DiscoveredResponse(Vec<(String, String, String, String, u16)>),
+    DiscoveredResponse(Vec<(String, String, String, Vec<String>, u16)>),
     PairWith {
         node_id: String,
     },
@@ -121,6 +121,9 @@ pub enum IpcMessage {
         transfer_id: String,
         error: String,
     },
+    StartBenchmark {
+        node_id: String,
+    },
     // New File Transfer IPC
     FileProgress(ProgressEvent),
 }
@@ -129,12 +132,14 @@ pub enum IpcMessage {
 pub enum ProgressEvent {
     Started {
         transfer_id: String,
+        file_name: String,
         total_bytes: u64,
         is_outgoing: bool,
     },
     Progress {
         transfer_id: String,
         bytes_confirmed: u64,
+        total_bytes: u64,
     },
     Complete {
         transfer_id: String,
@@ -146,6 +151,7 @@ pub enum ProgressEvent {
     },
     IncomingRequest {
         transfer_id: String,
+        node_id: String,
         file_name: String,
         total_bytes: u64,
         sender_label: String,

@@ -110,11 +110,21 @@ fun TransferItem(transfer: FileTransferInfo) {
                             progress = transfer.progress / 100f,
                             modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                         )
-                        Text(
-                            text = "${transfer.progress.toInt()}%",
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.align(Alignment.End)
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (transfer.speedMbps != null) "%.1f Mbps".format(transfer.speedMbps) else "",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                            Text(
+                                text = "${transfer.progress.toInt()}%",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
                     } else {
                         Text(text = "Waiting for your action...", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                     }
@@ -142,6 +152,16 @@ fun TransferItem(transfer: FileTransferInfo) {
                         notificationManager.cancel(2) // FILE_NOTIFICATION_ID
                     }) {
                         Text("Accept")
+                    }
+                }
+            } else if (transfer.status == TransferStatus.OUTGOING || transfer.status == TransferStatus.DOWNLOADING || transfer.status == TransferStatus.HASHING) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { 
+                        uniffi.cdus_ffi.cancelFileTransfer(transfer.transferId)
+                        FileTransferManager.markError(transfer.transferId, "Cancelled")
+                    }) {
+                        Text("Cancel", color = MaterialTheme.colorScheme.error)
                     }
                 }
             } else if (transfer.status == TransferStatus.COMPLETE || transfer.status == TransferStatus.ERROR || transfer.status == TransferStatus.REJECTED) {

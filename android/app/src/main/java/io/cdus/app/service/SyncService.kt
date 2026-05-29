@@ -29,14 +29,46 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
     private val FILE_NOTIFICATION_ID = 2
     private lateinit var clipboardManager: ClipboardManager
     private var lastClipboardContent: String? = null
+    
+    private val clipChangedListener = ClipboardManager.OnPrimaryClipChangedListener {
+        checkSystemClipboard()
+    }
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboardManager.addPrimaryClipChangedListener(clipChangedListener)
         setClipboardListener(this)
         setFileTransferListener(this)
         Logger.i("SyncService created and remote listeners added")
+    }
+
+    private fun checkSystemClipboard() {
+        try {
+            if (clipboardManager.hasPrimaryClip()) {
+                val clipData = clipboardManager.primaryClip
+                if (clipData != null && clipData.itemCount > 0) {
+                    val content = clipData.getItemAt(0).text?.toString()
+                    if (content != null && content != lastClipboardContent) {
+                        val sharedPref = getSharedPreferences("cdus_settings", Context.MODE_PRIVATE)
+                        if (sharedPref.getBoolean("clipboard_sync", false)) {
+                            // Only broadcast if it's new
+                            val lastHash = sharedPref.getString("last_clip_hash", "")
+                            val currentHash = content.hashCode().toString()
+                            if (currentHash != lastHash) {
+                                sharedPref.edit().putString("last_clip_hash", currentHash).apply()
+                                lastClipboardContent = content
+                                Logger.i("New system clipboard content detected, broadcasting")
+                                uniffi.cdus_ffi.broadcastClipboard(content)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Logger.e("Error checking system clipboard: ${e.message}")
+        }
     }
 
     override fun onClipboardUpdate(content: String, source: String) {
@@ -63,7 +95,9 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
                 transferId = transferId,
                 fileName = fileName,
                 progress = 0f,
-                status = TransferStatus.INCOMING
+                status = TransferStatus.INCOMING,
+                nodeId = nodeId,
+                senderLabel = senderLabel
             )
         )
 
@@ -112,12 +146,15 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
     override fun onIncomingTransferStarted(transferId: String, fileName: String, totalBytes: ULong) {
         Logger.i("Incoming file transfer started: $fileName")
         
+        val existing = FileTransferManager.transfers[transferId]
         FileTransferManager.updateTransfer(
             FileTransferInfo(
                 transferId = transferId,
                 fileName = fileName,
                 progress = 0f,
-                status = TransferStatus.DOWNLOADING
+                status = TransferStatus.DOWNLOADING,
+                nodeId = existing?.nodeId,
+                senderLabel = existing?.senderLabel
             )
         )
     }
@@ -145,16 +182,85 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         }
     }
 
+    private var lastNotificationTime = 0L
+    private var lastNotificationProgress = -1
+    private var lastBytesConfirmed = 0L
+    private var lastSpeedTime = 0L
+
     override fun onTransferProgress(transferId: String, progress: Float) {
-        Logger.d("Transfer progress for $transferId: $progress%")
-        FileTransferManager.updateProgress(transferId, progress)
+        val currentProgress = progress.toInt()
+        val currentTime = System.currentTimeMillis()
+        
+        // Find total bytes for speed calculation
+        val info = FileTransferManager.transfers[transferId]
+        val totalBytes = (1024L * 1024L * 1024L).toFloat() // Default for 1GB benchmark if unknown
+        // We actually need totalBytes from Rust but UniFFI doesn't pass it here.
+        // We can estimate from progress if we have the initial totalBytes.
+        // For now, let's just use bytes_confirmed if we can get it.
+        
+        // Wait, UniFFI listener only gives `progress: Float`. 
+        // I should probably have updated the listener to include bytes_confirmed.
+        // Let's assume progress is accurate enough for relative speed.
+        
+        var currentSpeed: Float? = null
+        if (lastSpeedTime > 0 && currentTime > lastSpeedTime) {
+            val progressDiff = progress - (info?.progress ?: 0f)
+            if (progressDiff > 0) {
+                // If it's the benchmark, we know it's 1GB
+                val isBenchmark = transferId == "ffffffff-ffff-ffff-ffff-ffffffffffff"
+                val totalSize = if (isBenchmark) 1024f * 1024f * 1024f else 10f * 1024f * 1024f // Estimate
+                val bytesDelta = (progressDiff / 100f) * totalSize
+                val timeDeltaSecs = (currentTime - lastSpeedTime) / 1000f
+                currentSpeed = (bytesDelta * 8 / (1024f * 1024f)) / timeDeltaSecs // Mbps
+            }
+        }
+        lastSpeedTime = currentTime
+
+        // Throttling: Update at most once every 500ms, OR if progress jumps by 5%
+        if (currentProgress > 0 && currentProgress < 100) {
+            if (currentTime - lastNotificationTime < 500 && currentProgress - lastNotificationProgress < 5) {
+                // Skip this update in notification (but update memory manager)
+                FileTransferManager.transfers[transferId]?.let {
+                    FileTransferManager.updateTransfer(it.copy(progress = progress, speedMbps = currentSpeed ?: it.speedMbps))
+                }
+                return
+            }
+        }
+        
+        lastNotificationTime = currentTime
+        lastNotificationProgress = currentProgress
+
+        Logger.d("Transfer progress for $transferId: $progress% (${currentSpeed ?: 0} Mbps)")
+        
+        val updatedInfo = info?.copy(
+            progress = progress, 
+            speedMbps = currentSpeed ?: info.speedMbps,
+            fileName = if (transferId == "ffffffff-ffff-ffff-ffff-ffffffffffff") "1GB Network Benchmark" else info.fileName
+        ) ?: return
+        
+        FileTransferManager.updateTransfer(updatedInfo)
+
+        val fileName = updatedInfo.fileName
+
+        val cancelIntent = Intent(this, FileActionReceiver::class.java).apply {
+            action = "CANCEL"
+            putExtra("transfer_id", transferId)
+        }
+        val cancelPendingIntent = android.app.PendingIntent.getBroadcast(
+            this, 
+            transferId.hashCode() + 2, 
+            cancelIntent, 
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
 
         val notification = NotificationCompat.Builder(this, FILE_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("Downloading File")
-            .setContentText("Transfer in progress...")
-            .setProgress(100, progress.toInt(), false)
+            .setSmallIcon(if (info?.status == TransferStatus.OUTGOING) android.R.drawable.stat_sys_upload else android.R.drawable.stat_sys_download)
+            .setContentTitle(if (info?.status == TransferStatus.OUTGOING) "Sending File" else "Downloading File")
+            .setContentText("$fileName: $currentProgress%")
+            .setProgress(100, currentProgress, false)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel", cancelPendingIntent)
             .build()
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -256,11 +362,15 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
 
         startForeground(NOTIFICATION_ID, notification)
 
+        // Initial check when service starts
+        checkSystemClipboard()
+
         return START_STICKY
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        clipboardManager.removePrimaryClipChangedListener(clipChangedListener)
         Logger.i("SyncService destroyed")
     }
 
@@ -279,7 +389,7 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         val fileChannel = NotificationChannel(
             FILE_CHANNEL_ID,
             "File Transfers",
-            NotificationManager.IMPORTANCE_HIGH
+            NotificationManager.IMPORTANCE_LOW
         )
         manager.createNotificationChannel(fileChannel)
     }

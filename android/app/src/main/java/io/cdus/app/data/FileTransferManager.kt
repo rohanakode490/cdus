@@ -11,7 +11,10 @@ data class FileTransferInfo(
     val fileName: String,
     val progress: Float,
     val status: TransferStatus,
-    val error: String? = null
+    val nodeId: String? = null,
+    val senderLabel: String? = null,
+    val error: String? = null,
+    val speedMbps: Float? = null
 )
 
 object FileTransferManager {
@@ -58,5 +61,36 @@ object FileTransferManager {
     fun clearFinished() {
         val toRemove = transfers.filter { it.value.status == TransferStatus.COMPLETE || it.value.status == TransferStatus.ERROR || it.value.status == TransferStatus.REJECTED }.keys
         toRemove.forEach { transfers.remove(it) }
+    }
+
+    fun loadHistory() {
+        try {
+            val history = uniffi.cdus_ffi.getFileTransferHistory(50)
+            history.forEach { record ->
+                val status = when (record.status) {
+                    "complete" -> TransferStatus.COMPLETE
+                    "failed" -> TransferStatus.ERROR
+                    "declined" -> TransferStatus.REJECTED
+                    "in_progress", "paused" -> {
+                        // If it was in progress/paused but we just restarted, it's effectively "paused"
+                        if (record.direction == "outgoing") TransferStatus.OUTGOING else TransferStatus.DOWNLOADING
+                    }
+                    "awaiting_acceptance" -> TransferStatus.INCOMING
+                    else -> TransferStatus.ERROR
+                }
+
+                val info = FileTransferInfo(
+                    transferId = record.transferId,
+                    fileName = record.fileName,
+                    progress = if (record.totalBytes > 0uL) (record.bytesConfirmed.toFloat() / record.totalBytes.toFloat()) * 100f else 0f,
+                    status = status,
+                    nodeId = record.peerNodeId,
+                    error = record.errorMessage
+                )
+                transfers[record.transferId] = info
+            }
+        } catch (e: Exception) {
+            // Log error
+        }
     }
 }

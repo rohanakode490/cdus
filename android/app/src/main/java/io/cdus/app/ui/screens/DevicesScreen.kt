@@ -28,6 +28,7 @@ import uniffi.cdus_ffi.getPairedDevices
 import uniffi.cdus_ffi.unpairDevice
 import uniffi.cdus_ffi.PairedDevice
 import uniffi.cdus_ffi.sendFile
+import uniffi.cdus_ffi.startBenchmark
 import io.cdus.app.utils.FileUtils
 import io.cdus.app.utils.UIUtils
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -40,8 +41,11 @@ fun DevicesScreen() {
     var discoveredDevices by remember { mutableStateOf<List<DiscoveredDevice>>(emptyList()) }
     var pairedDevices by remember { mutableStateOf<List<PairedDevice>>(emptyList()) }
     var pairingStatus by remember { mutableStateOf<PairingStatus?>(null) }
+    var isDeveloperMode by remember { mutableStateOf(false) }
     
     val context = LocalContext.current
+    val sharedPref = remember { context.getSharedPreferences("cdus_settings", android.content.Context.MODE_PRIVATE) }
+    
     var selectedDeviceForFile by remember { mutableStateOf<String?>(null) }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -77,6 +81,7 @@ fun DevicesScreen() {
             pairingStatus = getPairingStatus()
             val devices = getPairedDevices()
             pairedDevices = devices
+            isDeveloperMode = sharedPref.getBoolean("developer_mode", false)
             io.cdus.app.data.DeviceManager.updateLabels(devices)
             delay(1000)
         }
@@ -121,10 +126,15 @@ fun DevicesScreen() {
             for (device in pairedDevices) {
                 PairedDeviceItem(
                     device = device,
+                    isDeveloperMode = isDeveloperMode,
                     onUnpairClick = { unpairDevice(device.nodeId) },
                     onSendFileClick = {
                         selectedDeviceForFile = device.nodeId
                         filePickerLauncher.launch("*/*")
+                    },
+                    onBenchmarkClick = {
+                        startBenchmark(device.nodeId)
+                        android.widget.Toast.makeText(context, "Starting 1GB Benchmark...", android.widget.Toast.LENGTH_LONG).show()
                     }
                 )
             }
@@ -185,58 +195,81 @@ fun DevicesScreen() {
 }
 
 @Composable
-fun PairedDeviceItem(device: PairedDevice, onUnpairClick: () -> Unit, onSendFileClick: () -> Unit) {
+fun PairedDeviceItem(
+    device: PairedDevice, 
+    isDeveloperMode: Boolean = false,
+    onUnpairClick: () -> Unit, 
+    onSendFileClick: () -> Unit,
+    onBenchmarkClick: () -> Unit = {}
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
-        Row(
-            modifier = Modifier
-                .padding(12.dp)
-                .fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Computer,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(text = UIUtils.formatDeviceLabel(device.label), style = MaterialTheme.typography.bodyLarge)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            modifier = Modifier.size(8.dp),
-                            shape = androidx.compose.foundation.shape.CircleShape,
-                            color = if (device.isOnline) androidx.compose.ui.graphics.Color.Green else androidx.compose.ui.graphics.Color.Gray
-                        ) {}
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (device.isOnline) "Online" else "Offline",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (device.isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
-                        )
-                        Text(text = " • #${device.nodeId.take(8)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+        Column {
+            Row(
+                modifier = Modifier
+                    .padding(12.dp)
+                    .fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Computer,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(text = UIUtils.formatDeviceLabel(device.label), style = MaterialTheme.typography.bodyLarge)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                modifier = Modifier.size(8.dp),
+                                shape = androidx.compose.foundation.shape.CircleShape,
+                                color = if (device.isOnline) androidx.compose.ui.graphics.Color.Green else androidx.compose.ui.graphics.Color.Gray
+                            ) {}
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (device.isOnline) "Online" else "Offline",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (device.isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                            )
+                            Text(text = " • #${device.nodeId.take(8)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+                        }
+                    }
+                }
+                Row {
+                    if (device.isOnline) {
+                        TextButton(onClick = onSendFileClick) {
+                            Text("Send File")
+                        }
+                    } else {
+                        TextButton(onClick = { initiatePairing(device.nodeId) }) {
+                            Text("Connect")
+                        }
+                    }
+                    TextButton(onClick = onUnpairClick) {
+                        Text("Unpair", color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
-            Row {
-                if (device.isOnline) {
-                    TextButton(onClick = onSendFileClick) {
-                        Text("Send File")
+            
+            if (isDeveloperMode && device.isOnline) {
+                Divider(modifier = Modifier.padding(horizontal = 12.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(
+                        onClick = onBenchmarkClick,
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.tertiary)
+                    ) {
+                        Text("Run 1GB Benchmark")
                     }
-                } else {
-                    TextButton(onClick = { initiatePairing(device.nodeId) }) {
-                        Text("Connect")
-                    }
-                }
-                TextButton(onClick = onUnpairClick) {
-                    Text("Unpair", color = MaterialTheme.colorScheme.error)
                 }
             }
         }

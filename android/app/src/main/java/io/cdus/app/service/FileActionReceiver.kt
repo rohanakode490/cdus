@@ -6,6 +6,7 @@ import android.content.Intent
 import io.cdus.app.utils.Logger
 import uniffi.cdus_ffi.acceptFileTransfer
 import uniffi.cdus_ffi.rejectFileTransfer
+import uniffi.cdus_ffi.cancelFileTransfer
 
 class FileActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -26,6 +27,9 @@ class FileActionReceiver : BroadcastReceiver() {
                 io.cdus.app.data.FileTransferManager.transfers[transferId]?.let {
                     io.cdus.app.data.FileTransferManager.updateTransfer(it.copy(status = io.cdus.app.data.TransferStatus.REJECTED))
                 }
+            }
+            "CANCEL" -> {
+                cancelFileTransfer(transferId)
             }
         }
 
