@@ -16,7 +16,11 @@ import (
 )
 
 func main() {
-	port := flag.String("port", "8080", "HTTP port")
+	defaultPort := os.Getenv("PORT")
+	if defaultPort == "" {
+		defaultPort = "8080"
+	}
+	port := flag.String("port", defaultPort, "HTTP port")
 	dbPath := flag.String("db", "relay.db", "SQLite database path")
 	flag.Parse()
 

@@ -188,6 +188,15 @@ func (h *Hub) DisconnectClient(uuid string) {
 	}
 }
 
+func (h *Hub) GetStats() map[string]interface{} {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return map[string]interface{}{
+		"active_clients": len(h.clients),
+		"timestamp":      time.Now().Unix(),
+	}
+}
+
 func (h *Hub) ServeWs(w http.ResponseWriter, r *http.Request, deviceUUID string) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {

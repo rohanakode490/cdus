@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CDUS Relay Monitor</title>
+    <style>
+        body { font-family: sans-serif; background: #f0f2f5; color: #1c1e21; margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
+        .card { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; }
+        .stat { font-size: 3rem; font-weight: bold; color: #007bff; margin: 1rem 0; }
+        .label { font-size: 1.2rem; color: #65676b; }
+        .status { margin-top: 1rem; padding: 0.5rem 1rem; border-radius: 20px; font-weight: bold; }
+        .healthy { background: #e7f3ff; color: #1877f2; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>CDUS Relay</h1>
+        <div class="label">Active Connections</div>
+        <div id="active-clients" class="stat">--</div>
+        <div id="status" class="status healthy">Healthy</div>
+        <div style="margin-top: 2rem; font-size: 0.8rem; color: #bcc0c4;">
+            Last updated: <span id="last-updated">--</span>
+        </div>
+    </div>
+
+    <script>
+        async function updateStats() {
+            try {
+                const res = await fetch('/stats');
+                const data = await res.json();
+                document.getElementById('active-clients').textContent = data.active_clients ?? 0;
+                document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
+            } catch (e) {
+                console.error('Failed to fetch stats', e);
+            }
+        }
+        setInterval(updateStats, 5000);
+        updateStats();
+    </script>
+</body>
+</html>

@@ -83,13 +83,21 @@ func NewServer(store store.Store, hub *hub.Hub, logger *slog.Logger) *Server {
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("/", http.FileServer(http.Dir("static")))
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("POST /v1/register", s.handleRegister)
 	mux.HandleFunc("POST /v1/revoke", s.handleRevoke)
 	mux.HandleFunc("POST /v1/pairing/token", s.handleCreateToken)
 	mux.HandleFunc("GET /v1/signaling", s.handleSignaling)
 	mux.HandleFunc("GET /v1/turn", s.handleGetTurnCredentials)
+	mux.HandleFunc("GET /stats", s.handleStats)
 	return mux
+}
+
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	stats := s.hub.GetStats()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
 }
 
 func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {

@@ -209,7 +209,7 @@ func TestHandleHealthz(t *testing.T) {
 
 func TestTokenManager_Cleanup(t *testing.T) {
 	tm := NewTokenManager()
-	
+
 	// Create a token that expires in the past
 	id := "expired-token"
 	tm.mu.Lock()
