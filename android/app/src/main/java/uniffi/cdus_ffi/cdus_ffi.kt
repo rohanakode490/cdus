@@ -866,6 +866,10 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -923,11 +927,15 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_reject_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_fn_func_resume_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_cdus_ffi_fn_func_send_file(`nodeId`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_set_clipboard_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_set_file_transfer_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_simulate_crash(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_start_benchmark(`nodeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1085,11 +1093,15 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_reject_file_transfer(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_resume_file_transfer(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_send_file(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_set_clipboard_listener(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_set_file_transfer_listener(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_simulate_crash(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_start_benchmark(
     ): Short
@@ -1192,6 +1204,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_reject_file_transfer() != 25282.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_resume_file_transfer() != 13935.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_send_file() != 7051.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1199,6 +1214,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_set_file_transfer_listener() != 44860.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_simulate_crash() != 46614.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_start_benchmark() != 28371.toShort()) {
@@ -1678,7 +1696,8 @@ data class PairingStatus (
     var `active`: kotlin.Boolean, 
     var `pin`: kotlin.String, 
     var `remoteLabel`: kotlin.String, 
-    var `isInitiator`: kotlin.Boolean
+    var `isInitiator`: kotlin.Boolean, 
+    var `silent`: kotlin.Boolean
 ) {
     
     companion object
@@ -1694,6 +1713,7 @@ public object FfiConverterTypePairingStatus: FfiConverterRustBuffer<PairingStatu
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -1701,7 +1721,8 @@ public object FfiConverterTypePairingStatus: FfiConverterRustBuffer<PairingStatu
             FfiConverterBoolean.allocationSize(value.`active`) +
             FfiConverterString.allocationSize(value.`pin`) +
             FfiConverterString.allocationSize(value.`remoteLabel`) +
-            FfiConverterBoolean.allocationSize(value.`isInitiator`)
+            FfiConverterBoolean.allocationSize(value.`isInitiator`) +
+            FfiConverterBoolean.allocationSize(value.`silent`)
     )
 
     override fun write(value: PairingStatus, buf: ByteBuffer) {
@@ -1709,6 +1730,7 @@ public object FfiConverterTypePairingStatus: FfiConverterRustBuffer<PairingStatu
             FfiConverterString.write(value.`pin`, buf)
             FfiConverterString.write(value.`remoteLabel`, buf)
             FfiConverterBoolean.write(value.`isInitiator`, buf)
+            FfiConverterBoolean.write(value.`silent`, buf)
     }
 }
 
@@ -2352,6 +2374,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
 }
     
     
+ fun `resumeFileTransfer`(`transferId`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_resume_file_transfer(
+        FfiConverterString.lower(`transferId`),_status)
+}
+    
+    
  fun `sendFile`(`nodeId`: kotlin.String, `path`: kotlin.String)
         = 
     uniffiRustCall() { _status ->
@@ -2373,6 +2403,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_set_file_transfer_listener(
         FfiConverterTypeFileTransferListener.lower(`listener`),_status)
+}
+    
+    
+ fun `simulateCrash`(`transferId`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_simulate_crash(
+        FfiConverterString.lower(`transferId`),_status)
 }
     
     

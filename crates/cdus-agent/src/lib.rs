@@ -8,22 +8,24 @@ pub mod turn_manager;
 pub mod utils;
 
 #[cfg(test)]
-mod integration_tests;
+pub mod integration_tests;
 
+use anyhow::Result;
 use cdus_common::{IpcMessage, SyncMessage};
 use flume::{Receiver, Sender};
-use libp2p_manager::Libp2pManager;
-use once_cell::sync::Lazy;
-use pairing::{ActivePairingState, PairingManager, SyncManager};
+use libp2p::PeerId;
+use parking_lot::Mutex;
 use std::net::SocketAddr;
-use std::sync::Arc; use parking_lot::Mutex;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tracing::{error, info};
-use store::Store;
+use tracing::{error, info, warn};
 
-pub static EVENT_BUS: Lazy<Arc<Mutex<Vec<Sender<IpcMessage>>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(Vec::new())));
+use crate::libp2p_manager::Libp2pManager;
+use crate::pairing::{ActivePairingState, PairingManager, SyncManager};
+use crate::store::Store;
+
+pub static EVENT_BUS: Mutex<Vec<Sender<IpcMessage>>> = Mutex::new(Vec::new());
 
 pub fn broadcast_event(msg: IpcMessage) {
     let mut bus = EVENT_BUS.lock();
@@ -153,7 +155,7 @@ pub fn daemon_loop(
                     let already_paired = store.is_device_paired(&node_id).unwrap_or(false);
 
                     if already_paired {
-                        // Persist last known network info for reconnection after restart
+                        // Persist last known network info for reconnection
                         if let Err(e) = store.update_paired_device_network_info(&node_id, &ips, port) {
                             error!("Failed to update network info for paired device {}: {}", node_id, e);
                         }
@@ -179,29 +181,14 @@ pub fn daemon_loop(
                             port,
                         });
                     }
-
-                    if !sync_manager.is_connected(&node_id) {
-                        if let Ok(true) = store.is_device_paired(&node_id) {
-                            let pm_init = Arc::clone(&pm);
-                            let node_id_clone = node_id.clone();
-                            let ips_clone = ips.clone();
-                            
-                            thread::spawn(move || {
-                                // Try connecting to IPs in order until one succeeds
-                                for ip in ips_clone {
-                                    if let Ok(ip_addr) = ip.parse() {
-                                        let addr = SocketAddr::new(ip_addr, port);
-                                        info!("Auto-connecting to trusted peer {} at {}", node_id_clone, addr);
-                                        // initiate_pairing is synchronous in terms of starting the attempt
-                                        if pm_init.initiate_pairing(addr) {
-                                            info!("Successfully initiated pairing with {} at {}", node_id_clone, addr);
-                                            break; 
-                                        }
-                                    }
-                                }
-                            });
-                        }
+                }
+                IpcMessage::PairingResult { success, node_id, label } => {
+                    if success {
+                        info!("Pairing successful with {} ({}). Removing from discovery list.", label, node_id);
+                        let mut list = discovered_devices.lock();
+                        list.retain(|(id, _, _, _, _)| id != &node_id);
                     }
+                    broadcast_event(IpcMessage::PairingResult { success, node_id, label });
                 }
                 IpcMessage::DeviceLost { node_id } => {
                     let mut list = discovered_devices.lock();
@@ -210,6 +197,13 @@ pub fn daemon_loop(
                 }
                 IpcMessage::PeerDisconnected { node_id } => {
                     broadcast_event(IpcMessage::PeerDisconnected { node_id });
+                }
+                IpcMessage::PeerConnected { node_id } => {
+                    {
+                        let mut list = discovered_devices.lock();
+                        list.retain(|(id, _, _, _, _)| id != &node_id);
+                    }
+                    broadcast_event(IpcMessage::PeerConnected { node_id });
                 }
                 IpcMessage::RelayMessage {
                     source_uuid,
@@ -275,7 +269,7 @@ pub fn daemon_loop(
                                        runtime: libp2p_manager_clone.runtime_handle() 
                                    };
 
-                                    let session_key = crate::file_transfer::SessionKey([0u8; 32]); // TODO: Real session key
+                                    let session_key = crate::file_transfer::SessionKey([0u8; 32]);
                                     if let Err(e) = crate::file_transfer::handle_outgoing_transfer(
                                         Box::new(wrapped_stream),
                                         store_clone,
@@ -283,19 +277,15 @@ pub fn daemon_loop(
                                         session_key,
                                         transfer_manager,
                                     ) {
-                                        error!("Outgoing transfer failed: {}", e);
+                                        error!("File transfer failed: {}", e);
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Failed to open file stream to {}: {}", peer_id, e);
+                                    error!("Failed to open stream to {}: {}", peer_id, e);
                                     let _ = transfer_manager.progress_tx.send(cdus_common::ProgressEvent::Failed { 
                                         transfer_id: transfer_id.clone(), 
                                         reason: format!("Connection failed: {}", e) 
                                     });
-                                    // If it's a dial error, the peer is likely gone
-                                    if e.to_string().contains("Dial error") || e.to_string().contains("no addresses") {
-                                        broadcast_event(cdus_common::IpcMessage::PeerDisconnected { node_id: node_id.clone() });
-                                    }
                                 }
                              }
                         } else {
@@ -304,15 +294,13 @@ pub fn daemon_loop(
                     });
                 }
                 IpcMessage::StartBenchmark { node_id } => {
+                    let total_bytes = 1024 * 1024 * 1024; // 1GB
                     let store_clone = Arc::clone(&store);
                     let libp2p_manager_clone = Arc::clone(&libp2p_manager);
                     let transfer_manager = libp2p_manager_clone.get_transfer_manager();
                     
                     thread::spawn(move || {
-                        let transfer_id = crate::file_transfer::BENCHMARK_ID.to_string();
-                        let total_bytes = 1024 * 1024 * 1024; // 1GB
-                        
-                        // Clear any previous benchmark data
+                        let transfer_id = "ffffffff-ffff-ffff-ffff-ffffffffffff".to_string();
                         let _ = store_clone.delete_transfer(&transfer_id);
 
                         if let Err(e) = store_clone.create_transfer(
@@ -370,14 +358,49 @@ pub fn daemon_loop(
                 IpcMessage::CancelFileTransfer { transfer_id } => {
                     libp2p_manager.get_transfer_manager().cancel_transfer(&transfer_id);
                 }
+                IpcMessage::SimulateCrash { transfer_id } => {
+                    libp2p_manager.get_transfer_manager().simulate_crash(&transfer_id);
+                }
+                IpcMessage::SetCrashTrigger { transfer_id, offset } => {
+                    libp2p_manager.get_transfer_manager().set_crash_trigger(transfer_id, offset);
+                }
+                IpcMessage::ResumeFileTransfer { transfer_id } => {
+                    let store_clone = Arc::clone(&store);
+                    let libp2p_manager_clone = Arc::clone(&libp2p_manager);
+                    if let Ok(Some(record)) = store_clone.get_transfer(&transfer_id) {
+                        if record.direction == "outgoing" {
+                            thread::spawn(move || {
+                                if let Ok(peer_id) = record.peer_node_id.parse::<libp2p::PeerId>() {
+                                    match libp2p_manager_clone.open_file_stream(peer_id) {
+                                        Ok(stream) => {
+                                            let wrapped_stream = crate::file_transfer::Libp2pFileStream {
+                                                stream,
+                                                runtime: libp2p_manager_clone.runtime_handle()
+                                            };
+                                            let session_key = crate::file_transfer::SessionKey([0u8; 32]);
+                                            if let Err(e) = crate::file_transfer::handle_outgoing_transfer(
+                                                Box::new(wrapped_stream),
+                                                store_clone,
+                                                transfer_id,
+                                                session_key,
+                                                libp2p_manager_clone.get_transfer_manager(),
+                                            ) {
+                                                error!("Resumed transfer failed: {}", e);
+                                            }
+                                        }
+                                        Err(e) => error!("Failed to open stream for resume: {}", e),
+                                    }
+                                }
+                            });
+                        } else {
+                            error!("Cannot resume incoming transfer from receiver side. Wait for sender to resume.");
+                        }
+                    } else {
+                        error!("Failed to find transfer {} to resume", transfer_id);
+                    }
+                }
                 IpcMessage::FileTransferProgress { transfer_id, progress } => {
                     broadcast_event(IpcMessage::FileTransferProgress { transfer_id, progress });
-                }
-                IpcMessage::FileTransferComplete { transfer_id } => {
-                    broadcast_event(IpcMessage::FileTransferComplete { transfer_id });
-                }
-                IpcMessage::FileTransferError { transfer_id, error } => {
-                    broadcast_event(IpcMessage::FileTransferError { transfer_id, error });
                 }
                 _ => {
                     info!("Daemon: Unhandled message: {:?}", msg);

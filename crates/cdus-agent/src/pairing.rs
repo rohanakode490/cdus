@@ -12,6 +12,7 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 use tungstenite::{accept, client, Message, WebSocket};
 
+use crate::libp2p_manager::Libp2pManager;
 use crate::relay::RelayManager;
 use crate::turn_manager::{TurnConnection, TurnManager};
 use libp2p::Multiaddr;
@@ -24,10 +25,11 @@ pub enum RelaySignal {
     Libp2pCandidate { multiaddr: Multiaddr },
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HandshakePayload {
     pub label: String,
     pub node_id: String,
+    pub libp2p_addresses: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -38,6 +40,7 @@ pub struct ActivePairingState {
     pub remote_label: String,
     pub confirmed: Arc<Mutex<Option<bool>>>,
     pub handshake: Arc<Mutex<Option<HandshakeState>>>,
+    pub silent: bool,
 }
 
 pub struct SyncManager {
@@ -121,6 +124,7 @@ pub struct PairingManager {
     pub sync_manager: Arc<SyncManager>,
     relay_manager: Arc<RelayManager>,
     turn_manager: Arc<TurnManager>,
+    pub libp2p_manager: Arc<Libp2pManager>,
     pending_turn_sessions: Mutex<HashMap<String, TurnConnection>>,
 }
 
@@ -135,6 +139,7 @@ impl PairingManager {
         sync_manager: Arc<SyncManager>,
         relay_manager: Arc<RelayManager>,
         turn_manager: Arc<TurnManager>,
+        libp2p_manager: Arc<Libp2pManager>,
     ) -> Self {
         Self {
             store,
@@ -146,6 +151,7 @@ impl PairingManager {
             sync_manager,
             relay_manager,
             turn_manager,
+            libp2p_manager,
             pending_turn_sessions: Mutex::new(HashMap::new()),
         }
     }
@@ -207,6 +213,7 @@ impl PairingManager {
                     let self_payload = HandshakePayload {
                         label: self_label,
                         node_id: self.node_id.clone(),
+                        libp2p_addresses: self.libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
                     };
                     let self_payload_bytes = serde_json::to_vec(&self_payload).unwrap();
                     let mut out_buf = [0u8; 1024];
@@ -227,6 +234,7 @@ impl PairingManager {
                             }
 
                             // Initialize active pairing state
+                            let is_paired = self.store.is_device_paired(&source_uuid).unwrap_or(false);
                             *ap = Some(ActivePairingState {
                                 pin: String::new(),
                                 is_initiator: false,
@@ -234,7 +242,15 @@ impl PairingManager {
                                 remote_label: "Remote Device (Relay)".to_string(),
                                 confirmed: Arc::new(Mutex::new(None)),
                                 handshake: Arc::new(Mutex::new(Some(noise))),
+                                silent: is_paired,
                             });
+
+                            if is_paired {
+                                info!("Auto-confirming relay pairing for known device: {}", source_uuid);
+                                if let Some(ref state) = *ap {
+                                    *state.confirmed.lock() = Some(true);
+                                }
+                            }
 
                             // Start monitoring for confirmation
                             self.monitor_relay_pairing(source_uuid);
@@ -279,6 +295,16 @@ impl PairingManager {
                                     })?;
                                 let remote_node_id = payload.node_id;
                                 let remote_label = payload.label;
+
+                                // Peer Exchange: Inject libp2p addresses
+                                if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
+                                    for addr_str in payload.libp2p_addresses {
+                                        if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                                            self.libp2p_manager.inject_address(peer_id, addr);
+                                        }
+                                    }
+                                }
+
                                 info!(
                                     "Relay pairing with {} ({}) successful. PIN: {}",
                                     remote_label, remote_node_id, state.pin
@@ -296,12 +322,29 @@ impl PairingManager {
                                     })?;
                                 let remote_node_id = payload.node_id;
                                 let remote_label = payload.label;
+
+                                // Peer Exchange: Inject libp2p addresses
+                                if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
+                                    for addr_str in payload.libp2p_addresses {
+                                        if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                                            self.libp2p_manager.inject_address(peer_id, addr);
+                                        }
+                                    }
+                                }
+
                                 info!(
                                     "Relay pairing with {} ({}) successful. PIN: {}",
                                     remote_label, remote_node_id, state.pin
                                 );
                                 state.remote_id = remote_node_id;
                                 state.remote_label = remote_label;
+
+                                // Auto-confirm if already paired
+                                if let Ok(true) = self.store.is_device_paired(&state.remote_id) {
+                                    info!("Device {} is already paired. Auto-confirming relay pairing.", state.remote_id);
+                                    let mut conf = state.confirmed.lock();
+                                    *conf = Some(true);
+                                }
                             }
                         } else {
                             if state.is_initiator {
@@ -315,6 +358,16 @@ impl PairingManager {
                                     })?;
                                 let remote_node_id = payload.node_id;
                                 let remote_label = payload.label;
+
+                                // Peer Exchange: Inject libp2p addresses
+                                if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
+                                    for addr_str in payload.libp2p_addresses {
+                                        if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                                            self.libp2p_manager.inject_address(peer_id, addr);
+                                        }
+                                    }
+                                }
+
                                 info!(
                                     "Received responder payload via relay: {} ({})",
                                     remote_label, remote_node_id
@@ -330,6 +383,7 @@ impl PairingManager {
                                 let self_payload = HandshakePayload {
                                     label: self_label,
                                     node_id: self.node_id.clone(),
+                                    libp2p_addresses: self.libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
                                 };
                                 let self_payload_bytes = serde_json::to_vec(&self_payload).unwrap();
                                 let mut out_buf = [0u8; 1024];
@@ -353,6 +407,13 @@ impl PairingManager {
                                                 "Relay pairing with {} ({}) successful. PIN: {}",
                                                 state.remote_label, state.remote_id, state.pin
                                             );
+
+                                            // Auto-confirm if already paired
+                                            if let Ok(true) = self.store.is_device_paired(&state.remote_id) {
+                                                info!("Device {} is already paired. Auto-confirming relay pairing.", state.remote_id);
+                                                let mut conf = state.confirmed.lock();
+                                                *conf = Some(true);
+                                            }
                                         }
                                     }
                                     Err(e) => {
@@ -436,7 +497,7 @@ impl PairingManager {
                                             );
                                             let _ = self.ipc_tx.send(IpcMessage::PairingResult {
                                                 success: true,
-                                                node_id: source_uuid,
+                                                node_id: source_uuid.clone(),
                                                 label: state.remote_label.clone(),
                                             });
                                         }
@@ -446,6 +507,16 @@ impl PairingManager {
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // Clear UI state if it matches this source
+        {
+            let mut ap = self.active_pairing.lock();
+            if let Some(ref state) = *ap {
+                if state.remote_id == source_uuid {
+                    *ap = None;
                 }
             }
         }
@@ -539,6 +610,7 @@ impl PairingManager {
                 }
 
                 let mut ap = self.active_pairing.lock();
+                let is_paired = self.store.is_device_paired(&target_uuid).unwrap_or(false);
                 *ap = Some(ActivePairingState {
                     pin: String::new(),
                     is_initiator: true,
@@ -546,7 +618,15 @@ impl PairingManager {
                     remote_label: "Remote Device (Relay)".to_string(),
                     confirmed: Arc::new(Mutex::new(None)),
                     handshake: Arc::new(Mutex::new(Some(noise))),
+                    silent: is_paired,
                 });
+
+                if is_paired {
+                    info!("Auto-confirming outgoing relay pairing for known device: {}", target_uuid);
+                    if let Some(ref state) = *ap {
+                        *state.confirmed.lock() = Some(true);
+                    }
+                }
 
                 self.monitor_relay_pairing(target_uuid);
             }
@@ -581,8 +661,9 @@ impl PairingManager {
                     let ipc_tx = self.ipc_tx.clone();
                     let priv_key = self.private_key.clone();
                     let active_pairing = Arc::clone(&self.active_pairing);
-                    let self_node_id = self.node_id.clone();
+                    let node_id = self.node_id.clone();
                     let sync_manager = Arc::clone(&self.sync_manager);
+                    let libp2p_manager = Arc::clone(&self.libp2p_manager);
                     thread::spawn(move || {
                         if let Err(e) = handle_incoming_connection(
                             stream,
@@ -590,8 +671,9 @@ impl PairingManager {
                             ipc_tx,
                             priv_key,
                             active_pairing,
-                            self_node_id,
+                            node_id,
                             sync_manager,
+                            libp2p_manager,
                         ) {
 
                             error!("Error in incoming connection: {}", e);
@@ -618,6 +700,7 @@ impl PairingManager {
         let active_pairing = Arc::clone(&self.active_pairing);
         let self_node_id = self.node_id.clone();
         let sync_manager = Arc::clone(&self.sync_manager);
+        let libp2p_manager = Arc::clone(&self.libp2p_manager);
 
         thread::spawn(move || {
             // Upgrade to WebSocket
@@ -632,6 +715,7 @@ impl PairingManager {
                         active_pairing,
                         self_node_id,
                         sync_manager,
+                        libp2p_manager,
                     ) {
                         error!("Error in outgoing connection: {}", e);
                     }
@@ -715,6 +799,7 @@ fn handle_incoming_connection(
     active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
     self_node_id: String,
     sync_manager: Arc<SyncManager>,
+    libp2p_manager: Arc<Libp2pManager>,
 ) -> Result<()> {
     let res = handle_incoming_connection_inner(
         stream,
@@ -724,6 +809,7 @@ fn handle_incoming_connection(
         Arc::clone(&active_pairing),
         self_node_id,
         Arc::clone(&sync_manager),
+        libp2p_manager,
     );
 
     if let Err(e) = res {
@@ -747,6 +833,7 @@ fn handle_incoming_connection_inner(
     active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
     self_node_id: String,
     sync_manager: Arc<SyncManager>,
+    libp2p_manager: Arc<Libp2pManager>,
 ) -> Result<()> {
     info!("Upgrading incoming connection to WebSocket");
     let mut ws = accept(stream)?;
@@ -780,6 +867,7 @@ fn handle_incoming_connection_inner(
     let self_payload = HandshakePayload {
         label: self_label.clone(),
         node_id: self_node_id.clone(),
+        libp2p_addresses: libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
     };
     let self_payload_bytes = serde_json::to_vec(&self_payload).map_err(|e| anyhow::anyhow!(e))?;
     let n = noise
@@ -812,6 +900,15 @@ fn handle_incoming_connection_inner(
         let initiator_label = initiator_payload.label;
         let remote_node_id = initiator_payload.node_id;
 
+        // Peer Exchange: Inject libp2p addresses
+        if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
+            for addr_str in initiator_payload.libp2p_addresses {
+                if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                    libp2p_manager.inject_address(peer_id, addr);
+                }
+            }
+        }
+
         // Verify Node ID is a valid PeerId
         if let Err(e) = remote_node_id.parse::<libp2p::PeerId>() {
             error!(
@@ -839,20 +936,13 @@ fn handle_incoming_connection_inner(
             .into_transport_mode()
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        // Check if paired
-        if store.is_device_paired(&remote_node_id)? {
+        let is_paired = store.is_device_paired(&remote_node_id)?;
+
+        if is_paired {
             info!(
-                "Trusted device {} ({}) connected. Starting sync session.",
+                "Trusted device {} ({}) connected. Auto-confirming sync session.",
                 initiator_label, remote_node_id
             );
-            run_sync_session(
-                ws,
-                transport,
-                remote_node_id.clone(),
-                initiator_label.clone(),
-                sync_manager,
-                ipc_tx,
-            )?;
         } else {
             info!(
                 "New device {} ({}) requesting pairing. PIN: {}",
@@ -870,6 +960,7 @@ fn handle_incoming_connection_inner(
                     remote_label: initiator_label.clone(),
                     confirmed: Arc::clone(&confirmed),
                     handshake: Arc::new(Mutex::new(None)),
+                    silent: false,
                 });
             }
 
@@ -938,36 +1029,43 @@ fn handle_incoming_connection_inner(
                 *ap = None;
             }
 
-            if local_confirmed && remote_confirmed {
-                info!("Both sides confirmed. Pairing successful.");
-                let _ = store.add_paired_device(&remote_node_id, &initiator_label);
-                let _ = ipc_tx.send(IpcMessage::PairingResult {
-                    success: true,
-                    node_id: remote_node_id.clone(),
-                    label: initiator_label.clone(),
-                });
-
-                // Transition to sync session
-                run_sync_session(
-                    ws,
-                    transport,
-                    remote_node_id,
-                    initiator_label,
-                    sync_manager,
-                    ipc_tx,
-                )?;
-            } else {
-                info!(
-                    "Pairing failed: local_confirmed={}, remote_confirmed={}",
-                    local_confirmed, remote_confirmed
-                );
-                let _ = ipc_tx.send(IpcMessage::PairingResult {
-                    success: false,
-                    node_id: remote_node_id,
-                    label: initiator_label,
-                });
+            if !local_confirmed || !remote_confirmed {
+                return Err(anyhow::anyhow!("Pairing failed or rejected"));
             }
+
+            info!("Both sides confirmed. Pairing successful.");
+            let _ = store.add_paired_device(&remote_node_id, &initiator_label);
+            let _ = ipc_tx.send(IpcMessage::PairingResult {
+                success: true,
+                node_id: remote_node_id.clone(),
+                label: initiator_label.clone(),
+            });
         }
+
+        // If we reach here, we are either trusted (skipped loop) or pairing was confirmed (loop finished)
+        // Wait! We STILL need to send/receive the confirmation bytes even if trusted, 
+        // to keep the protocol consistent!
+        if is_paired {
+             // Send our confirmation
+             write_ws_framed(&mut ws, &mut transport, &[1])?;
+             // Wait for remote confirmation
+             let _ = ws.get_ref().set_read_timeout(Some(Duration::from_secs(2)));
+             match read_ws_framed(&mut ws, &mut transport) {
+                 Ok(data) if !data.is_empty() && data[0] == 1 => {
+                     info!("Remote side also trusted us. Session established.");
+                 }
+                 _ => return Err(anyhow::anyhow!("Remote side did not confirm trusted session")),
+             }
+        }
+
+        run_sync_session(
+            ws,
+            transport,
+            remote_node_id.clone(),
+            initiator_label.clone(),
+            sync_manager,
+            ipc_tx,
+        )?;
     } else {
         return Err(anyhow::anyhow!("Expected binary Noise message"));
     }
@@ -983,6 +1081,7 @@ fn handle_outgoing_connection(
     active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
     self_node_id: String,
     sync_manager: Arc<SyncManager>,
+    libp2p_manager: Arc<Libp2pManager>,
 ) -> Result<()> {
     let res = handle_outgoing_connection_inner(
         ws,
@@ -992,6 +1091,7 @@ fn handle_outgoing_connection(
         Arc::clone(&active_pairing),
         self_node_id,
         Arc::clone(&sync_manager),
+        libp2p_manager,
     );
 
     if let Err(e) = res {
@@ -1014,6 +1114,7 @@ fn handle_outgoing_connection_inner(
     active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
     self_node_id: String,
     sync_manager: Arc<SyncManager>,
+    libp2p_manager: Arc<Libp2pManager>,
 ) -> Result<()> {
     info!("Initiating outgoing Noise connection over WebSocket");
 
@@ -1061,6 +1162,15 @@ fn handle_outgoing_connection_inner(
         let responder_label = responder_payload.label;
         let remote_node_id = responder_payload.node_id;
 
+        // Peer Exchange: Inject libp2p addresses
+        if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
+            for addr_str in responder_payload.libp2p_addresses {
+                if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                    libp2p_manager.inject_address(peer_id, addr);
+                }
+            }
+        }
+
         // Verify Node ID is a valid PeerId
         if let Err(e) = remote_node_id.parse::<libp2p::PeerId>() {
             error!(
@@ -1072,8 +1182,9 @@ fn handle_outgoing_connection_inner(
 
         // 3. Write s, se + Initiator's payload
         let self_payload = HandshakePayload {
-            label: self_label,
+            label: self_label.clone(),
             node_id: self_node_id.clone(),
+            libp2p_addresses: libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
         };
         let self_payload_bytes =
             serde_json::to_vec(&self_payload).map_err(|e| anyhow::anyhow!(e))?;
@@ -1100,20 +1211,13 @@ fn handle_outgoing_connection_inner(
             .into_transport_mode()
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        // Check if paired
-        if store.is_device_paired(&remote_node_id)? {
+        let is_paired = store.is_device_paired(&remote_node_id)?;
+
+        if is_paired {
             info!(
                 "Connecting to trusted device {} ({}) for sync.",
                 responder_label, remote_node_id
             );
-            run_sync_session(
-                ws,
-                transport,
-                remote_node_id.clone(),
-                responder_label.clone(),
-                sync_manager,
-                ipc_tx,
-            )?;
         } else {
             info!(
                 "Initiating pairing with {} ({}). PIN: {}",
@@ -1131,6 +1235,7 @@ fn handle_outgoing_connection_inner(
                     remote_label: responder_label.clone(),
                     confirmed: Arc::clone(&confirmed),
                     handshake: Arc::new(Mutex::new(None)),
+                    silent: false,
                 });
             }
 
@@ -1204,16 +1309,6 @@ fn handle_outgoing_connection_inner(
                     node_id: remote_node_id.clone(),
                     label: responder_label.clone(),
                 });
-
-                // Transition to sync session
-                run_sync_session(
-                    ws,
-                    transport,
-                    remote_node_id,
-                    responder_label,
-                    sync_manager,
-                    ipc_tx,
-                )?;
             } else {
                 info!(
                     "Pairing failed: local_confirmed={}, remote_confirmed={}",
@@ -1221,11 +1316,35 @@ fn handle_outgoing_connection_inner(
                 );
                 let _ = ipc_tx.send(IpcMessage::PairingResult {
                     success: false,
-                    node_id: remote_node_id,
-                    label: responder_label,
+                    node_id: remote_node_id.clone(),
+                    label: responder_label.clone(),
                 });
+                return Err(anyhow::anyhow!("Pairing failed or rejected"));
             }
         }
+
+        // If trusted, exchange confirmation bytes
+        if is_paired {
+             // Send our confirmation
+             write_ws_framed(&mut ws, &mut transport, &[1])?;
+             // Wait for remote confirmation
+             let _ = ws.get_ref().set_read_timeout(Some(Duration::from_secs(2)));
+             match read_ws_framed(&mut ws, &mut transport) {
+                 Ok(data) if !data.is_empty() && data[0] == 1 => {
+                     info!("Remote side also trusted us. Session established.");
+                 }
+                 _ => return Err(anyhow::anyhow!("Remote side did not confirm trusted session")),
+             }
+        }
+
+        run_sync_session(
+            ws,
+            transport,
+            remote_node_id.clone(),
+            responder_label.clone(),
+            sync_manager,
+            ipc_tx,
+        )?;
     } else {
         return Err(anyhow::anyhow!("Expected binary Noise message"));
     }
@@ -1243,8 +1362,11 @@ fn run_sync_session(
 ) -> Result<()> {
 
     let (tx, rx) = flume::unbounded::<SyncMessage>();
-    sync_manager.add_peer(node_id.clone(), tx.clone(),
- TransportType::Lan);
+    sync_manager.add_peer(node_id.clone(), tx.clone(), TransportType::Lan);
+
+    let _ = ipc_tx.send(IpcMessage::PeerConnected {
+        node_id: node_id.clone(),
+    });
 
     info!(
         "Sync session started for {} ({}) over WebSocket",

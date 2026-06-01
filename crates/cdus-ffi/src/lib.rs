@@ -52,6 +52,8 @@ pub trait FileTransferListener: Send + Sync {
     fn on_peer_accepted(&self, node_id: String, transfer_id: String);
     fn on_peer_rejected(&self, node_id: String, transfer_id: String);
     fn on_peer_disconnected(&self, node_id: String);
+    fn on_peer_connected(&self, node_id: String);
+    fn on_pairing_result(&self, success: bool, node_id: String, label: String);
     fn on_transfer_state_changed(&self, transfer_id: String, state: String);
 }
 
@@ -76,6 +78,7 @@ pub struct PairingStatus {
     pub pin: String,
     pub remote_label: String,
     pub is_initiator: bool,
+    pub silent: bool,
 }
 
 // Global instances for mobile use
@@ -222,7 +225,16 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                     );
                     let relay = Arc::new(relay);
                     *RELAY_MANAGER.lock().unwrap() = Some(Arc::clone(&relay));
-                    *RELAY_RX.lock().unwrap() = Some(relay_rx);
+                    
+                    // Auto-start relay signaling loop
+                    let relay_clone = Arc::clone(&relay);
+                    std::thread::spawn(move || {
+                        info!("FFI: Auto-connecting to relay...");
+                        if let Err(e) = relay_clone.register() {
+                            error!("FFI: Failed to register with relay: {}", e);
+                        }
+                        relay_clone.start_signaling_loop(relay_rx);
+                    });
 
                     // Initialize Turn Manager
                     let turn = Arc::new(
@@ -263,6 +275,7 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                         sync_manager,
                         relay,
                         turn,
+                        Arc::clone(&libp2p_manager),
                     );
 
                     let pm = Arc::new(pm);
@@ -326,11 +339,45 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
 
                                     let mut list = DISCOVERED.lock().unwrap();
                                     if !list.iter().any(|d| d.node_id == node_id) {
+                                        // If already paired, we don't add to discovered list
+                                        if let Some(store) = STORE.lock().unwrap().as_ref() {
+                                            if let Ok(true) = store.is_device_paired(&node_id) {
+                                                continue;
+                                            }
+                                        }
+
                                         info!(
                                             "FFI: Discovered device: {} ({}) at {:?}:{}",
                                             label, node_id, ips, port
                                         );
                                         list.push(device);
+                                    }
+                                }
+                                IpcMessage::DeviceLost { node_id } => {
+                                    let mut list = DISCOVERED.lock().unwrap();
+                                    list.retain(|d| !d.node_id.starts_with(&node_id));
+                                }
+                                IpcMessage::PeerConnected { node_id } => {
+                                    {
+                                        let mut list = DISCOVERED.lock().unwrap();
+                                        list.retain(|d| d.node_id != node_id);
+                                    }
+                                    if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                                        listener.on_peer_connected(node_id);
+                                    }
+                                }
+                                IpcMessage::PeerDisconnected { node_id } => {
+                                    if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                                        listener.on_peer_disconnected(node_id);
+                                    }
+                                }
+                                IpcMessage::PairingResult { success, node_id, label } => {
+                                    if success {
+                                        let mut list = DISCOVERED.lock().unwrap();
+                                        list.retain(|d| d.node_id != node_id);
+                                    }
+                                    if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                                        listener.on_pairing_result(success, node_id, label);
                                     }
                                 }
                                 IpcMessage::FileProgress(_event) => {
@@ -364,6 +411,20 @@ pub fn start_benchmark(node_id: String) {
 pub fn cancel_file_transfer(transfer_id: String) {
     if let Some(tm) = TRANSFER_MANAGER.lock().unwrap().as_ref() {
         tm.cancel_transfer(&transfer_id);
+    }
+}
+
+#[uniffi::export]
+pub fn simulate_crash(transfer_id: String) {
+    if let Some(tm) = TRANSFER_MANAGER.lock().unwrap().as_ref() {
+        tm.simulate_crash(&transfer_id);
+    }
+}
+
+#[uniffi::export]
+pub fn resume_file_transfer(transfer_id: String) {
+    if let Some(tx) = AGENT_TX.lock().unwrap().as_ref() {
+        let _ = tx.send(IpcMessage::ResumeFileTransfer { transfer_id });
     }
 }
 
@@ -484,7 +545,7 @@ pub fn broadcast_clipboard(content: String) {
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
-pub struct FileTransferRecord {
+pub struct FileTransfer {
     pub transfer_id: String,
     pub direction: String,
     pub peer_node_id: String,
@@ -495,31 +556,40 @@ pub struct FileTransferRecord {
     pub status: String,
     pub error_message: Option<String>,
     pub created_at: u64,
+    pub updated_at: u64,
 }
 
 #[uniffi::export]
-pub fn get_file_transfer_history(limit: u32) -> Vec<FileTransferRecord> {
+pub fn get_file_transfer_history(limit: u32) -> Vec<FileTransfer> {
     if let Some(store) = STORE.lock().unwrap().as_ref() {
         match store.get_transfer_history(limit) {
-            Ok(history) => history
+            Ok(transfers) => transfers
                 .into_iter()
-                .map(|r| FileTransferRecord {
-                    transfer_id: r.transfer_id,
-                    direction: r.direction,
-                    peer_node_id: r.peer_node_id,
-                    file_path: r.file_path,
-                    file_name: r.file_name,
-                    total_bytes: r.total_bytes as u64,
-                    bytes_confirmed: r.bytes_confirmed as u64,
-                    status: r.status,
-                    error_message: r.error_message,
-                    created_at: r.created_at as u64,
+                .map(|t| FileTransfer {
+                    transfer_id: t.transfer_id,
+                    direction: t.direction,
+                    peer_node_id: t.peer_node_id,
+                    file_path: t.file_path,
+                    file_name: t.file_name,
+                    total_bytes: t.total_bytes as u64,
+                    bytes_confirmed: t.bytes_confirmed as u64,
+                    status: t.status,
+                    error_message: t.error_message,
+                    created_at: t.created_at as u64,
+                    updated_at: t.updated_at as u64,
                 })
                 .collect(),
             Err(_) => Vec::new(),
         }
     } else {
         Vec::new()
+    }
+}
+
+#[uniffi::export]
+pub fn clear_finished_transfers() {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let _ = store.clear_finished_transfers();
     }
 }
 
@@ -576,6 +646,7 @@ pub fn get_pairing_status() -> Option<PairingStatus> {
         pin: s.pin.clone(),
         remote_label: s.remote_label.clone(),
         is_initiator: s.is_initiator,
+        silent: s.silent,
     })
 }
 
@@ -591,19 +662,27 @@ pub fn initiate_pairing(node_id: String) {
                 .or_else(|| peer_map.get(&node_id).map(|(d, _)| d.clone()))
         };
 
-        if let Some(device) = device {
-            let pm_clone = Arc::clone(pm);
-            std::thread::spawn(move || {
+        let pm_clone = Arc::clone(pm);
+        let node_id_clone = node_id.clone();
+        std::thread::spawn(move || {
+            let mut success = false;
+            if let Some(device) = device {
                 for ip in device.ips {
                     if let Ok(ip_addr) = ip.parse() {
                         let addr = std::net::SocketAddr::new(ip_addr, device.port);
                         if pm_clone.initiate_pairing(addr) {
+                            success = true;
                             break;
                         }
                     }
                 }
-            });
-        }
+            }
+            
+            if !success {
+                info!("FFI: mDNS failed for {}, falling back to relay", node_id_clone);
+                pm_clone.initiate_remote_pairing(node_id_clone);
+            }
+        });
     }
 }
 
@@ -704,27 +783,7 @@ fn spawn_mdns_receiver(
                         list.push(device);
                     }
 
-                    let pm_lock = PAIRING_MANAGER.lock().unwrap();
-                    if let Some(pm) = pm_lock.as_ref() {
-                        if !pm.sync_manager.is_connected(&node_id) {
-                            if let Some(store) = STORE.lock().unwrap().as_ref() {
-                                if let Ok(true) = store.is_device_paired(&node_id) {
-                                    let pm_clone = Arc::clone(pm);
-                                    let ips_clone = ips.clone();
-                                    std::thread::spawn(move || {
-                                        for ip in ips_clone {
-                                            if let Ok(ip_addr) = ip.parse() {
-                                                let addr = std::net::SocketAddr::new(ip_addr, port);
-                                                if pm_clone.initiate_pairing(addr) {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-                        }
-                    }
+                    // Auto-connect removed as per user request
                 }
                 IpcMessage::DeviceLost { node_id } => {
                     {

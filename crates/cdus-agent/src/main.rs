@@ -103,6 +103,23 @@ fn main() {
     let relay = Arc::new(relay);
     let relay_rx_opt = Arc::new(Mutex::new(Some(relay_rx)));
 
+    // Auto-connect to relay on startup
+    let relay_clone = Arc::clone(&relay);
+    let relay_rx_opt_init = Arc::clone(&relay_rx_opt);
+    thread::spawn(move || {
+        info!("Auto-connecting to relay on startup...");
+        if let Err(e) = relay_clone.register() {
+            error!("Failed to register with relay: {}", e);
+        }
+        let rx = {
+            let mut opt = relay_rx_opt_init.lock();
+            opt.take()
+        };
+        if let Some(rx) = rx {
+            relay_clone.start_signaling_loop(rx);
+        }
+    });
+
     // Initialize Turn Manager
     let turn_manager = Arc::new(TurnManager::new().expect("Failed to initialize TurnManager"));
 
@@ -158,6 +175,7 @@ fn main() {
         Arc::clone(&sync_manager),
         Arc::clone(&relay),
         Arc::clone(&turn_manager),
+        Arc::clone(&libp2p_manager),
     );
     let pm = Arc::new(pm);
     let pm_clone = Arc::clone(&pm);
@@ -364,20 +382,41 @@ fn main() {
                                                 let pm_init = Arc::clone(&pm_clone);
                                                 let node_id_clone = node_id.clone();
                                                 thread::spawn(move || {
+                                                    let mut success = false;
                                                     for ip in ips {
                                                         if let Ok(ip_addr) = ip.parse() {
                                                             let addr = SocketAddr::new(ip_addr, port);
                                                             info!("Attempting manual pairing with {} at {}", node_id_clone, addr);
                                                             if pm_init.initiate_pairing(addr) {
                                                                 info!("Manual pairing initiated with {} at {}", node_id_clone, addr);
+                                                                success = true;
                                                                 break;
                                                             }
                                                         }
+                                                    }
+                                                    
+                                                    if !success {
+                                                        info!("mDNS failed for {}, falling back to relay", node_id_clone);
+                                                        pm_init.initiate_remote_pairing(node_id_clone);
                                                     }
                                                 });
                                                 let resp_bytes =
                                                     serde_json::to_vec(&IpcMessage::Log(
                                                         "Pairing process started".to_string(),
+                                                    ))
+                                                    .unwrap();
+                                                let _ = stream.write_all(&resp_bytes);
+                                            } else {
+                                                // Device not in mDNS list at all, try relay immediately
+                                                let pm_init = Arc::clone(&pm_clone);
+                                                let node_id_clone = node_id.clone();
+                                                thread::spawn(move || {
+                                                    info!("Device {} not found in local discovery, trying relay", node_id_clone);
+                                                    pm_init.initiate_remote_pairing(node_id_clone);
+                                                });
+                                                let resp_bytes =
+                                                    serde_json::to_vec(&IpcMessage::Log(
+                                                        "Relay pairing initiated".to_string(),
                                                     ))
                                                     .unwrap();
                                                 let _ = stream.write_all(&resp_bytes);
@@ -466,6 +505,7 @@ fn main() {
                                                         active: true,
                                                         is_initiator: state.is_initiator,
                                                         remote_label: state.remote_label.clone(),
+                                                        silent: state.silent,
                                                     }
                                                 }
                                                 None => IpcMessage::PairingStatusResponse {
@@ -473,6 +513,7 @@ fn main() {
                                                     active: false,
                                                     is_initiator: false,
                                                     remote_label: String::new(),
+                                                    silent: false,
                                                 },
                                             };
                                             let resp_bytes = serde_json::to_vec(&resp).unwrap();

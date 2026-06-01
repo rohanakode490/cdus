@@ -32,6 +32,8 @@ pub struct FileTransferManager {
     pub progress_tx: Sender<ProgressEvent>,
     pub pending_decisions: Mutex<HashMap<String, Sender<bool>>>,
     pub cancel_tokens: Mutex<HashMap<String, Sender<()>>>,
+    pub crash_tokens: Mutex<HashMap<String, Sender<()>>>,
+    pub crash_triggers: Mutex<HashMap<String, u64>>,
     pub active_transfers: Mutex<usize>,
     #[cfg(not(target_os = "android"))]
     pub power_lock: Mutex<Option<keepawake::KeepAwake>>,
@@ -44,6 +46,8 @@ impl FileTransferManager {
             progress_tx,
             pending_decisions: Mutex::new(HashMap::new()),
             cancel_tokens: Mutex::new(HashMap::new()),
+            crash_tokens: Mutex::new(HashMap::new()),
+            crash_triggers: Mutex::new(HashMap::new()),
             active_transfers: Mutex::new(0),
             #[cfg(not(target_os = "android"))]
             power_lock: Mutex::new(None),
@@ -69,10 +73,18 @@ impl FileTransferManager {
         rx
     }
 
-    pub fn register_transfer(&self, transfer_id: String) -> Receiver<()> {
-        let (tx, rx) = flume::bounded(1);
-        let mut tokens = self.cancel_tokens.lock();
-        tokens.insert(transfer_id, tx);
+    pub fn register_transfer(&self, transfer_id: String) -> (Receiver<()>, Receiver<()>) {
+        let (cancel_tx, cancel_rx) = flume::bounded(1);
+        let (crash_tx, crash_rx) = flume::bounded(1);
+        
+        {
+            let mut tokens = self.cancel_tokens.lock();
+            tokens.insert(transfer_id.clone(), cancel_tx);
+        }
+        {
+            let mut tokens = self.crash_tokens.lock();
+            tokens.insert(transfer_id.clone(), crash_tx);
+        }
         
         // Update power lock
         let mut active = self.active_transfers.lock();
@@ -93,12 +105,22 @@ impl FileTransferManager {
             }
         }
         
-        rx
+        (cancel_rx, crash_rx)
     }
 
     pub fn unregister_transfer(&self, transfer_id: &str) {
-        let mut tokens = self.cancel_tokens.lock();
-        tokens.remove(transfer_id);
+        {
+            let mut tokens = self.cancel_tokens.lock();
+            tokens.remove(transfer_id);
+        }
+        {
+            let mut tokens = self.crash_tokens.lock();
+            tokens.remove(transfer_id);
+        }
+        {
+            let mut triggers = self.crash_triggers.lock();
+            triggers.remove(transfer_id);
+        }
         
         // Update power lock
         let mut active = self.active_transfers.lock();
@@ -113,12 +135,44 @@ impl FileTransferManager {
     }
 
     pub fn cancel_transfer(&self, transfer_id: &str) {
-        let mut tokens = self.cancel_tokens.lock();
-        let tx_opt: Option<Sender<()>> = tokens.remove(transfer_id);
+        let tx_opt = {
+            let mut tokens = self.cancel_tokens.lock();
+            tokens.remove(transfer_id)
+        };
         if let Some(tx) = tx_opt {
             let _ = tx.send(());
         }
         self.handle_decision(transfer_id, false);
+    }
+
+    pub fn simulate_crash(&self, transfer_id: &str) {
+        info!("FileTransferManager: SIMULATING HARD CRASH for {}", transfer_id);
+        // In a real system we'd just return an error, but for testing auto-resume after process death:
+        std::process::exit(42);
+    }
+
+    pub fn set_crash_trigger(&self, transfer_id: String, offset: u64) {
+        info!("FileTransferManager: setting crash trigger for {} at {} bytes", transfer_id, offset);
+        let mut triggers = self.crash_triggers.lock();
+        triggers.insert(transfer_id, offset);
+    }
+
+    pub fn check_crash_trigger(&self, transfer_id: &str, current_offset: u64) {
+        let trigger_offset = {
+            let triggers = self.crash_triggers.lock();
+            triggers.get(transfer_id).copied()
+        };
+
+        if let Some(offset) = trigger_offset {
+            if current_offset >= offset {
+                info!("FileTransferManager: current offset {} >= trigger {}, firing crash", current_offset, offset);
+                {
+                    let mut triggers = self.crash_triggers.lock();
+                    triggers.remove(transfer_id);
+                }
+                self.simulate_crash(transfer_id);
+            }
+        }
     }
 }
 
@@ -375,10 +429,17 @@ fn handle_incoming_transfer_inner(
 
     if db.get_transfer(&transfer_id)?.is_none() {
         db.create_transfer(&transfer_id, "incoming", peer_id, "", &req.file_name, req.total_bytes, req.chunk_size, &req.file_hash)?;
+        
+        // Populate chunk plan for tracking
+        if !is_benchmark {
+            let chunk_plan = compute_chunk_plan(req.total_bytes, req.chunk_size);
+            let db_chunks: Vec<(u32, String, u64, u32)> = chunk_plan.iter().map(|c| (c.index, String::new(), c.offset, c.length)).collect();
+            db.insert_chunks_batch(&transfer_id, &db_chunks)?;
+        }
     }
 
     let decision_rx = manager.add_pending_decision(transfer_id.clone());
-    let cancel_rx = manager.register_transfer(transfer_id.clone());
+    let (cancel_rx, crash_rx) = manager.register_transfer(transfer_id.clone());
     manager.progress_tx.send(ProgressEvent::IncomingRequest { 
         transfer_id: transfer_id.clone(), 
         node_id: peer_id.to_string(),
@@ -404,17 +465,25 @@ fn handle_incoming_transfer_inner(
     info!("User decision for {}: accepted={}", transfer_id, accepted);
 
     let mut resume_from = 0;
+    let mut missing_chunks = None;
     if accepted && !is_benchmark {
         if let Some(existing) = db.get_transfer(&transfer_id)? {
             if existing.status == "in_progress" || existing.status == "paused" {
                 resume_from = existing.bytes_confirmed as u64;
-                info!("Resuming {} from {} bytes", transfer_id, resume_from);
+                // Query missing chunks for selective resume
+                let missing = db.get_incomplete_chunks(&transfer_id)?;
+                if !missing.is_empty() {
+                    info!("Resuming {} with {} missing chunks", transfer_id, missing.len());
+                    missing_chunks = Some(missing);
+                } else {
+                    info!("Resuming {} from {} bytes", transfer_id, resume_from);
+                }
             }
         }
     }
 
     info!("Sending Acceptance message for {}", transfer_id);
-    stream.write_message(&FileMessage::Acceptance(TransferAcceptance { transfer_id: transfer_id.clone(), accepted, resume_from }))?;
+    stream.write_message(&FileMessage::Acceptance(TransferAcceptance { transfer_id: transfer_id.clone(), accepted, resume_from, missing_chunks }))?;
     if !accepted {
         db.update_transfer_status(&transfer_id, "declined")?;
         manager.unregister_transfer(&transfer_id);
@@ -460,6 +529,10 @@ fn handle_incoming_transfer_inner(
             let _ = stream.write_message(&FileMessage::Cancel { transfer_id: transfer_id.clone() });
             break Ok(());
         }
+        if crash_rx.try_recv().is_ok() {
+            error!("Incoming transfer {} SIMULATED CRASH", transfer_id);
+            break Err(anyhow!("SIMULATED_CRASH"));
+        }
 
         match stream.read_message_timeout(Duration::from_secs(5)) {
             Ok(FileMessage::Chunk(chunk)) => {
@@ -481,6 +554,8 @@ fn handle_incoming_transfer_inner(
                 }
                 let new_confirmed = chunk.byte_offset + plaintext.len() as u64;
                 db.update_bytes_confirmed(&transfer_id, new_confirmed)?;
+                db.mark_chunk_verified(&transfer_id, chunk.chunk_index)?;
+                manager.check_crash_trigger(&transfer_id, new_confirmed);
                 let _ = manager.progress_tx.send(ProgressEvent::Progress { 
                     transfer_id: transfer_id.clone(), 
                     bytes_confirmed: new_confirmed,
@@ -534,8 +609,8 @@ pub fn handle_outgoing_transfer(
     manager: Arc<FileTransferManager>,
 ) -> Result<()> {
     info!("handle_outgoing_transfer started for {}", transfer_id);
-    let cancel_rx = manager.register_transfer(transfer_id.clone());
-    let res = handle_outgoing_transfer_inner(&mut *stream, Arc::clone(&db), transfer_id.clone(), session_key, Arc::clone(&manager), cancel_rx);
+    let (cancel_rx, crash_rx) = manager.register_transfer(transfer_id.clone());
+    let res = handle_outgoing_transfer_inner(&mut *stream, Arc::clone(&db), transfer_id.clone(), session_key, Arc::clone(&manager), cancel_rx, crash_rx);
     manager.unregister_transfer(&transfer_id);
     if let Ok(Some(rec)) = db.get_transfer(&transfer_id) {
         if rec.status == "in_progress" || rec.status == "awaiting_acceptance" { db.update_transfer_status(&transfer_id, "paused")?; }
@@ -550,6 +625,7 @@ fn handle_outgoing_transfer_inner(
     session_key: SessionKey,
     manager: Arc<FileTransferManager>,
     cancel_rx: Receiver<()>,
+    crash_rx: Receiver<()>,
 ) -> Result<()> {
     info!("handle_outgoing_transfer_inner started for {}", transfer_id);
     let record = db.get_transfer(&transfer_id)?.ok_or_else(|| anyhow!("Transfer not found in DB"))?;
@@ -591,6 +667,8 @@ fn handle_outgoing_transfer_inner(
     }
 
     let resume_from = acceptance.resume_from;
+    let missing_chunks_set: Option<std::collections::HashSet<u32>> = acceptance.missing_chunks.map(|list| list.into_iter().collect());
+    
     db.update_bytes_confirmed(&transfer_id, resume_from)?;
     db.update_transfer_status(&transfer_id, "in_progress")?;
     let _ = manager.progress_tx.send(ProgressEvent::Started { 
@@ -610,8 +688,17 @@ fn handle_outgoing_transfer_inner(
             thread::sleep(Duration::from_millis(50));
             return Ok(());
         }
+        if crash_rx.try_recv().is_ok() {
+            error!("Outgoing transfer {} SIMULATED CRASH", transfer_id);
+            return Err(anyhow!("SIMULATED_CRASH"));
+        }
 
-        if chunk_meta.offset + chunk_meta.length as u64 <= resume_from { continue; }
+        // Selective Resume Logic
+        if let Some(ref missing) = missing_chunks_set {
+            if !missing.contains(&chunk_meta.index) { continue; }
+        } else {
+            if chunk_meta.offset + chunk_meta.length as u64 <= resume_from { continue; }
+        }
 
         while in_flight >= max_in_flight_bytes {
             if cancel_rx.try_recv().is_ok() {
@@ -619,6 +706,10 @@ fn handle_outgoing_transfer_inner(
                 let _ = stream.write_message(&FileMessage::Cancel { transfer_id: transfer_id.clone() });
                 thread::sleep(Duration::from_millis(50));
                 return Ok(());
+            }
+            if crash_rx.try_recv().is_ok() {
+                error!("Outgoing transfer {} SIMULATED CRASH (during flow control)", transfer_id);
+                return Err(anyhow!("SIMULATED_CRASH"));
             }
             match stream.read_message_timeout(Duration::from_secs(5)) {
                 Ok(FileMessage::Ack(a)) => {
@@ -652,6 +743,8 @@ fn handle_outgoing_transfer_inner(
         let encrypted = session_key.encrypt(&chunk_data)?;
         stream.write_message(&FileMessage::Chunk(ChunkFrame { transfer_id: transfer_id.clone(), chunk_index: chunk_meta.index, byte_offset: chunk_meta.offset, data: encrypted, chunk_hash }))?;
         in_flight += chunk_meta.length as usize;
+        
+        manager.check_crash_trigger(&transfer_id, chunk_meta.offset + chunk_meta.length as u64);
     }
 
     while in_flight > 0 {
@@ -660,6 +753,10 @@ fn handle_outgoing_transfer_inner(
             let _ = stream.write_message(&FileMessage::Cancel { transfer_id: transfer_id.clone() });
             thread::sleep(Duration::from_millis(50));
             return Ok(());
+        }
+        if crash_rx.try_recv().is_ok() {
+            error!("Outgoing transfer {} SIMULATED CRASH (during final drain)", transfer_id);
+            return Err(anyhow!("SIMULATED_CRASH"));
         }
         match stream.read_message_timeout(Duration::from_secs(5)) {
             Ok(FileMessage::Ack(a)) => {
@@ -849,6 +946,110 @@ mod tests {
         assert!(dest_path.exists());
         let received_content = std::fs::read(dest_path)?;
         assert_eq!(received_content, file_content);
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_transfer_hard_crash_and_resume() -> Result<()> {
+        let _ = tracing_subscriber::fmt::try_init();
+        let dir1 = tempdir()?;
+        let dir2 = tempdir()?;
+        let file_path = dir1.path().join("crash_test.bin");
+        let mut file_content = vec![0u8; 1024 * 1024]; // 1MB
+        rand::Rng::fill(&mut rand::thread_rng(), &mut file_content[..]);
+        std::fs::write(&file_path, &file_content)?;
+        let file_hash = blake3::hash(&file_content).to_hex().to_string();
+        let store1 = Arc::new(Store::init(dir1.path())?);
+        let store2 = Arc::new(Store::init(dir2.path())?);
+        let transfer_id = Uuid::new_v4().to_string();
+        
+        store1.create_transfer(&transfer_id, "outgoing", "peer-2", &file_path.to_string_lossy(), "crash_test.bin", file_content.len() as u64, 262144, &file_hash)?;
+        
+        let (prog_tx1, _prog_rx1) = flume::unbounded();
+        let (prog_tx2, _prog_rx2) = flume::unbounded();
+        let manager1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), prog_tx1));
+        let manager2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), prog_tx2));
+        
+        let (tx1, rx1) = flume::unbounded();
+        let (tx2, rx2) = flume::unbounded();
+
+        // Custom stream that crashes after sending the first chunk
+        struct CrashingStream {
+            tx: Sender<FileMessage>,
+            rx: Receiver<FileMessage>,
+            manager: Arc<FileTransferManager>,
+            transfer_id: String,
+        }
+        impl FileStream for CrashingStream {
+            fn write_message(&mut self, msg: &FileMessage) -> Result<()> {
+                let res = self.tx.send(msg.clone()).map_err(|_| anyhow!("Stream closed"));
+                if let FileMessage::Chunk(c) = msg {
+                    if c.chunk_index == 1 { // crash after first chunk
+                        self.manager.simulate_crash(&self.transfer_id);
+                    }
+                }
+                res
+            }
+            fn read_message(&mut self) -> Result<FileMessage> { self.rx.recv().map_err(|_| anyhow!("Stream closed")) }
+            fn read_message_timeout(&mut self, timeout: Duration) -> Result<FileMessage> {
+                self.rx.recv_timeout(timeout).map_err(|_| anyhow!("Timeout"))
+            }
+        }
+
+        let stream1 = Box::new(CrashingStream { tx: tx1, rx: rx2, manager: Arc::clone(&manager1), transfer_id: transfer_id.clone() });
+        let stream2 = Box::new(MockFileStream { tx: tx2, rx: rx1 });
+
+        let t_id_clone = transfer_id.clone();
+        let store1_c = Arc::clone(&store1);
+        let manager1_c = Arc::clone(&manager1);
+        let sender_thread = thread::spawn(move || { handle_outgoing_transfer(stream1, store1_c, t_id_clone, SessionKey([0u8; 32]), manager1_c) });
+        
+        let store2_c = Arc::clone(&store2);
+        let manager2_c = Arc::clone(&manager2);
+        let download_dir = dir2.path().to_path_buf();
+        let receiver_thread = thread::spawn(move || { handle_incoming_transfer_with_manager(stream2, store2_c, SessionKey([0u8; 32]), download_dir, flume::unbounded().0, manager2_c, "peer-1".to_string()) });
+        
+        thread::sleep(Duration::from_millis(200));
+        manager2.handle_decision(&transfer_id, true);
+        
+        // Sender should error with SIMULATED_CRASH
+        let res = sender_thread.join().unwrap();
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().to_string(), "SIMULATED_CRASH");
+        
+        // Receiver should error due to timeout or remote drop
+        let _ = receiver_thread.join().unwrap();
+        
+        // Give time for state to be saved
+        thread::sleep(Duration::from_millis(200));
+        
+        // Now resume
+        let (tx3, rx3) = flume::unbounded();
+        let (tx4, rx4) = flume::unbounded();
+        let stream3 = Box::new(MockFileStream { tx: tx3, rx: rx4 });
+        let stream4 = Box::new(MockFileStream { tx: tx4, rx: rx3 });
+        
+        let t_id_clone2 = transfer_id.clone();
+        let store1_c2 = Arc::clone(&store1);
+        let manager1_c2 = Arc::clone(&manager1);
+        let sender_thread2 = thread::spawn(move || { handle_outgoing_transfer(stream3, store1_c2, t_id_clone2, SessionKey([0u8; 32]), manager1_c2) });
+        
+        let store2_c2 = Arc::clone(&store2);
+        let manager2_c2 = Arc::clone(&manager2);
+        let download_dir2 = dir2.path().to_path_buf();
+        let receiver_thread2 = thread::spawn(move || { handle_incoming_transfer_with_manager(stream4, store2_c2, SessionKey([0u8; 32]), download_dir2, flume::unbounded().0, manager2_c2, "peer-1".to_string()) });
+        
+        thread::sleep(Duration::from_millis(200));
+        manager2.handle_decision(&transfer_id, true);
+        
+        sender_thread2.join().unwrap()?;
+        receiver_thread2.join().unwrap()?;
+        
+        let dest_path = dir2.path().join("crash_test.bin");
+        assert!(dest_path.exists());
+        let received_content = std::fs::read(dest_path)?;
+        assert_eq!(received_content, file_content);
+        
         Ok(())
     }
 

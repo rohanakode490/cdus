@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -96,6 +97,18 @@ func (s *Server) Routes() http.Handler {
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := s.hub.GetStats()
+
+	// Add store stats
+	deviceCount, err := s.store.CountDevices(r.Context())
+	if err == nil {
+		stats["total_registered_devices"] = deviceCount
+	}
+
+	// Add runtime stats
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	stats["memory_usage_mb"] = float64(m.Alloc) / 1024 / 1024
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
 }

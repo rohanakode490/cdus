@@ -26,6 +26,11 @@ pub struct CdusBehaviour {
     pub stream: libp2p_stream::Behaviour,
 }
 
+#[derive(Debug, Clone)]
+pub enum SwarmCommand {
+    AddAddress(PeerId, libp2p::Multiaddr),
+}
+
 pub struct Libp2pManager {
     peer_id: PeerId,
     keypair: identity::Keypair,
@@ -35,11 +40,14 @@ pub struct Libp2pManager {
     sync_rx: Receiver<SyncMessage>,
     request_tx: Sender<(PeerId, SyncMessage)>,
     request_rx: Receiver<(PeerId, SyncMessage)>,
+    command_tx: Sender<SwarmCommand>,
+    command_rx: Receiver<SwarmCommand>,
     store: Arc<Store>,
     file_pool: threadpool::ThreadPool,
     stream_control: Mutex<Option<libp2p_stream::Control>>,
     transfer_manager: Arc<FileTransferManager>,
     download_dir: Option<std::path::PathBuf>,
+    listen_addresses: Arc<Mutex<Vec<libp2p::Multiaddr>>>,
 }
 
 impl Libp2pManager {
@@ -69,6 +77,7 @@ impl Libp2pManager {
 
         let (sync_tx, sync_rx) = flume::unbounded();
         let (request_tx, request_rx) = flume::unbounded();
+        let (command_tx, command_rx) = flume::unbounded();
 
         Ok(Self {
             peer_id,
@@ -79,16 +88,27 @@ impl Libp2pManager {
             sync_rx,
             request_tx,
             request_rx,
+            command_tx,
+            command_rx,
             store,
             file_pool: threadpool::ThreadPool::new(4),
             stream_control: Mutex::new(None),
             transfer_manager,
             download_dir,
+            listen_addresses: Arc::new(Mutex::new(Vec::new())),
         })
+    }
+
+    pub fn inject_address(&self, peer_id: PeerId, addr: libp2p::Multiaddr) {
+        let _ = self.command_tx.send(SwarmCommand::AddAddress(peer_id, addr));
     }
 
     pub fn get_sync_tx(&self) -> Sender<SyncMessage> {
         self.sync_tx.clone()
+    }
+
+    pub fn get_listen_addresses(&self) -> Vec<libp2p::Multiaddr> {
+        self.listen_addresses.lock().clone()
     }
 
     pub fn get_request_tx(&self) -> Sender<(PeerId, SyncMessage)> {
@@ -110,11 +130,13 @@ impl Libp2pManager {
         let tx = self.tx.clone();
         let sync_rx = self.sync_rx.clone();
         let request_rx = self.request_rx.clone();
+        let command_rx = self.command_rx.clone();
         let store = Arc::clone(&self.store);
         let peer_id = self.peer_id;
         let file_pool = self.file_pool.clone();
         let transfer_manager = Arc::clone(&self.transfer_manager);
         let download_dir_custom = self.download_dir.clone();
+        let listen_addresses_clone = Arc::clone(&self.listen_addresses);
         
         let (control_tx, control_rx) = flume::bounded(1);
 
@@ -243,6 +265,11 @@ impl Libp2pManager {
                             match event {
                                 SwarmEvent::NewListenAddr { address, .. } => {
                                     info!("Libp2p listening on {:?}", address);
+                                    listen_addresses_clone.lock().push(address);
+                                }
+                                SwarmEvent::ExpiredListenAddr { address, .. } => {
+                                    info!("Libp2p listen address expired: {:?}", address);
+                                    listen_addresses_clone.lock().retain(|a| a != &address);
                                 }
                                 SwarmEvent::Behaviour(event) => {
                                     match event {
@@ -290,6 +317,17 @@ impl Libp2pManager {
                         req = request_rx.recv_async() => {
                             if let Ok((peer, sync_msg)) = req {
                                 swarm.behaviour_mut().request_response.send_request(&peer, sync_msg);
+                            }
+                        }
+                        cmd = command_rx.recv_async() => {
+                            if let Ok(cmd) = cmd {
+                                match cmd {
+                                    SwarmCommand::AddAddress(peer_id, addr) => {
+                                        info!("Manually adding address for {}: {}", peer_id, addr);
+                                        swarm.add_peer_address(peer_id, addr);
+                                        let _ = swarm.dial(peer_id);
+                                    }
+                                }
                             }
                         }
                     }

@@ -56,6 +56,9 @@ pub enum IpcMessage {
     PeerDisconnected {
         node_id: String,
     },
+    PeerConnected {
+        node_id: String,
+    },
     GetDiscovered,
     DiscoveredResponse(Vec<(String, String, String, Vec<String>, u16)>),
     PairWith {
@@ -81,6 +84,7 @@ pub enum IpcMessage {
         active: bool,
         is_initiator: bool,
         remote_label: String,
+        silent: bool,
     },
     GetPairedDevices,
     PairedDevicesResponse(Vec<(String, String, Option<TransportType>)>),
@@ -110,6 +114,16 @@ pub enum IpcMessage {
     CancelFileTransfer {
         transfer_id: String,
     },
+    SimulateCrash {
+        transfer_id: String,
+    },
+    SetCrashTrigger {
+        transfer_id: String,
+        offset: u64,
+    },
+    ResumeFileTransfer {
+        transfer_id: String,
+    },
     FileTransferProgress {
         transfer_id: String,
         progress: f32,
@@ -124,8 +138,28 @@ pub enum IpcMessage {
     StartBenchmark {
         node_id: String,
     },
+    GetFileTransferHistory {
+        limit: u32,
+    },
+    FileTransferHistoryResponse(Vec<FileTransferRecord>),
+    ClearFinishedTransfers,
     // New File Transfer IPC
     FileProgress(ProgressEvent),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct FileTransferRecord {
+    pub transfer_id: String,
+    pub direction: String,
+    pub peer_node_id: String,
+    pub file_path: String,
+    pub file_name: String,
+    pub total_bytes: u64,
+    pub bytes_confirmed: u64,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -172,9 +206,10 @@ pub struct TransferRequest {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct TransferAcceptance {
-    pub transfer_id:  String,
-    pub accepted:     bool,
-    pub resume_from:  u64,      // byte offset — 0 for fresh, N for resume
+    pub transfer_id:    String,
+    pub accepted:       bool,
+    pub resume_from:    u64,           // byte offset — 0 for fresh, N for resume
+    pub missing_chunks: Option<Vec<u32>>, // Specific chunk indices if sparse resume is needed
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

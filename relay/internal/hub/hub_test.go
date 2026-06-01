@@ -21,8 +21,9 @@ func (m *mockStore) RevokeDevice(ctx context.Context, uuid string) error { retur
 func (m *mockStore) IsDeviceRevoked(ctx context.Context, uuid string) (bool, error) {
 	return false, nil
 }
-func (m *mockStore) Close() error                   { return nil }
-func (m *mockStore) Ping(ctx context.Context) error { return nil }
+func (m *mockStore) Close() error                                  { return nil }
+func (m *mockStore) Ping(ctx context.Context) error                { return nil }
+func (m *mockStore) CountDevices(ctx context.Context) (int, error) { return 0, nil }
 
 func TestHub_Run(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))

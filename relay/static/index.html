@@ -1,41 +1,182 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CDUS Relay Monitor</title>
+    <title>Relay Status</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: sans-serif; background: #f0f2f5; color: #1c1e21; margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
-        .card { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; }
-        .stat { font-size: 3rem; font-weight: bold; color: #007bff; margin: 1rem 0; }
-        .label { font-size: 1.2rem; color: #65676b; }
-        .status { margin-top: 1rem; padding: 0.5rem 1rem; border-radius: 20px; font-weight: bold; }
-        .healthy { background: #e7f3ff; color: #1877f2; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .stat-card { @apply border-b border-gray-100 dark:border-gray-800 pb-4 mb-4; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     </style>
 </head>
-<body>
-    <div class="card">
-        <h1>CDUS Relay</h1>
-        <div class="label">Active Connections</div>
-        <div id="active-clients" class="stat">--</div>
-        <div id="status" class="status healthy">Healthy</div>
-        <div style="margin-top: 2rem; font-size: 0.8rem; color: #bcc0c4;">
-            Last updated: <span id="last-updated">--</span>
+<body class="bg-white dark:bg-[#0a0a0a] text-gray-900 dark:text-gray-100 transition-colors duration-300">
+    <div class="max-w-4xl mx-auto px-6 py-12 md:py-20">
+        <!-- Header -->
+        <header class="flex justify-between items-baseline mb-16">
+            <div>
+                <h1 class="text-xs uppercase tracking-[0.2em] font-semibold text-gray-400 mb-1">CDUS Relay System</h1>
+                <div class="flex items-center space-x-2">
+                    <span class="text-2xl font-light">Status Dashboard</span>
+                    <span id="status-dot" class="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse"></span>
+                </div>
+            </div>
+            <button id="theme-toggle" class="text-[10px] uppercase tracking-widest hover:text-blue-500 transition-colors">
+                <span class="dark:hidden">Dark</span>
+                <span class="hidden dark:inline">Light</span>
+            </button>
+        </header>
+
+        <!-- Main Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-x-20 gap-y-12">
+            <!-- Metrics Column -->
+            <section>
+                <div class="stat-card">
+                    <div class="text-[10px] uppercase tracking-widest text-gray-400 mb-2">Active Connections</div>
+                    <div id="active-clients" class="text-4xl font-light mono">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="text-[10px] uppercase tracking-widest text-gray-400 mb-2">Total Registered</div>
+                    <div id="total-registered" class="text-4xl font-light mono">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="text-[10px] uppercase tracking-widest text-gray-400 mb-2">System Uptime</div>
+                    <div id="uptime" class="text-xl font-light mono text-gray-500 italic">--</div>
+                </div>
+                
+                <div class="mt-12 grid grid-cols-2 gap-4">
+                    <div>
+                        <div class="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Relayed</div>
+                        <div id="messages-routed" class="text-sm mono">0</div>
+                    </div>
+                    <div>
+                        <div class="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Traffic</div>
+                        <div id="total-bytes" class="text-sm mono">0 B</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Chart & Log Column -->
+            <section class="flex flex-col">
+                <div class="mb-8 h-40">
+                    <canvas id="connectionsChart"></canvas>
+                </div>
+                
+                <div class="flex-grow">
+                    <h3 class="text-[10px] uppercase tracking-widest text-gray-400 mb-6 pb-2 border-b border-gray-100 dark:border-gray-800">Activity Log</h3>
+                    <div id="activity-log" class="space-y-3 text-[11px] mono text-gray-500 h-48 overflow-y-auto pr-4">
+                        <div class="italic">Idle...</div>
+                    </div>
+                </div>
+            </section>
         </div>
+
+        <footer class="mt-24 pt-8 border-t border-gray-50 dark:border-gray-900 flex justify-between items-center text-[10px] text-gray-400 uppercase tracking-widest">
+            <div>&copy; 2026 CDUS</div>
+            <div id="last-updated">--</div>
+        </footer>
     </div>
 
     <script>
+        // Minimalist Theme Toggle
+        const themeToggle = document.getElementById('theme-toggle');
+        function updateTheme() {
+            if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                document.documentElement.classList.add('dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+            }
+            if (window.chart) {
+                chart.options.scales.y.grid.color = document.documentElement.classList.contains('dark') ? '#1a1a1a' : '#f3f4f6';
+                chart.update('none');
+            }
+        }
+        themeToggle.addEventListener('click', () => {
+            localStorage.theme = document.documentElement.classList.contains('dark') ? 'light' : 'dark';
+            updateTheme();
+        });
+        updateTheme();
+
+        // Minimalist Chart
+        const ctx = document.getElementById('connectionsChart').getContext('2d');
+        window.chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    data: [],
+                    borderColor: '#3b82f6',
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    tension: 0.1,
+                    fill: false
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { display: false },
+                    y: { 
+                        beginAtZero: true, 
+                        grid: { drawBorder: false },
+                        ticks: { display: false }
+                    }
+                }
+            }
+        });
+
+        function formatBytes(bytes) {
+            if (!bytes) return '0 B';
+            const k = 1024, sizes = ['B', 'KB', 'MB', 'GB'], i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        function formatUptime(s) {
+            if (!s) return '--';
+            const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+            return `${h}h ${m}m ${s % 60}s`;
+        }
+
         async function updateStats() {
             try {
                 const res = await fetch('/stats');
                 const data = await res.json();
-                document.getElementById('active-clients').textContent = data.active_clients ?? 0;
+                
+                document.getElementById('active-clients').textContent = data.active_clients;
+                document.getElementById('total-registered').textContent = data.total_registered_devices ?? '0';
+                document.getElementById('uptime').textContent = formatUptime(data.uptime_seconds);
+                document.getElementById('messages-routed').textContent = (data.messages_routed || 0).toLocaleString();
+                document.getElementById('total-bytes').textContent = formatBytes(data.total_bytes);
                 document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
-            } catch (e) {
-                console.error('Failed to fetch stats', e);
-            }
+
+                // Chart Update
+                chart.data.labels.push("");
+                chart.data.datasets[0].data.push(data.active_clients);
+                if (chart.data.labels.length > 20) {
+                    chart.data.labels.shift();
+                    chart.data.datasets[0].data.shift();
+                }
+                chart.update('none');
+
+                // Activity Log Update
+                const logEl = document.getElementById('activity-log');
+                if (data.recent_activity?.length > 0) {
+                    logEl.innerHTML = data.recent_activity.slice().reverse().map(act => `
+                        <div class="flex space-x-4 border-l-2 border-gray-100 dark:border-gray-800 pl-4 py-1 hover:border-blue-500 transition-colors">
+                            <span class="opacity-50">#</span>
+                            <span>${act}</span>
+                        </div>
+                    `).join('');
+                }
+            } catch (e) {}
         }
-        setInterval(updateStats, 5000);
+
+        setInterval(updateStats, 4000);
         updateStats();
     </script>
 </body>

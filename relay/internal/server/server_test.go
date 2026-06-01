@@ -55,6 +55,10 @@ func (m *mockStore) Ping(ctx context.Context) error {
 	return m.pingError
 }
 
+func (m *mockStore) CountDevices(ctx context.Context) (int, error) {
+	return len(m.devices), nil
+}
+
 func (m *mockStore) Close() error { return nil }
 
 func TestHandleRegister(t *testing.T) {

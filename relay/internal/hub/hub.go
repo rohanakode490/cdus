@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -112,6 +113,12 @@ type Hub struct {
 	store               store.Store
 	logger              *slog.Logger
 	mu                  sync.RWMutex
+
+	// Metrics
+	startTime      time.Time
+	messagesRouted int64
+	totalBytes     int64
+	recentActivity []string
 }
 
 func NewHub(store store.Store, logger *slog.Logger) *Hub {
@@ -123,6 +130,8 @@ func NewHub(store store.Store, logger *slog.Logger) *Hub {
 		clients:             make(map[string]*Client),
 		store:               store,
 		logger:              logger,
+		startTime:           time.Now(),
+		recentActivity:      make([]string, 0, 10),
 	}
 }
 
@@ -132,18 +141,28 @@ func (h *Hub) Run(ctx context.Context) {
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client.uuid] = client
+			h.recentActivity = append(h.recentActivity, fmt.Sprintf("Device %s connected", client.uuid[:8]))
+			if len(h.recentActivity) > 10 {
+				h.recentActivity = h.recentActivity[1:]
+			}
 			h.mu.Unlock()
 		case client := <-h.unregister:
 			h.mu.Lock()
 			if _, ok := h.clients[client.uuid]; ok {
 				delete(h.clients, client.uuid)
 				close(client.send)
+				h.recentActivity = append(h.recentActivity, fmt.Sprintf("Device %s disconnected", client.uuid[:8]))
+				if len(h.recentActivity) > 10 {
+					h.recentActivity = h.recentActivity[1:]
+				}
 			}
 			h.mu.Unlock()
 		case signal := <-h.broadcast:
-			h.mu.RLock()
+			h.mu.Lock()
+			h.messagesRouted++
+			h.totalBytes += int64(len(signal.Payload))
 			target, ok := h.clients[signal.TargetUUID]
-			h.mu.RUnlock()
+			h.mu.Unlock()
 
 			if ok {
 				data, _ := json.Marshal(signal)
@@ -191,9 +210,17 @@ func (h *Hub) DisconnectClient(uuid string) {
 func (h *Hub) GetStats() map[string]interface{} {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+
+	// We could derive active paths from clients if we tracked peers,
+	// but for now we'll just return the recent activity log.
+
 	return map[string]interface{}{
-		"active_clients": len(h.clients),
-		"timestamp":      time.Now().Unix(),
+		"active_clients":  len(h.clients),
+		"uptime_seconds":  int64(time.Since(h.startTime).Seconds()),
+		"messages_routed": h.messagesRouted,
+		"total_bytes":     h.totalBytes,
+		"recent_activity": h.recentActivity,
+		"timestamp":       time.Now().Unix(),
 	}
 }
 

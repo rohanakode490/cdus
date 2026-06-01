@@ -93,3 +93,10 @@ func (s *SQLiteStore) Close() error {
 func (s *SQLiteStore) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)
 }
+
+func (s *SQLiteStore) CountDevices(ctx context.Context) (int, error) {
+	query := `SELECT COUNT(*) FROM devices`
+	var count int
+	err := s.db.QueryRowContext(ctx, query).Scan(&count)
+	return count, err
+}

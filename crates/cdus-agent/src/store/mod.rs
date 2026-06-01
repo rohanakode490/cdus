@@ -281,7 +281,7 @@ impl Store {
         let tx = conn.transaction()?;
         {
             let mut stmt = tx.prepare(
-                "INSERT OR REPLACE INTO file_chunks (transfer_id, chunk_index, chunk_hash, byte_offset, byte_length)
+                "INSERT OR IGNORE INTO file_chunks (transfer_id, chunk_index, chunk_hash, byte_offset, byte_length)
                  VALUES (?1, ?2, ?3, ?4, ?5)"
             )?;
             for (index, hash, offset, length) in chunks {
@@ -299,6 +299,19 @@ impl Store {
             (transfer_id, index),
         )?;
         Ok(())
+    }
+
+    pub fn get_incomplete_chunks(&self, transfer_id: &str) -> Result<Vec<u32>> {
+        let conn = self.state_conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT chunk_index FROM file_chunks WHERE transfer_id = ?1 AND verified = 0 ORDER BY chunk_index ASC",
+        )?;
+        let rows = stmt.query_map([transfer_id], |row| row.get(0))?;
+        let mut result = Vec::new();
+        for r in rows {
+            result.push(r?);
+        }
+        Ok(result)
     }
 
     pub fn get_transfer(&self, transfer_id: &str) -> Result<Option<TransferRecord>> {
@@ -406,6 +419,25 @@ impl Store {
             results.push(row?);
         }
         Ok(results)
+    }
+
+    pub fn clear_finished_transfers(&self) -> Result<()> {
+        let conn = self.state_conn.lock();
+        conn.execute(
+            "DELETE FROM file_transfers WHERE status IN ('complete', 'failed', 'declined')",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_paired_device_network_info(&self, node_id: &str, ips: &[String], port: u16) -> Result<()> {
+        let conn = self.state_conn.lock();
+        let ips_json = serde_json::to_string(ips).unwrap_or_default();
+        conn.execute(
+            "UPDATE paired_devices SET last_known_ips = ?1, last_known_port = ?2 WHERE node_id = ?3",
+            (ips_json, port as i64, node_id),
+        )?;
+        Ok(())
     }
 
     pub fn append_event(&self, payload: &[u8], source: &str) -> Result<String> {
@@ -557,21 +589,6 @@ impl Store {
             "INSERT INTO paired_devices (node_id, label) VALUES (?1, ?2)
              ON CONFLICT(node_id) DO UPDATE SET label = excluded.label",
             (node_id, label),
-        )?;
-        Ok(())
-    }
-
-    pub fn update_paired_device_network_info(
-        &self,
-        node_id: &str,
-        ips: &[String],
-        port: u16,
-    ) -> Result<()> {
-        let conn = self.state_conn.lock();
-        let ips_str = ips.join(",");
-        conn.execute(
-            "UPDATE paired_devices SET last_known_ips = ?1, last_known_port = ?2 WHERE node_id = ?3",
-            (ips_str, port as i64, node_id),
         )?;
         Ok(())
     }

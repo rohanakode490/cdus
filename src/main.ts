@@ -411,7 +411,7 @@ async function startPairingPoll() {
   
   pairingInterval = setInterval(async () => {
     try {
-      const [pin, active, _isInitiator, _remoteLabel]: [string | null, boolean, boolean, string] = await invoke("get_pairing_status");
+      const [pin, active, _isInitiator, _remoteLabel, _silent]: [string | null, boolean, boolean, string, boolean] = await invoke("get_pairing_status");
       if (pin) {
         const digits = document.querySelectorAll(".pin-digit");
         digits.forEach((el, i) => {
@@ -680,9 +680,9 @@ window.addEventListener("DOMContentLoaded", () => {
   setInterval(async () => {
     if (pairingModal?.classList.contains("hidden")) {
       try {
-        const status: [string | null, boolean, boolean, string] = await invoke("get_pairing_status");
-        const [pin, active, isInitiator, remoteLabel] = status;
-        if (active && pin) {
+        const status: [string | null, boolean, boolean, string, boolean] = await invoke("get_pairing_status");
+        const [pin, active, isInitiator, remoteLabel, silent] = status;
+        if (active && pin && !silent) {
           showPairingModal({ id: "remote", name: remoteLabel, os: "Unknown" }, isInitiator);
           const digits = document.querySelectorAll(".pin-digit");
           digits.forEach((el, i) => {
@@ -849,6 +849,20 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   listen("peer-disconnected", (_event: any) => {
+    renderPairedDevices();
+  });
+
+  listen("pairing-result", (event: any) => {
+    const [success, nodeId, label] = event.payload;
+    if (success) {
+      console.log(`Pairing successful with ${label}`);
+      renderPairedDevices().then(() => {
+        updateDiscoveryList();
+      });
+    }
+  });
+
+  listen("peer-connected", (_event: any) => {
     renderPairedDevices();
   });
 

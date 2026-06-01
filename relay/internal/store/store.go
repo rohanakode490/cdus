@@ -20,4 +20,7 @@ type Store interface {
 
 	// Ping checks if the storage is reachable.
 	Ping(ctx context.Context) error
+
+	// Metrics
+	CountDevices(ctx context.Context) (int, error)
 }

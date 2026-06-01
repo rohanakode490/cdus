@@ -87,7 +87,7 @@ fun DevicesScreen() {
         }
     }
 
-    if (pairingStatus != null && pairingStatus!!.active) {
+    if (pairingStatus != null && pairingStatus!!.active && !pairingStatus!!.silent) {
         PairingDialog(
             status = pairingStatus!!,
             onDismiss = { cancelPairing() },

@@ -175,7 +175,7 @@ async fn confirm_pairing(accepted: bool) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn get_pairing_status() -> Result<(Option<String>, bool, bool, String), String> {
+async fn get_pairing_status() -> Result<(Option<String>, bool, bool, String, bool), String> {
     let msg = IpcMessage::GetPairingStatus;
     match send_ipc_message(msg)? {
         IpcMessage::PairingStatusResponse {
@@ -183,7 +183,8 @@ async fn get_pairing_status() -> Result<(Option<String>, bool, bool, String), St
             active,
             is_initiator,
             remote_label,
-        } => Ok((pin, active, is_initiator, remote_label)),
+            silent,
+        } => Ok((pin, active, is_initiator, remote_label, silent)),
         _ => Err("Unexpected response from agent".to_string()),
     }
 }
@@ -231,6 +232,28 @@ async fn reject_file_transfer(transfer_id: String) -> Result<String, String> {
         IpcMessage::Log(msg) => Ok(msg),
         _ => Err("Unexpected response from agent".to_string()),
     }
+}
+
+#[tauri::command]
+async fn get_file_transfer_history(limit: u32) -> Result<Vec<cdus_common::FileTransferRecord>, String> {
+    let msg = IpcMessage::GetFileTransferHistory { limit };
+    match send_ipc_message(msg)? {
+        IpcMessage::FileTransferHistoryResponse(history) => Ok(common_history_to_tauri(history)),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn clear_finished_transfers() -> Result<String, String> {
+    let msg = IpcMessage::ClearFinishedTransfers;
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+fn common_history_to_tauri(history: Vec<cdus_common::FileTransferRecord>) -> Vec<cdus_common::FileTransferRecord> {
+    history // They are already the same type now!
 }
 
 #[tauri::command]
@@ -444,6 +467,14 @@ pub fn run() {
                                                 let _ = app_handle_events
                                                     .emit("peer-disconnected", node_id);
                                             }
+                                            IpcMessage::PeerConnected { node_id } => {
+                                                let _ = app_handle_events
+                                                    .emit("peer-connected", node_id);
+                                            }
+                                            IpcMessage::PairingResult { success, node_id, label } => {
+                                                let _ = app_handle_events
+                                                    .emit("pairing-result", (success, node_id, label));
+                                            }
                                             _ => {}
                                         }
                                     }
@@ -476,6 +507,8 @@ pub fn run() {
             send_file,
             accept_file_transfer,
             reject_file_transfer,
+            get_file_transfer_history,
+            clear_finished_transfers,
             start_benchmark
         ])
         .run(tauri::generate_context!())
