@@ -459,12 +459,7 @@ pub fn send_file(node_id: String, path: String) {
 
             if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
                 match lm_clone.open_file_stream(peer_id) {
-                    Ok(stream) => {
-                        let wrapped_stream = cdus_agent::file_transfer::Libp2pFileStream { 
-                            stream, 
-                            runtime: lm_clone.runtime_handle() 
-                        };
-
+                    Ok(wrapped_stream) => {
                         let session_key = cdus_agent::file_transfer::SessionKey([0u8; 32]);
                         let _ = cdus_agent::file_transfer::handle_outgoing_transfer(
                             Box::new(wrapped_stream),

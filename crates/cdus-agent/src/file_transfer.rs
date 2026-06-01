@@ -214,82 +214,114 @@ pub trait FileStream {
 }
 
 pub struct Libp2pFileStream {
-    pub stream: libp2p::Stream,
-    pub runtime: tokio::runtime::Handle,
+    pub tx: Sender<FileMessage>,
+    pub rx: Receiver<FileMessage>,
+}
+
+impl Libp2pFileStream {
+    pub fn new(stream: libp2p::Stream, runtime: &tokio::runtime::Handle) -> Self {
+        let (in_tx, in_rx) = flume::bounded::<FileMessage>(32);
+        let (out_tx, out_rx) = flume::bounded::<FileMessage>(32);
+
+        runtime.spawn(async move {
+            let mut stream = stream;
+            let mut in_rx_stream = in_rx.into_stream();
+
+            info!("Libp2pWorker: started background task for stream");
+            
+            loop {
+                tokio::select! {
+                    // Outgoing: Sync -> Async
+                    msg_opt = futures::StreamExt::next(&mut in_rx_stream) => {
+                        match msg_opt {
+                            Some(msg) => {
+                                match msg.to_vec() {
+                                    Ok(data) => {
+                                        let len = data.len() as u32;
+                                        if let Err(e) = stream.write_all(&len.to_be_bytes()).await {
+                                            error!("Libp2pWorker: write length error: {}", e);
+                                            break;
+                                        }
+                                        if let Err(e) = stream.write_all(&data).await {
+                                            error!("Libp2pWorker: write body error: {}", e);
+                                            break;
+                                        }
+                                        if let Err(e) = stream.flush().await {
+                                            error!("Libp2pWorker: flush error: {}", e);
+                                            break;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Libp2pWorker: serialization error: {}", e);
+                                    }
+                                }
+                            }
+                            None => {
+                                info!("Libp2pWorker: input channel closed, shutting down");
+                                break;
+                            }
+                        }
+                    }
+                    // Incoming: Async -> Sync
+                    res = async {
+                        let mut len_bytes = [0u8; 4];
+                        stream.read_exact(&mut len_bytes).await?;
+                        let len = u32::from_be_bytes(len_bytes) as usize;
+                        
+                        let mut data = vec![0u8; len];
+                        stream.read_exact(&mut data).await?;
+                        
+                        FileMessage::from_slice(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                    } => {
+                        match res {
+                            Ok(msg) => {
+                                if let Err(_) = out_tx.send_async(msg).await {
+                                    info!("Libp2pWorker: output channel closed, shutting down");
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                error!("Libp2pWorker: read/decode error: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            let _ = stream.close().await;
+            info!("Libp2pWorker: background task finished");
+        });
+
+        Libp2pFileStream { tx: in_tx, rx: out_rx }
+    }
 }
 
 impl FileStream for Libp2pFileStream {
     fn write_message(&mut self, msg: &FileMessage) -> Result<()> {
-        let data = msg.to_vec()?;
-        let len = data.len() as u32;
         match msg {
-            FileMessage::Chunk(ref c) => info!("Libp2pStream: writing Chunk(index={}, offset={}) ({} bytes)", c.chunk_index, c.byte_offset, len),
-            _ => info!("Libp2pStream: writing message {:?} ({} bytes)", msg, len),
+            FileMessage::Chunk(ref c) => info!("Libp2pStream: queueing Chunk(index={}, offset={})", c.chunk_index, c.byte_offset),
+            _ => info!("Libp2pStream: queueing message {:?}", msg),
         }
-        self.runtime.block_on(async {
-            self.stream.write_all(&len.to_be_bytes()).await?;
-            self.stream.write_all(&data).await?;
-            Ok::<(), std::io::Error>(())
-        })?;
-        info!("Libp2pStream: message written successfully");
-        Ok(())
+        self.tx.send(msg.clone()).map_err(|e| anyhow!("Failed to send to worker: {}", e))
     }
 
     fn read_message(&mut self) -> Result<FileMessage> {
-        info!("Libp2pStream: waiting to read message...");
-        let msg = self.runtime.block_on(async {
-            let mut len_bytes = [0u8; 4];
-            self.stream.read_exact(&mut len_bytes).await?;
-            let len = u32::from_be_bytes(len_bytes) as usize;
-            
-            let mut data = vec![0u8; len];
-            self.stream.read_exact(&mut data).await?;
-            
-            let msg = FileMessage::from_slice(&data)?;
-            match msg {
-                FileMessage::Chunk(ref c) => info!("Libp2pStream: read Chunk(index={}, offset={})", c.chunk_index, c.byte_offset),
-                _ => info!("Libp2pStream: read message: {:?}", msg),
-            }
-            Ok::<FileMessage, anyhow::Error>(msg)
-        })?;
+        info!("Libp2pStream: waiting to read message from channel...");
+        let msg = self.rx.recv().map_err(|e| anyhow!("Failed to read from worker: {}", e))?;
+        match msg {
+            FileMessage::Chunk(ref c) => info!("Libp2pStream: received Chunk(index={}, offset={}) from channel", c.chunk_index, c.byte_offset),
+            _ => info!("Libp2pStream: received message: {:?}", msg),
+        }
         Ok(msg)
     }
 
     fn read_message_timeout(&mut self, timeout: Duration) -> Result<FileMessage> {
-        info!("Libp2pStream: waiting to read message (timeout={:?})...", timeout);
-        let msg = self.runtime.block_on(async {
-            // Robust framing: Only timeout on the first 4 bytes.
-            // If we get those, we wait as long as needed for the body to avoid misalignment.
-            let mut len_bytes = [0u8; 4];
-            let read_res = tokio::time::timeout(timeout, self.stream.read_exact(&mut len_bytes)).await;
-            
-            match read_res {
-                Ok(Ok(_)) => {
-                    let len = u32::from_be_bytes(len_bytes) as usize;
-                    info!("Libp2pStream: got length prefix {}, reading body...", len);
-                    
-                    let mut data = vec![0u8; len];
-                    // Use a longer timeout for the body (e.g. 30s) to be safe but not block forever
-                    tokio::time::timeout(Duration::from_secs(30), self.stream.read_exact(&mut data)).await??;
-                    
-                    let msg = FileMessage::from_slice(&data)?;
-                    match msg {
-                        FileMessage::Chunk(ref c) => info!("Libp2pStream: read Chunk(index={}, offset={})", c.chunk_index, c.byte_offset),
-                        _ => info!("Libp2pStream: read message: {:?}", msg),
-                    }
-                    Ok::<FileMessage, anyhow::Error>(msg)
-                }
-                Ok(Err(e)) => {
-                    error!("Libp2pStream: IO error reading length: {}", e);
-                    Err(e.into())
-                }
-                Err(_) => {
-                    // This is a normal timeout, we don't log it as an error
-                    Err(anyhow!("Timed out"))
-                }
-            }
-        })?;
-        info!("Libp2pStream: read message: {:?}", msg);
+        info!("Libp2pStream: waiting to read message from channel (timeout={:?})...", timeout);
+        let msg = self.rx.recv_timeout(timeout).map_err(|e| anyhow!("Read timeout or worker closed: {}", e))?;
+        match msg {
+            FileMessage::Chunk(ref c) => info!("Libp2pStream: received Chunk(index={}, offset={}) from channel", c.chunk_index, c.byte_offset),
+            _ => info!("Libp2pStream: received message: {:?}", msg),
+        }
         Ok(msg)
     }
 }

@@ -51,7 +51,7 @@ pub fn daemon_loop(
             >,
         >,
     >,
-    _libp2p_request_tx: Option<Sender<(libp2p::PeerId, SyncMessage)>>,
+    libp2p_request_tx: Option<Sender<(libp2p::PeerId, SyncMessage)>>,
     libp2p_manager: Arc<Libp2pManager>,
 ) {
     info!("Daemon logic thread started");
@@ -263,12 +263,7 @@ pub fn daemon_loop(
 
                         if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
                              match libp2p_manager_clone.open_file_stream(peer_id) {
-                               Ok(stream) => {
-                                   let wrapped_stream = crate::file_transfer::Libp2pFileStream { 
-                                       stream, 
-                                       runtime: libp2p_manager_clone.runtime_handle() 
-                                   };
-
+                               Ok(wrapped_stream) => {
                                     let session_key = crate::file_transfer::SessionKey([0u8; 32]);
                                     if let Err(e) = crate::file_transfer::handle_outgoing_transfer(
                                         Box::new(wrapped_stream),
@@ -319,12 +314,7 @@ pub fn daemon_loop(
 
                         if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
                              match libp2p_manager_clone.open_file_stream(peer_id) {
-                               Ok(stream) => {
-                                   let wrapped_stream = crate::file_transfer::Libp2pFileStream { 
-                                       stream, 
-                                       runtime: libp2p_manager_clone.runtime_handle() 
-                                   };
-
+                               Ok(wrapped_stream) => {
                                     let session_key = crate::file_transfer::SessionKey([0u8; 32]);
                                     if let Err(e) = crate::file_transfer::handle_outgoing_transfer(
                                         Box::new(wrapped_stream),
@@ -372,11 +362,7 @@ pub fn daemon_loop(
                             thread::spawn(move || {
                                 if let Ok(peer_id) = record.peer_node_id.parse::<libp2p::PeerId>() {
                                     match libp2p_manager_clone.open_file_stream(peer_id) {
-                                        Ok(stream) => {
-                                            let wrapped_stream = crate::file_transfer::Libp2pFileStream {
-                                                stream,
-                                                runtime: libp2p_manager_clone.runtime_handle()
-                                            };
+                                        Ok(wrapped_stream) => {
                                             let session_key = crate::file_transfer::SessionKey([0u8; 32]);
                                             if let Err(e) = crate::file_transfer::handle_outgoing_transfer(
                                                 Box::new(wrapped_stream),
@@ -401,6 +387,27 @@ pub fn daemon_loop(
                 }
                 IpcMessage::FileTransferProgress { transfer_id, progress } => {
                     broadcast_event(IpcMessage::FileTransferProgress { transfer_id, progress });
+                }
+                IpcMessage::TestLibp2pRequest { peer_id } => {
+                    if let Some(tx) = &libp2p_request_tx {
+                        if let Ok(pid) = peer_id.parse::<libp2p::PeerId>() {
+                            info!("Manual test: sending libp2p request to {}", pid);
+                            let _ = tx.send((
+                                pid,
+                                SyncMessage::ClipboardUpdate {
+                                    content: "MANUAL_TEST_MSG".to_string(),
+                                    timestamp: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap()
+                                        .as_secs(),
+                                },
+                            ));
+                        } else {
+                            error!("Manual test: invalid PeerId {}", peer_id);
+                        }
+                    } else {
+                        error!("Manual test: libp2p_request_tx not available");
+                    }
                 }
                 _ => {
                     info!("Daemon: Unhandled message: {:?}", msg);

@@ -44,6 +44,8 @@ mod tests {
         let (relay2, _) =
             RelayManager::new(id2.clone(), "http://localhost".to_string(), tx2.clone());
 
+        let ftm1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), flume::unbounded().0));
+        let lm1 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx1.clone(), Arc::clone(&store1), ftm1).unwrap());
         let pm1 = PairingManager::new(
             Arc::clone(&store1),
             tx1.clone(),
@@ -54,7 +56,10 @@ mod tests {
             Arc::clone(&sm1),
             Arc::new(relay1),
             tm1,
+            lm1,
         );
+        let ftm2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), flume::unbounded().0));
+        let lm2 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2).unwrap());
         let pm2 = PairingManager::new(
             Arc::clone(&store2),
             tx2.clone(),
@@ -65,6 +70,7 @@ mod tests {
             Arc::clone(&sm2),
             Arc::new(relay2),
             tm2,
+            lm2,
         );
 
         let pm1 = Arc::new(pm1);
@@ -186,6 +192,10 @@ mod tests {
         let tm = Arc::new(TurnManager::new().unwrap());
         let peer_map = Arc::new(Mutex::new(HashMap::new()));
 
+        let (p_tx, _p_rx) = flume::unbounded();
+        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
+        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
+
         let (relay, _) = RelayManager::new(
             "test".to_string(),
             "http://localhost".to_string(),
@@ -201,12 +211,9 @@ mod tests {
             Arc::clone(&sm),
             Arc::new(relay),
             tm,
+            lm.clone(),
         ));
         let lpt = Arc::new(Mutex::new(0u64));
-        
-        let (p_tx, _p_rx) = flume::unbounded();
-        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
-        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
 
         // Initial state
         let ts1 = 1000u64;
@@ -331,6 +338,8 @@ mod tests {
         let (relay2, _) =
             RelayManager::new(id2.clone(), "http://localhost".to_string(), tx2.clone());
 
+        let ftm1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), flume::unbounded().0));
+        let lm1 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx1.clone(), Arc::clone(&store1), ftm1).unwrap());
         let pm1 = Arc::new(PairingManager::new(
             Arc::clone(&store1),
             tx1,
@@ -341,7 +350,10 @@ mod tests {
             Arc::clone(&sm1),
             Arc::new(relay1),
             tm1,
+            lm1,
         ));
+        let ftm2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), flume::unbounded().0));
+        let lm2 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2).unwrap());
         let pm2 = Arc::new(PairingManager::new(
             Arc::clone(&store2),
             tx2,
@@ -352,6 +364,7 @@ mod tests {
             Arc::clone(&sm2),
             Arc::new(relay2),
             tm2,
+            lm2,
         ));
 
         let pm2_c = Arc::clone(&pm2);
@@ -401,6 +414,8 @@ mod tests {
         let sm = Arc::new(SyncManager::new());
         let tm = Arc::new(TurnManager::new().unwrap());
         let (relay, _) = RelayManager::new(id.clone(), "http://localhost".to_string(), tx.clone());
+        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), flume::unbounded().0));
+        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
         let pm = Arc::new(PairingManager::new(
             Arc::clone(&store),
             tx,
@@ -411,6 +426,7 @@ mod tests {
             Arc::clone(&sm),
             Arc::new(relay),
             tm,
+            lm.clone(),
         ));
 
         let pm_c = Arc::clone(&pm);
@@ -439,6 +455,8 @@ mod tests {
         let sm = Arc::new(SyncManager::new());
         let tm = Arc::new(TurnManager::new().unwrap());
         let (relay, _) = RelayManager::new(id.clone(), "http://localhost".to_string(), tx.clone());
+        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), flume::unbounded().0));
+        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
         let pm = PairingManager::new(
             Arc::clone(&store),
             tx,
@@ -449,6 +467,7 @@ mod tests {
             Arc::clone(&sm),
             Arc::new(relay),
             tm,
+            lm.clone(),
         );
 
         thread::spawn(move || pm.start_listener());
@@ -500,6 +519,8 @@ mod tests {
         let relay1 = Arc::new(relay1);
         let relay2 = Arc::new(relay2);
 
+        let ftm1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), flume::unbounded().0));
+        let lm1 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx1.clone(), Arc::clone(&store1), ftm1).unwrap());
         let pm1 = Arc::new(PairingManager::new(
             Arc::clone(&store1),
             tx1.clone(),
@@ -510,8 +531,11 @@ mod tests {
             Arc::clone(&sm1),
             Arc::clone(&relay1),
             tm1,
+            lm1,
         ));
 
+        let ftm2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), flume::unbounded().0));
+        let lm2 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2).unwrap());
         let pm2 = Arc::new(PairingManager::new(
             Arc::clone(&store2),
             tx2.clone(),
@@ -522,6 +546,7 @@ mod tests {
             Arc::clone(&sm2),
             Arc::clone(&relay2),
             tm2,
+            lm2,
         ));
 
         // Mock the relay server by cross-connecting the relay channels
@@ -618,6 +643,11 @@ mod tests {
             "http://localhost".to_string(),
             tx.clone(),
         );
+
+        let (p_tx, _p_rx) = flume::unbounded();
+        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
+        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
+
         let pm = Arc::new(PairingManager::new(
             Arc::clone(&store),
             tx.clone(),
@@ -628,13 +658,10 @@ mod tests {
             Arc::clone(&sm),
             Arc::new(relay),
             tm,
+            lm.clone(),
         ));
         let lpt = Arc::new(Mutex::new(0u64));
         let peer_map = Arc::new(Mutex::new(HashMap::new()));
-        
-        let (p_tx, _p_rx) = flume::unbounded();
-        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
-        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
 
         // 2. Simulate discovery of the ALREADY PAIRED device
         tx.send(IpcMessage::DeviceDiscovered {
@@ -660,7 +687,7 @@ mod tests {
             lpt,
             peer_map,
             None,
-            lm,
+            lm.clone(),
         );
 
         // 3. Verify it's NOT in discovered_devices list
@@ -706,8 +733,13 @@ mod tests {
         let (relay1, _) = RelayManager::new(id1.clone(), "http://localhost".to_string(), tx1.clone());
         let (relay2, _) = RelayManager::new(id2.clone(), "http://localhost".to_string(), tx2.clone());
 
-        let pm1 = Arc::new(PairingManager::new(Arc::clone(&store1), tx1.clone(), id1.clone(), priv1.clone(), 5401, Arc::clone(&ap1), Arc::clone(&sm1), Arc::new(relay1), tm1));
-        let pm2 = Arc::new(PairingManager::new(Arc::clone(&store2), tx2.clone(), id2.clone(), priv2.clone(), 5402, Arc::clone(&ap2), Arc::clone(&sm2), Arc::new(relay2), tm2));
+        let ftm1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), flume::unbounded().0));
+        let lm1 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx1.clone(), Arc::clone(&store1), ftm1.clone()).unwrap());
+        let ftm2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), flume::unbounded().0));
+        let lm2 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2.clone()).unwrap());
+
+        let pm1 = Arc::new(PairingManager::new(Arc::clone(&store1), tx1.clone(), id1.clone(), priv1.clone(), 5401, Arc::clone(&ap1), Arc::clone(&sm1), Arc::new(relay1), tm1, lm1));
+        let pm2 = Arc::new(PairingManager::new(Arc::clone(&store2), tx2.clone(), id2.clone(), priv2.clone(), 5402, Arc::clone(&ap2), Arc::clone(&sm2), Arc::new(relay2), tm2, lm2));
 
         let pm2_c = Arc::clone(&pm2);
         thread::spawn(move || pm2_c.start_listener());
