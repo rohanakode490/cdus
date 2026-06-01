@@ -35,3 +35,11 @@ android/app/src/main/jniLibs/**/*.so
 relay/cdus-relay
 relay/*.db
 
+agent_data*/
+*.db
+*.db-shm
+*.db-wal
+dummy.bin
+test_data.bin
+test_print
+relay/coverage.out

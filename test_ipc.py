@@ -67,6 +67,9 @@ if __name__ == "__main__":
     elif cmd == "benchmark":
         node_id = sys.argv[3]
         print(send_ipc(sock, {"StartBenchmark": {"node_id": node_id}}))
+    elif cmd == "libp2p_request":
+        peer_id = sys.argv[3]
+        print(send_ipc(sock, {"TestLibp2pRequest": {"peer_id": peer_id}}))
     elif cmd == "listen":
         duration = int(sys.argv[3]) if len(sys.argv) > 3 else 5
         for event in listen_events(sock, duration):
