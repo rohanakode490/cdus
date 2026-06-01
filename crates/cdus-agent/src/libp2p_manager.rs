@@ -1,19 +1,146 @@
 use crate::store::Store;
 use crate::file_transfer::FileTransferManager;
 use anyhow::Result;
+use async_trait::async_trait;
 use cdus_common::{IpcMessage, SyncMessage};
 use flume::{Receiver, Sender};
+use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, StreamExt};
 use libp2p::{
-    futures::StreamExt,
     gossipsub, identity, noise, request_response,
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, PeerId,
 };
+use std::io;
 use std::sync::Arc; use parking_lot::Mutex;
 use std::thread;
 use std::time::Duration;
 use tokio::runtime::Runtime;
 use tracing::{error, info};
+
+#[derive(Default, Clone)]
+pub struct MessagePackCodec;
+
+#[async_trait]
+impl request_response::Codec for MessagePackCodec {
+    type Protocol = libp2p::StreamProtocol;
+    type Request = SyncMessage;
+    type Response = SyncMessage;
+
+    async fn read_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Request>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        let mut len_bytes = [0u8; 4];
+        io.read_exact(&mut len_bytes).await?;
+        let len = u32::from_be_bytes(len_bytes) as usize;
+
+        let mut data = vec![0u8; len];
+        io.read_exact(&mut data).await?;
+
+        SyncMessage::from_slice(&data)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    async fn read_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Response>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        let mut len_bytes = [0u8; 4];
+        io.read_exact(&mut len_bytes).await?;
+        let len = u32::from_be_bytes(len_bytes) as usize;
+
+        let mut data = vec![0u8; len];
+        io.read_exact(&mut data).await?;
+
+        SyncMessage::from_slice(&data)
+            .map_err(|e| {
+                error!("MessagePackCodec: failed to decode response: {}", e);
+                io::Error::new(io::ErrorKind::InvalidData, e)
+            })
+    }
+
+    async fn write_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        request: Self::Request,
+    ) -> io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        info!("MessagePackCodec: writing request: {:?}", request);
+        let data = request
+            .to_vec()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let len = data.len() as u32;
+        io.write_all(&len.to_be_bytes()).await?;
+        io.write_all(&data).await?;
+        Ok(())
+    }
+
+    async fn write_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        response: Self::Response,
+    ) -> io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        info!("MessagePackCodec: writing response: {:?}", response);
+        let data = response
+            .to_vec()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let len = data.len() as u32;
+        io.write_all(&len.to_be_bytes()).await?;
+        io.write_all(&data).await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::io::Cursor;
+    use libp2p::request_response::Codec as _;
+
+    #[tokio::test]
+    async fn test_message_pack_codec_roundtrip() {
+        let mut codec = MessagePackCodec::default();
+        let protocol = libp2p::StreamProtocol::new("/test");
+        let msg = SyncMessage::ClipboardUpdate {
+            content: "hello manual test".to_string(),
+            timestamp: 1337,
+        };
+
+        let mut buf = Vec::new();
+        // Test Write
+        {
+            let mut writer = Cursor::new(&mut buf);
+            <MessagePackCodec as libp2p::request_response::Codec>::write_request(&mut codec, &protocol, &mut writer, msg.clone()).await.unwrap();
+        }
+
+        // Verify length prefix (4 bytes)
+        assert!(buf.len() > 4);
+        let len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+        assert_eq!(len, buf.len() - 4);
+
+        // Test Read
+        {
+            let mut reader = Cursor::new(&mut buf);
+            let decoded: SyncMessage = <MessagePackCodec as libp2p::request_response::Codec>::read_request(&mut codec, &protocol, &mut reader).await.unwrap();
+            assert_eq!(msg, decoded);
+        }
+    }
+}
 
 #[derive(NetworkBehaviour)]
 pub struct CdusBehaviour {
@@ -22,7 +149,7 @@ pub struct CdusBehaviour {
     pub identify: libp2p::identify::Behaviour,
     pub dcutr: libp2p::dcutr::Behaviour,
     pub relay_client: libp2p::relay::client::Behaviour,
-    pub request_response: request_response::cbor::Behaviour<SyncMessage, SyncMessage>,
+    pub request_response: request_response::Behaviour<MessagePackCodec>,
     pub stream: libp2p_stream::Behaviour,
 }
 
@@ -167,12 +294,8 @@ impl Libp2pManager {
                             libp2p::identify::Config::new("/cdus/1.0.0".into(), key.public()),
                         );
 
-                        let mut codec = request_response::cbor::codec::Codec::default();
-                        codec = codec.set_request_size_maximum(256 * 1024 * 1024);
-                        codec = codec.set_response_size_maximum(256 * 1024 * 1024);
-
-                        let request_response = request_response::cbor::Behaviour::with_codec(
-                            codec,
+                        let request_response = request_response::Behaviour::with_codec(
+                            MessagePackCodec::default(),
                             [(
                                 libp2p::StreamProtocol::new("/cdus/sync/1.0.0"),
                                 request_response::ProtocolSupport::Full,
@@ -223,10 +346,10 @@ impl Libp2pManager {
                                 let download_dir_custom_clone = download_dir_custom.clone();
                                 let runtime_handle = runtime_for_pool.handle().clone();
                                 file_pool.execute(move || {
-                                    let wrapped_stream = crate::file_transfer::Libp2pFileStream { 
+                                    let wrapped_stream = crate::file_transfer::Libp2pFileStream::new(
                                         stream, 
-                                        runtime: runtime_handle 
-                                    };
+                                        &runtime_handle 
+                                    );
                                     // TODO: Get real session key
                                     let session_key = crate::file_transfer::SessionKey([0u8; 32]);
 
@@ -299,6 +422,18 @@ impl Libp2pManager {
                                                 }
                                             }
                                         }
+                                        CdusBehaviourEvent::RequestResponse(request_response::Event::Message { peer, message, .. }) => {
+                                            match message {
+                                                request_response::Message::Request { request, channel, .. } => {
+                                                    info!("Received libp2p Request from {}: {:?}", peer, request);
+                                                    // Echo back for testing
+                                                    let _ = swarm.behaviour_mut().request_response.send_response(channel, request);
+                                                }
+                                                request_response::Message::Response { response, .. } => {
+                                                    info!("Received libp2p Response from {}: {:?}", peer, response);
+                                                }
+                                            }
+                                        }
                                         _ => {}
                                     }
                                 }
@@ -340,14 +475,15 @@ impl Libp2pManager {
         }
     }
 
-    pub fn open_file_stream(&self, peer_id: PeerId) -> Result<libp2p::Stream> {
+    pub fn open_file_stream(&self, peer_id: PeerId) -> Result<crate::file_transfer::Libp2pFileStream> {
         let control = self.stream_control.lock().clone()
             .ok_or_else(|| anyhow::anyhow!("Stream control not initialized"))?;
         let protocol = libp2p::StreamProtocol::new("/cdus/file/1.0.0");
         
-        self.runtime.block_on(async {
-            let stream = control.clone().open_stream(peer_id, protocol).await?;
-            Ok(stream)
-        })
+        let stream = self.runtime.block_on(async {
+            control.clone().open_stream(peer_id, protocol).await
+        })?;
+        
+        Ok(crate::file_transfer::Libp2pFileStream::new(stream, self.runtime.handle()))
     }
 }

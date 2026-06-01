@@ -145,6 +145,10 @@ pub enum IpcMessage {
     ClearFinishedTransfers,
     // New File Transfer IPC
     FileProgress(ProgressEvent),
+    // Testing
+    TestLibp2pRequest {
+        peer_id: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

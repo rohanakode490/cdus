@@ -37,7 +37,8 @@ base64 = "0.22"
 tokio = { version = "1.36", features = ["rt", "net", "time", "sync", "macros"] }
 turn = "0.7"
 webrtc-util = "0.8"
-libp2p = { version = "0.56", features = ["tcp", "quic", "mdns", "noise", "yamux", "dcutr", "identify", "ping", "relay", "kad", "tokio", "gossipsub", "cbor", "macros", "json", "request-response"] }
+libp2p = { version = "0.56", features = ["tcp", "quic", "mdns", "noise", "yamux", "dcutr", "identify", "ping", "relay", "kad", "tokio", "gossipsub", "macros", "json", "request-response"] }
+
 libp2p-stream = "0.4.0-alpha"
 socket2 = "0.5.10"
 fastcdc = "4.0.1"
@@ -49,6 +50,7 @@ threadpool = "1.8.1"
 futures = "0.3.32"
 sysinfo = "0.38.4"
 parking_lot = "0.12.5"
+async-trait = "0.1"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 arboard = "3.4"
