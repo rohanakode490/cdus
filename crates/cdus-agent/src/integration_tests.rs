@@ -87,7 +87,7 @@ mod tests {
         // Initiate pairing from pm1 to pm2
         let pm1_init = Arc::clone(&pm1);
         thread::spawn(move || {
-            pm1_init.initiate_pairing("127.0.0.1:5202".parse().unwrap());
+            pm1_init.initiate_pairing("127.0.0.1:5202".parse().unwrap(), None);
         });
 
         // Wait for both to see active pairing
@@ -371,7 +371,7 @@ mod tests {
         thread::spawn(move || pm2_c.start_listener());
         thread::sleep(Duration::from_millis(50));
 
-        thread::spawn(move || pm1.initiate_pairing("127.0.0.1:5302".parse().unwrap()));
+        thread::spawn(move || pm1.initiate_pairing("127.0.0.1:5302".parse().unwrap(), None));
 
         // Wait for responder to see pairing
         let mut attempts = 0;
@@ -435,7 +435,7 @@ mod tests {
 
         // Attempt to connect to self
         let addr = "127.0.0.1:5401".parse().unwrap();
-        pm.initiate_pairing(addr);
+        pm.initiate_pairing(addr, None);
 
         thread::sleep(Duration::from_millis(200));
         // We expect it to fail gracefully and not set an active pairing forever
@@ -631,7 +631,7 @@ mod tests {
         let label = "Test Device".to_string();
 
         // 1. Add device as paired
-        store.add_paired_device(&id, &label).unwrap();
+        store.add_paired_device(&id, &label, None).unwrap();
 
         let lw = Arc::new(Mutex::new(None));
         let dd = Arc::new(Mutex::new(Vec::new()));
@@ -746,7 +746,7 @@ mod tests {
         thread::sleep(Duration::from_millis(100));
 
         let pm1_init = Arc::clone(&pm1);
-        thread::spawn(move || { pm1_init.initiate_pairing("127.0.0.1:5402".parse().unwrap()); });
+        thread::spawn(move || { pm1_init.initiate_pairing("127.0.0.1:5402".parse().unwrap(), None); });
 
         // Auto-confirm for test
         let mut attempts = 0;

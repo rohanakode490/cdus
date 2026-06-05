@@ -10,16 +10,13 @@ pub mod utils;
 #[cfg(test)]
 pub mod integration_tests;
 
-use anyhow::Result;
 use cdus_common::{IpcMessage, SyncMessage};
 use flume::{Receiver, Sender};
-use libp2p::PeerId;
 use parking_lot::Mutex;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::libp2p_manager::Libp2pManager;
 use crate::pairing::{ActivePairingState, PairingManager, SyncManager};

@@ -665,7 +665,7 @@ pub fn initiate_pairing(node_id: String) {
                 for ip in device.ips {
                     if let Ok(ip_addr) = ip.parse() {
                         let addr = std::net::SocketAddr::new(ip_addr, device.port);
-                        if pm_clone.initiate_pairing(addr) {
+                        if pm_clone.initiate_pairing(addr, Some(node_id_clone.clone())) {
                             success = true;
                             break;
                         }
@@ -694,6 +694,22 @@ pub fn confirm_pairing(accepted: bool) {
 pub fn cancel_pairing() {
     let mut ap = ACTIVE_PAIRING.lock();
     *ap = None;
+}
+
+#[uniffi::export]
+pub fn get_qr_pairing_payload() -> String {
+    if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+        pm.generate_qr_payload().unwrap_or_default()
+    } else {
+        String::new()
+    }
+}
+
+#[uniffi::export]
+pub fn pair_with_qr(payload: String) {
+    if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+        let _ = pm.pair_with_qr(payload);
+    }
 }
 
 #[uniffi::export]

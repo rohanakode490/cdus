@@ -351,6 +351,22 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         }
     }
 
+    override fun onPeerConnected(nodeId: String) {
+        val label = io.cdus.app.data.DeviceManager.getLabel(nodeId)
+        Logger.i("Peer connected: $label ($nodeId)")
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            android.widget.Toast.makeText(this, "$label is now online", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onPairingResult(success: Boolean, nodeId: String, label: String) {
+        Logger.i("Pairing result for $label ($nodeId): success=$success")
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            val msg = if (success) "Pairing successful with $label" else "Pairing failed with $label"
+            android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onTransferStateChanged(transferId: String, state: String) {
         Logger.i("Transfer state changed: $transferId -> $state")
         when (state) {

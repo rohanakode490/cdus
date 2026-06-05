@@ -30,6 +30,7 @@ pub struct HandshakePayload {
     pub label: String,
     pub node_id: String,
     pub libp2p_addresses: Vec<String>,
+    pub oob_secret: Option<String>,
 }
 
 #[derive(Clone)]
@@ -126,6 +127,8 @@ pub struct PairingManager {
     turn_manager: Arc<TurnManager>,
     pub libp2p_manager: Arc<Libp2pManager>,
     pending_turn_sessions: Mutex<HashMap<String, TurnConnection>>,
+    active_oob_secret: Arc<Mutex<Option<String>>>,
+    target_oob_secret: Arc<Mutex<Option<(String, String)>>>, // (node_id, secret)
 }
 
 impl PairingManager {
@@ -153,6 +156,8 @@ impl PairingManager {
             turn_manager,
             libp2p_manager,
             pending_turn_sessions: Mutex::new(HashMap::new()),
+            active_oob_secret: Arc::new(Mutex::new(None)),
+            target_oob_secret: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -196,15 +201,65 @@ impl PairingManager {
                 source_uuid
             );
 
-            let params: NoiseParams = "Noise_XX_25519_ChaChaPoly_BLAKE2s".parse().unwrap();
+            if payload.is_empty() {
+                return Err(anyhow::anyhow!("Received empty Noise message from relay"));
+            }
+
+            // Protocol Prefix: 0x00 = XX, 0x01 = IK
+            let pattern_byte = payload[0];
+            let pattern = if pattern_byte == 0x01 {
+                "Noise_IK_25519_ChaChaPoly_BLAKE2s"
+            } else {
+                "Noise_XX_25519_ChaChaPoly_BLAKE2s"
+            };
+            let use_ik = pattern.contains("_IK_");
+            let noise_data = &payload[1..];
+
+            let params: NoiseParams = pattern.parse().unwrap();
             let mut builder = Builder::new(params);
             builder = builder.local_private_key(&self.private_key);
+
+            let mut remote_static = None;
+            if use_ik {
+                if let Ok(Some(device)) = self.store.get_paired_device(&source_uuid) {
+                    remote_static = device.static_key;
+                }
+                
+                if let Some(ref rs) = remote_static {
+                    info!("Using known static key for IK responder via relay: {}", source_uuid);
+                    builder = builder.remote_public_key(rs);
+                } else {
+                    warn!("Received IK handshake from unknown/unpaired device {} via relay. It will likely fail decryption.", source_uuid);
+                }
+            }
+
             let mut noise = builder.build_responder().unwrap();
 
-            let mut buf = [0u8; 1024];
-            match noise.read_message(&payload, &mut buf) {
-                Ok(_) => {
-                    // Handshake step 1 successful. Now send step 2.
+            let mut initiator_payload_buf = [0u8; 1024];
+            match noise.read_message(noise_data, &mut initiator_payload_buf) {
+                Ok(payload_len) => {
+                    info!("Decrypted Noise message 1 from relay using {}", if use_ik { "IK" } else { "XX" });
+                    
+                    let mut initiator_label = "Unknown Device".to_string();
+                    let mut remote_node_id = source_uuid.clone();
+
+                    if use_ik && payload_len > 0 {
+                        let payload_slice = &initiator_payload_buf[..payload_len];
+                        if let Ok(initiator_payload) = serde_json::from_slice::<HandshakePayload>(payload_slice) {
+                            initiator_label = initiator_payload.label;
+                            remote_node_id = initiator_payload.node_id;
+
+                            // Peer Exchange: Inject libp2p addresses
+                            if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
+                                for addr_str in initiator_payload.libp2p_addresses {
+                                    if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                                        self.libp2p_manager.inject_address(peer_id, addr);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     let self_label = self
                         .store
                         .get_state("device_name")
@@ -214,6 +269,7 @@ impl PairingManager {
                         label: self_label,
                         node_id: self.node_id.clone(),
                         libp2p_addresses: self.libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
+                        oob_secret: self.active_oob_secret.lock().clone(),
                     };
                     let self_payload_bytes = serde_json::to_vec(&self_payload).unwrap();
                     let mut out_buf = [0u8; 1024];
@@ -234,28 +290,38 @@ impl PairingManager {
                             }
 
                             // Initialize active pairing state
+                            let mut pin = String::new();
+                            if noise.is_handshake_finished() {
+                                let h = noise.get_handshake_hash();
+                                pin = derive_pin(h);
+                            }
+
                             let is_paired = self.store.is_device_paired(&source_uuid).unwrap_or(false);
+                            let has_active_oob = self.active_oob_secret.lock().is_some();
+
                             *ap = Some(ActivePairingState {
-                                pin: String::new(),
+                                pin,
                                 is_initiator: false,
-                                remote_id: source_uuid.clone(),
-                                remote_label: "Remote Device (Relay)".to_string(),
+                                remote_id: remote_node_id.clone(),
+                                remote_label: initiator_label.clone(),
                                 confirmed: Arc::new(Mutex::new(None)),
                                 handshake: Arc::new(Mutex::new(Some(noise))),
-                                silent: is_paired,
+                                silent: is_paired || use_ik || has_active_oob,
                             });
 
-                            if is_paired {
-                                info!("Auto-confirming relay pairing for known device: {}", source_uuid);
+                            if is_paired || use_ik {
+                                info!("Auto-confirming relay pairing for known/IK device: {}", remote_node_id);
                                 if let Some(ref state) = *ap {
                                     *state.confirmed.lock() = Some(true);
                                 }
                             }
 
                             // Start monitoring for confirmation
-                            self.monitor_relay_pairing(source_uuid);
+                            self.monitor_relay_pairing(remote_node_id);
                         }
-                        Err(e) => error!("Failed to write Noise message (step 2): {}", e),
+                        Err(e) => {
+                            error!("Failed to write Noise message (step 2): {}", e);
+                        }
                     }
                 }
                 Err(e) => error!("Failed to read Noise message (step 1) from relay: {}", e),
@@ -339,6 +405,25 @@ impl PairingManager {
                                 state.remote_id = remote_node_id;
                                 state.remote_label = remote_label;
 
+                                // Check if OOB secret matches
+                                let initiator_oob_secret = payload.oob_secret;
+                                {
+                                    let mut active = self.active_oob_secret.lock();
+                                    if let Some(ref secret) = *active {
+                                        if let Some(ref initiator_secret) = initiator_oob_secret {
+                                            if secret == initiator_secret {
+                                                info!("Relay OOB pairing: secret matched! Auto-confirming.");
+                                                let mut conf = state.confirmed.lock();
+                                                *conf = Some(true);
+                                            } else {
+                                                warn!("Relay OOB pairing: secret mismatch! initiator sent {}, expected {}", initiator_secret, secret);
+                                            }
+                                        }
+                                    }
+                                    // Clear active secret after connection attempt (one-time use)
+                                    *active = None;
+                                }
+
                                 // Auto-confirm if already paired
                                 if let Ok(true) = self.store.is_device_paired(&state.remote_id) {
                                     info!("Device {} is already paired. Auto-confirming relay pairing.", state.remote_id);
@@ -372,8 +457,19 @@ impl PairingManager {
                                     "Received responder payload via relay: {} ({})",
                                     remote_label, remote_node_id
                                 );
-                                state.remote_id = remote_node_id;
+                                state.remote_id = remote_node_id.clone();
                                 state.remote_label = remote_label;
+
+                                let mut oob_secret = None;
+                                {
+                                    let target = self.target_oob_secret.lock();
+                                    if let Some((ref node_id, ref secret)) = *target {
+                                        if node_id == &state.remote_id {
+                                            info!("Using OOB secret for relay pairing with {}", state.remote_id);
+                                            oob_secret = Some(secret.clone());
+                                        }
+                                    }
+                                }
 
                                 let self_label = self
                                     .store
@@ -384,6 +480,7 @@ impl PairingManager {
                                     label: self_label,
                                     node_id: self.node_id.clone(),
                                     libp2p_addresses: self.libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
+                                    oob_secret,
                                 };
                                 let self_payload_bytes = serde_json::to_vec(&self_payload).unwrap();
                                 let mut out_buf = [0u8; 1024];
@@ -417,13 +514,20 @@ impl PairingManager {
                                         }
                                     }
                                     Err(e) => {
-                                        error!("Failed to write Noise message (step 3): {}", e)
+                                        error!("Failed to write Noise message (step 3): {}", e);
+                                        let mut ap = self.active_pairing.lock();
+                                        *ap = None;
                                     }
                                 }
                             }
                         }
                     }
-                    Err(e) => error!("Failed to read Noise message during relay handshake: {}", e),
+                    Err(e) => {
+                        error!("Failed to read Noise message during relay handshake: {}", e);
+                        // Clear active pairing on error to prevent infinite loop in monitor_relay_pairing
+                        let mut ap = self.active_pairing.lock();
+                        *ap = None;
+                    }
                 }
             }
         }
@@ -466,12 +570,16 @@ impl PairingManager {
                                     // Initiate sync session
                                     let mut hs = state.handshake.lock();
                                     if let Some(noise) = hs.take() {
+                                        let remote_static = noise.get_remote_static().map(|s| s.to_vec());
                                         if let Ok(transport) = noise.into_transport_mode() {
                                             let remote_node_id = state.remote_id.clone();
                                             let remote_label = state.remote_label.clone();
                                             let sync_manager = Arc::clone(&self.sync_manager);
                                             let ipc_tx = self.ipc_tx.clone();
                                             let remote_uuid = source_uuid.clone();
+
+                                            let store = Arc::clone(&self.store);
+                                            let libp2p_manager = Arc::clone(&self.libp2p_manager);
 
                                             thread::spawn(move || {
                                                 if let Err(e) = run_turn_sync_session(
@@ -481,6 +589,8 @@ impl PairingManager {
                                                     remote_label,
                                                     sync_manager,
                                                     ipc_tx,
+                                                    store,
+                                                    libp2p_manager,
                                                 ) {
 
                                                     error!(
@@ -494,6 +604,7 @@ impl PairingManager {
                                             let _ = self.store.add_paired_device(
                                                 &source_uuid,
                                                 &state.remote_label,
+                                                remote_static.as_deref(),
                                             );
                                             let _ = self.ipc_tx.send(IpcMessage::PairingResult {
                                                 success: true,
@@ -587,19 +698,50 @@ impl PairingManager {
     pub fn initiate_remote_pairing(&self, target_uuid: String) {
         info!("Initiating remote pairing with {} via relay", target_uuid);
 
-        let params: NoiseParams = "Noise_XX_25519_ChaChaPoly_BLAKE2s".parse().unwrap();
+        let mut remote_static = None;
+        if let Ok(Some(device)) = self.store.get_paired_device(&target_uuid) {
+            remote_static = device.static_key;
+        }
+
+        let use_ik = remote_static.is_some();
+        let pattern = if use_ik {
+            "Noise_IK_25519_ChaChaPoly_BLAKE2s"
+        } else {
+            "Noise_XX_25519_ChaChaPoly_BLAKE2s"
+        };
+
+        let params: NoiseParams = pattern.parse().unwrap();
         let mut builder = Builder::new(params);
         builder = builder.local_private_key(&self.private_key);
+        if let Some(ref rs) = remote_static {
+            builder = builder.remote_public_key(rs);
+        }
         let mut noise = builder.build_initiator().unwrap();
 
+        let mut initiator_payload_bytes = Vec::new();
+        if use_ik {
+            let initiator_payload = HandshakePayload {
+                label: self.store.get_state("device_name").unwrap().unwrap_or_else(|| "Unknown Device".to_string()),
+                node_id: self.node_id.clone(),
+                libp2p_addresses: self.libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
+                oob_secret: None,
+            };
+            initiator_payload_bytes = serde_json::to_vec(&initiator_payload).unwrap();
+        }
+
         let mut buf = [0u8; 1024];
-        match noise.write_message(&[], &mut buf) {
+        match noise.write_message(&initiator_payload_bytes, &mut buf) {
             Ok(n) => {
                 info!(
-                    "Sending handshake initiation (step 1) to {} via relay",
-                    target_uuid
+                    "Sending handshake initiation (step 1) to {} via relay using {}",
+                    target_uuid, if use_ik { "IK" } else { "XX" }
                 );
-                let sig = RelaySignal::Noise(buf[..n].to_vec());
+                // Protocol Prefix: 0x00 = XX, 0x01 = IK
+                let prefix = if use_ik { 0x01 } else { 0x00 };
+                let mut prefixed_msg = vec![prefix];
+                prefixed_msg.extend_from_slice(&buf[..n]);
+
+                let sig = RelaySignal::Noise(prefixed_msg);
                 let sig_bytes = serde_json::to_vec(&sig).unwrap();
                 if let Err(e) = self
                     .relay_manager
@@ -610,7 +752,9 @@ impl PairingManager {
                 }
 
                 let mut ap = self.active_pairing.lock();
-                let is_paired = self.store.is_device_paired(&target_uuid).unwrap_or(false);
+                let has_oob = self.target_oob_secret.lock().as_ref()
+                    .map(|(id, _)| id == &target_uuid).unwrap_or(false);
+
                 *ap = Some(ActivePairingState {
                     pin: String::new(),
                     is_initiator: true,
@@ -618,11 +762,11 @@ impl PairingManager {
                     remote_label: "Remote Device (Relay)".to_string(),
                     confirmed: Arc::new(Mutex::new(None)),
                     handshake: Arc::new(Mutex::new(Some(noise))),
-                    silent: is_paired,
+                    silent: use_ik || has_oob,
                 });
 
-                if is_paired {
-                    info!("Auto-confirming outgoing relay pairing for known device: {}", target_uuid);
+                if use_ik || has_oob {
+                    info!("Auto-confirming outgoing relay pairing for device: {}", target_uuid);
                     if let Some(ref state) = *ap {
                         *state.confirmed.lock() = Some(true);
                     }
@@ -664,6 +808,9 @@ impl PairingManager {
                     let node_id = self.node_id.clone();
                     let sync_manager = Arc::clone(&self.sync_manager);
                     let libp2p_manager = Arc::clone(&self.libp2p_manager);
+                    let active_oob_secret = Arc::clone(&self.active_oob_secret);
+                    let target_oob_secret = Arc::clone(&self.target_oob_secret);
+
                     thread::spawn(move || {
                         if let Err(e) = handle_incoming_connection(
                             stream,
@@ -674,7 +821,10 @@ impl PairingManager {
                             node_id,
                             sync_manager,
                             libp2p_manager,
+                            active_oob_secret,
+                            target_oob_secret,
                         ) {
+
 
                             error!("Error in incoming connection: {}", e);
                         }
@@ -685,7 +835,72 @@ impl PairingManager {
         }
     }
 
-    pub fn initiate_pairing(&self, target_addr: SocketAddr) -> bool {
+    pub fn generate_qr_payload(&self) -> Result<String> {
+        let secret: String = (0..16)
+            .map(|_| format!("{:02x}", rand::random::<u8>()))
+            .collect();
+        *self.active_oob_secret.lock() = Some(secret.clone());
+
+        let label = self
+            .store
+            .get_state("device_name")?
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let payload = format!(
+            "cdus://pair?v=1&id={}&s={}&l={}",
+            self.node_id,
+            secret,
+            urlencoding::encode(&label)
+        );
+        Ok(payload)
+    }
+
+    pub fn pair_with_qr(&self, payload: String) -> Result<()> {
+        info!("Processing scanned QR payload");
+        let url = url::Url::parse(&payload).map_err(|_| anyhow::anyhow!("Invalid QR format"))?;
+        if url.scheme() != "cdus" {
+            return Err(anyhow::anyhow!("Not a CDUS pairing QR"));
+        }
+        
+        // Handle both cdus://pair?... and cdus:pair?...
+        let is_pair = url.path() == "/pair" || url.host_str() == Some("pair") || url.path() == "pair";
+        if !is_pair {
+            return Err(anyhow::anyhow!("Invalid CDUS QR path"));
+        }
+
+        let mut node_id = String::new();
+        let mut secret = String::new();
+        let mut _label = String::new();
+
+        for (key, value) in url.query_pairs() {
+            match key.as_ref() {
+                "id" => node_id = value.into_owned(),
+                "s" => secret = value.into_owned(),
+                "l" => _label = value.into_owned(),
+                _ => {}
+            }
+        }
+
+        if node_id.is_empty() || secret.is_empty() {
+            return Err(anyhow::anyhow!("Missing required fields in QR"));
+        }
+
+        if self.store.is_device_paired(&node_id).unwrap_or(false) {
+            info!("Device {} is already paired. Storing OOB secret and skipping Noise XX.", node_id);
+            *self.target_oob_secret.lock() = Some((node_id.clone(), secret));
+            return Err(anyhow::anyhow!("Already paired"));
+        }
+
+        info!("Scanned QR for device: {} ({})", _label, node_id);
+        *self.target_oob_secret.lock() = Some((node_id.clone(), secret));
+
+        // Start pairing attempt
+        self.initiate_remote_pairing(node_id);
+        
+        Ok(())
+    }
+
+    pub fn initiate_pairing(&self, target_addr: SocketAddr, target_node_id: Option<String>) -> bool {
         let stream = match TcpStream::connect_timeout(&target_addr, Duration::from_secs(5)) {
             Ok(s) => s,
             Err(e) => {
@@ -701,6 +916,8 @@ impl PairingManager {
         let self_node_id = self.node_id.clone();
         let sync_manager = Arc::clone(&self.sync_manager);
         let libp2p_manager = Arc::clone(&self.libp2p_manager);
+        let active_oob_secret = Arc::clone(&self.active_oob_secret);
+        let target_oob_secret = Arc::clone(&self.target_oob_secret);
 
         thread::spawn(move || {
             // Upgrade to WebSocket
@@ -716,6 +933,9 @@ impl PairingManager {
                         self_node_id,
                         sync_manager,
                         libp2p_manager,
+                        active_oob_secret,
+                        target_oob_secret,
+                        target_node_id,
                     ) {
                         error!("Error in outgoing connection: {}", e);
                     }
@@ -734,12 +954,56 @@ fn run_turn_sync_session(
     label: String,
     sync_manager: Arc<SyncManager>,
     ipc_tx: Sender<IpcMessage>,
+    store: Arc<Store>,
+    libp2p_manager: Arc<Libp2pManager>,
 ) -> Result<()> {
     let (tx, rx) = flume::unbounded::<SyncMessage>();
-    sync_manager.add_peer(node_id.clone(), tx.clone(),
- TransportType::Relay);
+    sync_manager.add_peer(node_id.clone(), tx.clone(), TransportType::Relay);
 
     info!("TURN Sync session started for {} ({})", label, node_id);
+
+    // Initial PEX: Send our known peers to this new peer via TURN
+    let mut pex_records = Vec::new();
+    pex_records.push(cdus_common::PeerExchangeRecord {
+        node_id: libp2p_manager.get_peer_id().to_string(),
+        addresses: libp2p_manager
+            .get_listen_addresses()
+            .into_iter()
+            .map(|a| a.to_string())
+            .collect(),
+    });
+
+    if let Ok(paired) = store.get_paired_devices() {
+        for device in paired {
+            if device.node_id != node_id {
+                let mut addrs = Vec::new();
+                if let Some(ips) = device.last_known_ips {
+                    if let Some(port) = device.last_known_port {
+                        for ip in ips {
+                            addrs.push(format!("/ip4/{}/tcp/{}", ip, port));
+                        }
+                    }
+                }
+                if !addrs.is_empty() {
+                    pex_records.push(cdus_common::PeerExchangeRecord {
+                        node_id: device.node_id,
+                        addresses: addrs,
+                    });
+                }
+            }
+        }
+    }
+
+    if !pex_records.is_empty() {
+        info!("Sending PEX update ({} peers) to {} via TURN", pex_records.len(), label);
+        let pex_msg = SyncMessage::PeerExchange { peers: pex_records };
+        if let Ok(data) = pex_msg.to_vec() {
+            let mut out = vec![0u8; data.len() + 100];
+            if let Ok(n) = transport.write_message(&data, &mut out) {
+                let _ = conn.tx.send(out[..n].to_vec());
+            }
+        }
+    }
 
     loop {
         // 1. Check for incoming messages from peer via TURN
@@ -749,13 +1013,35 @@ fn run_turn_sync_session(
                 Ok(n) => {
                     out.truncate(n);
                     if let Ok(msg) = SyncMessage::from_slice(&out) {
-                        let SyncMessage::ClipboardUpdate { content, timestamp } = msg;
-                        info!("Received clipboard update from peer {} via TURN: {}", label, content);
-                        let _ = ipc_tx.send(IpcMessage::SetClipboard {
-                            content,
-                            timestamp,
-                            source: label.clone(),
-                        });
+                        match msg {
+                            SyncMessage::ClipboardUpdate { content, timestamp } => {
+                                info!(
+                                    "Received clipboard update from peer {} via TURN: {}",
+                                    label, content
+                                );
+                                let _ = ipc_tx.send(IpcMessage::SetClipboard {
+                                    content,
+                                    timestamp,
+                                    source: label.clone(),
+                                });
+                            }
+                            SyncMessage::PeerExchange { peers } => {
+                                info!(
+                                    "Received PEX via TURN from {} ({} peers)",
+                                    label,
+                                    peers.len()
+                                );
+                                for peer in peers {
+                                    if let Ok(peer_id) = peer.node_id.parse::<libp2p::PeerId>() {
+                                        for addr_str in peer.addresses {
+                                            if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                                                libp2p_manager.inject_address(peer_id, addr);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 Err(e) => {
@@ -800,6 +1086,8 @@ fn handle_incoming_connection(
     self_node_id: String,
     sync_manager: Arc<SyncManager>,
     libp2p_manager: Arc<Libp2pManager>,
+    active_oob_secret: Arc<Mutex<Option<String>>>,
+    target_oob_secret: Arc<Mutex<Option<(String, String)>>>,
 ) -> Result<()> {
     let res = handle_incoming_connection_inner(
         stream,
@@ -810,6 +1098,8 @@ fn handle_incoming_connection(
         self_node_id,
         Arc::clone(&sync_manager),
         libp2p_manager,
+        active_oob_secret,
+        target_oob_secret,
     );
 
     if let Err(e) = res {
@@ -834,6 +1124,8 @@ fn handle_incoming_connection_inner(
     self_node_id: String,
     sync_manager: Arc<SyncManager>,
     libp2p_manager: Arc<Libp2pManager>,
+    active_oob_secret: Arc<Mutex<Option<String>>>,
+    _target_oob_secret: Arc<Mutex<Option<(String, String)>>>,
 ) -> Result<()> {
     info!("Upgrading incoming connection to WebSocket");
     let mut ws = accept(stream)?;
@@ -844,113 +1136,224 @@ fn handle_incoming_connection_inner(
         .get_state("device_name")?
         .unwrap_or_else(|| "Unknown Device".to_string());
 
-    let params: NoiseParams = "Noise_XX_25519_ChaChaPoly_BLAKE2s"
+    let mut buf = [0u8; 2048];
+
+    // 1. Read Prefix + Message 1
+    let msg = ws.read()?;
+    let (pattern, noise_data, remote_id_hint) = if let Message::Binary(ref data) = msg {
+        if data.is_empty() {
+            return Err(anyhow::anyhow!("Received empty Noise message"));
+        }
+        let pattern_byte = data[0];
+        if pattern_byte == 0x01 {
+            // IK Pattern: [0x01, node_id_len (1), node_id (n), noise_msg]
+            if data.len() < 2 {
+                return Err(anyhow::anyhow!("IK message too short for length byte"));
+            }
+            let id_len = data[1] as usize;
+            if data.len() < 2 + id_len {
+                return Err(anyhow::anyhow!("IK message truncated ID"));
+            }
+            let node_id = String::from_utf8_lossy(&data[2..2 + id_len]).to_string();
+            ("Noise_IK_25519_ChaChaPoly_BLAKE2s", &data[2 + id_len..], Some(node_id))
+        } else {
+            // XX Pattern: [0x00, noise_msg]
+            ("Noise_XX_25519_ChaChaPoly_BLAKE2s", &data[1..], None)
+        }
+    } else {
+        return Err(anyhow::anyhow!("Expected binary Noise message"));
+    };
+
+    let use_ik = pattern.contains("_IK_");
+
+    let params: NoiseParams = pattern
         .parse()
         .map_err(|e: snow::Error| anyhow::anyhow!(e))?;
     let mut builder = Builder::new(params);
     builder = builder.local_private_key(&priv_key);
-    let mut noise = builder.build_responder().map_err(|e| anyhow::anyhow!(e))?;
 
-    let mut buf = [0u8; 2048];
-
-    // 1. Read e
-    let msg = ws.read()?;
-    if let Message::Binary(data) = msg {
-        noise
-            .read_message(&data, &mut [0u8; 2048])
-            .map_err(|e| anyhow::anyhow!(e))?;
-    } else {
-        return Err(anyhow::anyhow!("Expected binary Noise message"));
+    let mut remote_static = None;
+    if use_ik {
+        if let Some(ref node_id) = remote_id_hint {
+            if let Ok(Some(device)) = store.get_paired_device(node_id) {
+                remote_static = device.static_key;
+            }
+            
+            if let Some(ref rs) = remote_static {
+                info!("Using known static key for IK responder (direct): {}", node_id);
+                builder = builder.remote_public_key(rs);
+            } else {
+                warn!("Received IK handshake from unknown device hint: {}", node_id);
+            }
+        }
     }
 
-    // 2. Write e, ee, s, es + Responder's payload
+    let mut noise = builder.build_responder().map_err(|e| anyhow::anyhow!(e))?;
+
+    // Read Message 1
+    let mut initiator_payload_buf = [0u8; 2048];
+    let payload_len = noise
+        .read_message(noise_data, &mut initiator_payload_buf)
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    // 2. Write Message 2
+    // For XX: <- e, ee, s, es + payload
+    // For IK: <- e, ee, se
     let self_payload = HandshakePayload {
         label: self_label.clone(),
         node_id: self_node_id.clone(),
         libp2p_addresses: libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
+        oob_secret: active_oob_secret.lock().clone(),
     };
     let self_payload_bytes = serde_json::to_vec(&self_payload).map_err(|e| anyhow::anyhow!(e))?;
+    
+    // In IK, the responder can send a payload in Message 2
     let n = noise
         .write_message(&self_payload_bytes, &mut buf)
         .map_err(|e| anyhow::anyhow!(e))?;
     ws.send(Message::Binary(buf[..n].to_vec()))?;
 
-    let mut initiator_payload_buf = [0u8; 2048];
-    let msg = ws.read()?;
-    if let Message::Binary(data) = msg {
-        let payload_len = noise
-            .read_message(&data, &mut initiator_payload_buf)
-            .map_err(|e| {
-                error!("Noise decryption failed for initiator payload: {}", e);
-                anyhow::anyhow!(e)
-            })?;
+    let mut initiator_label = "Unknown Device".to_string();
+    let mut remote_node_id = String::new();
+    let mut initiator_oob_secret = None;
 
-        if payload_len == 0 {
-            return Err(anyhow::anyhow!("Initiator sent an empty handshake payload"));
+    if !use_ik {
+        // 3. Read Message 3 (Only for XX)
+        // For XX: -> s, se + payload
+        let mut msg3_payload_buf = [0u8; 2048];
+        let msg = ws.read()?;
+        if let Message::Binary(data) = msg {
+            let msg3_len = noise
+                .read_message(&data, &mut msg3_payload_buf)
+                .map_err(|e| {
+                    error!("Noise decryption failed for initiator payload: {}", e);
+                    anyhow::anyhow!(e)
+                })?;
+
+            if msg3_len == 0 {
+                return Err(anyhow::anyhow!("Initiator sent an empty handshake payload"));
+            }
+
+            let payload_slice = &msg3_payload_buf[..msg3_len];
+            let initiator_payload: HandshakePayload = serde_json::from_slice(payload_slice)
+                .map_err(|e| {
+                    let raw = String::from_utf8_lossy(payload_slice);
+                    error!("Failed to parse initiator handshake payload. Len: {}. Raw data: '{}'. Error: {}", msg3_len, raw, e);
+                    anyhow::anyhow!("Invalid handshake payload format")
+                })?;
+
+            initiator_label = initiator_payload.label;
+            remote_node_id = initiator_payload.node_id;
+            initiator_oob_secret = initiator_payload.oob_secret;
+
+            // Peer Exchange: Inject libp2p addresses
+            if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
+                for addr_str in initiator_payload.libp2p_addresses {
+                    if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                        libp2p_manager.inject_address(peer_id, addr);
+                    }
+                }
+            }
+        } else {
+            return Err(anyhow::anyhow!("Expected binary Noise message (step 3)"));
         }
+    } else {
+        // For IK, the initiator can send a payload in Message 1
+        if payload_len > 0 {
+            let payload_slice = &initiator_payload_buf[..payload_len];
+            let initiator_payload: HandshakePayload = serde_json::from_slice(payload_slice)
+                .map_err(|e| {
+                    error!("Failed to parse IK initiator handshake payload: {}", e);
+                    anyhow::anyhow!("Invalid IK handshake payload")
+                })?;
+            initiator_label = initiator_payload.label;
+            remote_node_id = initiator_payload.node_id;
+            initiator_oob_secret = initiator_payload.oob_secret;
 
-        let payload_slice = &initiator_payload_buf[..payload_len];
-        let initiator_payload: HandshakePayload = serde_json::from_slice(payload_slice)
-            .map_err(|e| {
-                let raw = String::from_utf8_lossy(payload_slice);
-                error!("Failed to parse initiator handshake payload. Len: {}. Raw data: '{}'. Error: {}", payload_len, raw, e);
-                anyhow::anyhow!("Invalid handshake payload format")
-            })?;
-
-        let initiator_label = initiator_payload.label;
-        let remote_node_id = initiator_payload.node_id;
-
-        // Peer Exchange: Inject libp2p addresses
-        if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
-            for addr_str in initiator_payload.libp2p_addresses {
-                if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
-                    libp2p_manager.inject_address(peer_id, addr);
+            // Peer Exchange: Inject libp2p addresses
+            if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
+                for addr_str in initiator_payload.libp2p_addresses {
+                    if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                        libp2p_manager.inject_address(peer_id, addr);
+                    }
+                }
+            }
+        } else if let Some(rs) = noise.get_remote_static() {
+            // Fallback to DB lookup if payload is empty
+            if let Ok(Some(node_id)) = store.get_node_id_by_static_key(rs) {
+                remote_node_id = node_id;
+                if let Ok(Some(device)) = store.get_paired_device(&remote_node_id) {
+                    initiator_label = device.label;
                 }
             }
         }
-
-        // Verify Node ID is a valid PeerId
-        if let Err(e) = remote_node_id.parse::<libp2p::PeerId>() {
-            error!(
-                "Remote node provided an invalid Peer ID: {}. Error: {}",
-                remote_node_id, e
-            );
-            return Err(anyhow::anyhow!("Invalid Peer ID format"));
+        
+        if remote_node_id.is_empty() {
+             warn!("IK connection from unknown static key and no payload. Aborting.");
+             return Err(anyhow::anyhow!("Unknown IK initiator"));
         }
+    }
 
-        // Handshake finished.
-        let h = noise.get_handshake_hash();
-        let pin = derive_pin(h);
+    // Verify Node ID
+    if remote_node_id.is_empty() || remote_node_id.parse::<libp2p::PeerId>().is_err() {
+        error!("Remote node provided an invalid or missing Peer ID: {}", remote_node_id);
+        return Err(anyhow::anyhow!("Invalid Peer ID format"));
+    }
 
+    // Handshake finished.
+    let h = noise.get_handshake_hash();
+    let pin = derive_pin(h);
+    let remote_static = noise.get_remote_static().map(|s| s.to_vec());
+
+    info!(
+        "Handshake comparison: self={} remote={}",
+        self_node_id, remote_node_id
+    );
+
+    if remote_node_id == self_node_id {
+        error!("Self-connection detected. Aborting.");
+        return Err(anyhow::anyhow!("Self-pairing not allowed"));
+    }
+
+    let mut transport = noise
+        .into_transport_mode()
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    let is_paired = store.is_device_paired(&remote_node_id)?;
+
+    if is_paired {
         info!(
-            "Handshake comparison: self={} remote={}",
-            self_node_id, remote_node_id
+            "Trusted device {} ({}) connected via {}. Auto-confirming sync session.",
+            initiator_label, remote_node_id, if use_ik { "IK" } else { "XX" }
         );
-
-        if remote_node_id == self_node_id {
-            error!("Self-connection detected. Aborting.");
-            return Err(anyhow::anyhow!("Self-pairing not allowed"));
-        }
-
-        let mut transport = noise
-            .into_transport_mode()
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        let is_paired = store.is_device_paired(&remote_node_id)?;
-
-        if is_paired {
-            info!(
-                "Trusted device {} ({}) connected. Auto-confirming sync session.",
-                initiator_label, remote_node_id
-            );
-        } else {
+        // Even if already paired, update the static key if we just got a new one
+        let _ = store.add_paired_device(&remote_node_id, &initiator_label, remote_static.as_deref());
+    } else {
             info!(
                 "New device {} ({}) requesting pairing. PIN: {}",
                 initiator_label, remote_node_id, pin
             );
 
+            // Check if OOB secret matches
+            let mut local_confirmed = false;
+            {
+                let mut active = active_oob_secret.lock();
+                if let Some(ref secret) = *active {
+                    if let Some(ref initiator_secret) = initiator_oob_secret {
+                        if secret == initiator_secret {
+                            info!("OOB pairing: secret matched! Auto-confirming.");
+                            local_confirmed = true;
+                        } else {
+                            warn!("OOB pairing: secret mismatch! initiator sent {}, expected {}", initiator_secret, secret);
+                        }
+                    }
+                }
+                // Clear active secret after connection attempt (one-time use)
+                *active = None;
+            }
+
             // Update state for UI
-            let confirmed = Arc::new(Mutex::new(None::<bool>));
+            let confirmed = Arc::new(Mutex::new(if local_confirmed { Some(true) } else { None }));
             {
                 let mut ap = active_pairing.lock();
                 *ap = Some(ActivePairingState {
@@ -960,13 +1363,16 @@ fn handle_incoming_connection_inner(
                     remote_label: initiator_label.clone(),
                     confirmed: Arc::clone(&confirmed),
                     handshake: Arc::new(Mutex::new(None)),
-                    silent: false,
+                    silent: local_confirmed, // Don't show modal if already confirmed via QR
                 });
             }
 
             // Wait for both local and remote confirmation
-            let mut local_confirmed = false;
             let mut remote_confirmed = false;
+
+            if local_confirmed {
+                write_ws_framed(&mut ws, &mut transport, &[1])?;
+            }
 
             let _ = ws
                 .get_ref()
@@ -1034,7 +1440,7 @@ fn handle_incoming_connection_inner(
             }
 
             info!("Both sides confirmed. Pairing successful.");
-            let _ = store.add_paired_device(&remote_node_id, &initiator_label);
+            let _ = store.add_paired_device(&remote_node_id, &initiator_label, remote_static.as_deref());
             let _ = ipc_tx.send(IpcMessage::PairingResult {
                 success: true,
                 node_id: remote_node_id.clone(),
@@ -1065,10 +1471,9 @@ fn handle_incoming_connection_inner(
             initiator_label.clone(),
             sync_manager,
             ipc_tx,
+            store,
+            libp2p_manager,
         )?;
-    } else {
-        return Err(anyhow::anyhow!("Expected binary Noise message"));
-    }
 
     Ok(())
 }
@@ -1082,6 +1487,9 @@ fn handle_outgoing_connection(
     self_node_id: String,
     sync_manager: Arc<SyncManager>,
     libp2p_manager: Arc<Libp2pManager>,
+    active_oob_secret: Arc<Mutex<Option<String>>>,
+    target_oob_secret: Arc<Mutex<Option<(String, String)>>>,
+    target_node_id: Option<String>,
 ) -> Result<()> {
     let res = handle_outgoing_connection_inner(
         ws,
@@ -1092,6 +1500,9 @@ fn handle_outgoing_connection(
         self_node_id,
         Arc::clone(&sync_manager),
         libp2p_manager,
+        active_oob_secret,
+        target_oob_secret,
+        target_node_id,
     );
 
     if let Err(e) = res {
@@ -1115,6 +1526,9 @@ fn handle_outgoing_connection_inner(
     self_node_id: String,
     sync_manager: Arc<SyncManager>,
     libp2p_manager: Arc<Libp2pManager>,
+    _active_oob_secret: Arc<Mutex<Option<String>>>,
+    target_oob_secret: Arc<Mutex<Option<(String, String)>>>,
+    target_node_id: Option<String>,
 ) -> Result<()> {
     info!("Initiating outgoing Noise connection over WebSocket");
 
@@ -1122,20 +1536,61 @@ fn handle_outgoing_connection_inner(
         .get_state("device_name")?
         .unwrap_or_else(|| "Unknown Device".to_string());
 
-    let params: NoiseParams = "Noise_XX_25519_ChaChaPoly_BLAKE2s"
+    let mut remote_static = None;
+    if let Some(ref node_id) = target_node_id {
+        if let Ok(Some(device)) = store.get_paired_device(node_id) {
+            remote_static = device.static_key;
+        }
+    }
+
+    let use_ik = remote_static.is_some();
+    let pattern = if use_ik {
+        "Noise_IK_25519_ChaChaPoly_BLAKE2s"
+    } else {
+        "Noise_XX_25519_ChaChaPoly_BLAKE2s"
+    };
+
+    let params: NoiseParams = pattern
         .parse()
         .map_err(|e: snow::Error| anyhow::anyhow!(e))?;
     let mut builder = Builder::new(params);
     builder = builder.local_private_key(&priv_key);
+    if let Some(ref rs) = remote_static {
+        builder = builder.remote_public_key(rs);
+    }
     let mut noise = builder.build_initiator().map_err(|e| anyhow::anyhow!(e))?;
 
     let mut buf = [0u8; 2048];
 
-    // 1. Write e
+    // Protocol Prefix: 0x00 = XX, 0x01 = IK
+    let prefix = if use_ik { 0x01 } else { 0x00 };
+
+    // 1. Write Message 1
+    // For XX: -> e
+    // For IK: -> e, es, ss
+    let mut initiator_payload_bytes = Vec::new();
+    if use_ik {
+        let initiator_payload = HandshakePayload {
+            label: self_label.clone(),
+            node_id: self_node_id.clone(),
+            libp2p_addresses: libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
+            oob_secret: None, // No OOB for reconnect
+        };
+        initiator_payload_bytes = serde_json::to_vec(&initiator_payload).map_err(|e| anyhow::anyhow!(e))?;
+    }
+
     let n = noise
-        .write_message(&[], &mut buf)
+        .write_message(&initiator_payload_bytes, &mut buf)
         .map_err(|e| anyhow::anyhow!(e))?;
-    ws.send(Message::Binary(buf[..n].to_vec()))?;
+    
+    let mut prefixed_msg = vec![prefix];
+    if use_ik {
+        let node_id_bytes = self_node_id.as_bytes();
+        prefixed_msg.push(node_id_bytes.len() as u8);
+        prefixed_msg.extend_from_slice(node_id_bytes);
+    }
+    prefixed_msg.extend_from_slice(&buf[..n]);
+    ws.send(Message::Binary(prefixed_msg))?;
 
     let mut responder_payload_buf = [0u8; 2048];
     let msg = ws.read()?;
@@ -1147,55 +1602,79 @@ fn handle_outgoing_connection_inner(
                 anyhow::anyhow!(e)
             })?;
 
-        if payload_len == 0 {
+        if payload_len == 0 && !use_ik {
             return Err(anyhow::anyhow!("Responder sent an empty handshake payload"));
         }
 
-        let payload_slice = &responder_payload_buf[..payload_len];
-        let responder_payload: HandshakePayload = serde_json::from_slice(payload_slice)
-            .map_err(|e| {
-                let raw = String::from_utf8_lossy(payload_slice);
-                error!("Failed to parse responder handshake payload. Len: {}. Raw data: '{}'. Error: {}", payload_len, raw, e);
-                anyhow::anyhow!("Invalid handshake payload format from responder")
-            })?;
+        let mut responder_label = "Unknown Device".to_string();
+        let mut remote_node_id = target_node_id.unwrap_or_default();
 
-        let responder_label = responder_payload.label;
-        let remote_node_id = responder_payload.node_id;
+        if payload_len > 0 {
+            let payload_slice = &responder_payload_buf[..payload_len];
+            let responder_payload: HandshakePayload = serde_json::from_slice(payload_slice)
+                .map_err(|e| {
+                    let raw = String::from_utf8_lossy(payload_slice);
+                    error!("Failed to parse responder handshake payload. Len: {}. Raw data: '{}'. Error: {}", payload_len, raw, e);
+                    anyhow::anyhow!("Invalid handshake payload format from responder")
+                })?;
 
-        // Peer Exchange: Inject libp2p addresses
-        if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
-            for addr_str in responder_payload.libp2p_addresses {
-                if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
-                    libp2p_manager.inject_address(peer_id, addr);
+            responder_label = responder_payload.label;
+            remote_node_id = responder_payload.node_id;
+
+            // Peer Exchange: Inject libp2p addresses
+            if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
+                for addr_str in responder_payload.libp2p_addresses {
+                    if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                        libp2p_manager.inject_address(peer_id, addr);
+                    }
                 }
+            }
+
+            // Verify Node ID is a valid PeerId
+            if let Err(e) = remote_node_id.parse::<libp2p::PeerId>() {
+                error!(
+                    "Remote responder provided an invalid Peer ID: {}. Error: {}",
+                    remote_node_id, e
+                );
+                return Err(anyhow::anyhow!("Invalid Peer ID format from responder"));
             }
         }
 
-        // Verify Node ID is a valid PeerId
-        if let Err(e) = remote_node_id.parse::<libp2p::PeerId>() {
-            error!(
-                "Remote responder provided an invalid Peer ID: {}. Error: {}",
-                remote_node_id, e
-            );
-            return Err(anyhow::anyhow!("Invalid Peer ID format from responder"));
+        let mut oob_secret = None;
+        {
+            let mut target = target_oob_secret.lock();
+            if let Some((ref node_id, ref secret)) = *target {
+                if node_id == &remote_node_id {
+                    info!("Using OOB secret for pairing with {}", remote_node_id);
+                    oob_secret = Some(secret.clone());
+                }
+            }
+            // Clear it after use or if mismatch
+            *target = None;
         }
 
-        // 3. Write s, se + Initiator's payload
-        let self_payload = HandshakePayload {
-            label: self_label.clone(),
-            node_id: self_node_id.clone(),
-            libp2p_addresses: libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
-        };
-        let self_payload_bytes =
-            serde_json::to_vec(&self_payload).map_err(|e| anyhow::anyhow!(e))?;
-        let n = noise
-            .write_message(&self_payload_bytes, &mut buf)
-            .map_err(|e| anyhow::anyhow!(e))?;
-        ws.send(Message::Binary(buf[..n].to_vec()))?;
+        // 3. Write Message 3 (Only for XX)
+        // For XX: -> s, se + payload
+        // For IK: (Already finished)
+        if !use_ik {
+            let self_payload = HandshakePayload {
+                label: self_label.clone(),
+                node_id: self_node_id.clone(),
+                libp2p_addresses: libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
+                oob_secret: oob_secret.clone(),
+            };
+            let self_payload_bytes =
+                serde_json::to_vec(&self_payload).map_err(|e| anyhow::anyhow!(e))?;
+            let n = noise
+                .write_message(&self_payload_bytes, &mut buf)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            ws.send(Message::Binary(buf[..n].to_vec()))?;
+        }
 
         // Handshake finished.
         let h = noise.get_handshake_hash();
         let pin = derive_pin(h);
+        let remote_static = noise.get_remote_static().map(|s| s.to_vec());
 
         info!(
             "Handshake comparison: self={} remote={}",
@@ -1218,14 +1697,20 @@ fn handle_outgoing_connection_inner(
                 "Connecting to trusted device {} ({}) for sync.",
                 responder_label, remote_node_id
             );
+            // Even if already paired, update the static key if we just got a new one
+            let _ = store.add_paired_device(&remote_node_id, &responder_label, remote_static.as_deref());
         } else {
             info!(
                 "Initiating pairing with {} ({}). PIN: {}",
                 responder_label, remote_node_id, pin
             );
 
+            // If we have an OOB secret, we skip manual PIN confirmation
+            let mut local_confirmed = oob_secret.is_some();
+            let mut remote_confirmed = false;
+
             // Update state for UI
-            let confirmed = Arc::new(Mutex::new(None::<bool>));
+            let confirmed = Arc::new(Mutex::new(if local_confirmed { Some(true) } else { None }));
             {
                 let mut ap = active_pairing.lock();
                 *ap = Some(ActivePairingState {
@@ -1235,13 +1720,14 @@ fn handle_outgoing_connection_inner(
                     remote_label: responder_label.clone(),
                     confirmed: Arc::clone(&confirmed),
                     handshake: Arc::new(Mutex::new(None)),
-                    silent: false,
+                    silent: local_confirmed, // Don't show modal if already confirmed via QR
                 });
             }
 
-            // Wait for both local and remote confirmation
-            let mut local_confirmed = false;
-            let mut remote_confirmed = false;
+            if local_confirmed {
+                info!("OOB pairing: auto-confirming local side");
+                write_ws_framed(&mut ws, &mut transport, &[1])?;
+            }
 
             let _ = ws
                 .get_ref()
@@ -1303,7 +1789,7 @@ fn handle_outgoing_connection_inner(
 
             if local_confirmed && remote_confirmed {
                 info!("Both sides confirmed. Pairing successful.");
-                let _ = store.add_paired_device(&remote_node_id, &responder_label);
+                let _ = store.add_paired_device(&remote_node_id, &responder_label, remote_static.as_deref());
                 let _ = ipc_tx.send(IpcMessage::PairingResult {
                     success: true,
                     node_id: remote_node_id.clone(),
@@ -1344,6 +1830,8 @@ fn handle_outgoing_connection_inner(
             responder_label.clone(),
             sync_manager,
             ipc_tx,
+            store,
+            libp2p_manager,
         )?;
     } else {
         return Err(anyhow::anyhow!("Expected binary Noise message"));
@@ -1359,8 +1847,9 @@ fn run_sync_session(
     label: String,
     sync_manager: Arc<SyncManager>,
     ipc_tx: Sender<IpcMessage>,
+    store: Arc<Store>,
+    libp2p_manager: Arc<Libp2pManager>,
 ) -> Result<()> {
-
     let (tx, rx) = flume::unbounded::<SyncMessage>();
     sync_manager.add_peer(node_id.clone(), tx.clone(), TransportType::Lan);
 
@@ -1373,6 +1862,49 @@ fn run_sync_session(
         label, node_id
     );
 
+    // Initial PEX: Send our known peers to this new peer
+    let mut pex_records = Vec::new();
+
+    // 1. Add our own listen addresses
+    pex_records.push(cdus_common::PeerExchangeRecord {
+        node_id: libp2p_manager.get_peer_id().to_string(),
+        addresses: libp2p_manager
+            .get_listen_addresses()
+            .into_iter()
+            .map(|a| a.to_string())
+            .collect(),
+    });
+
+    // 2. Add other paired devices (as potential bridge points)
+    if let Ok(paired) = store.get_paired_devices() {
+        for device in paired {
+            if device.node_id != node_id {
+                let mut addrs = Vec::new();
+                if let Some(ips) = device.last_known_ips {
+                    if let Some(port) = device.last_known_port {
+                        for ip in ips {
+                            addrs.push(format!("/ip4/{}/tcp/{}", ip, port));
+                        }
+                    }
+                }
+                if !addrs.is_empty() {
+                    pex_records.push(cdus_common::PeerExchangeRecord {
+                        node_id: device.node_id,
+                        addresses: addrs,
+                    });
+                }
+            }
+        }
+    }
+
+    if !pex_records.is_empty() {
+        info!("Sending PEX update ({} peers) to {}", pex_records.len(), label);
+        let pex_msg = SyncMessage::PeerExchange { peers: pex_records };
+        if let Ok(data) = pex_msg.to_vec() {
+            let _ = write_ws_framed(&mut ws, &mut transport, &data);
+        }
+    }
+
     // Ensure non-blocking for read-loop if needed, but we'll use can_read or short timeouts
     let _ = ws
         .get_ref()
@@ -1383,13 +1915,28 @@ fn run_sync_session(
         match read_ws_framed(&mut ws, &mut transport) {
             Ok(data) => {
                 if let Ok(msg) = SyncMessage::from_slice(&data) {
-                    let SyncMessage::ClipboardUpdate { content, timestamp } = msg;
-                    info!("Received clipboard update from peer {}: {}", label, content);
-                    let _ = ipc_tx.send(IpcMessage::SetClipboard {
-                        content,
-                        timestamp,
-                        source: label.clone(),
-                    });
+                    match msg {
+                        SyncMessage::ClipboardUpdate { content, timestamp } => {
+                            info!("Received clipboard update from peer {}: {}", label, content);
+                            let _ = ipc_tx.send(IpcMessage::SetClipboard {
+                                content,
+                                timestamp,
+                                source: label.clone(),
+                            });
+                        }
+                        SyncMessage::PeerExchange { peers } => {
+                            info!("Received PEX update from {} ({} peers)", label, peers.len());
+                            for peer in peers {
+                                if let Ok(peer_id) = peer.node_id.parse::<libp2p::PeerId>() {
+                                    for addr_str in peer.addresses {
+                                        if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                                            libp2p_manager.inject_address(peer_id, addr);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Err(e) => {

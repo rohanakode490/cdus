@@ -32,6 +32,7 @@ pub struct PairedDeviceRecord {
     pub label: String,
     pub last_known_ips: Option<Vec<String>>,
     pub last_known_port: Option<u16>,
+    pub static_key: Option<Vec<u8>>,
 }
 
 impl Store {
@@ -92,7 +93,8 @@ impl Store {
                 node_id TEXT PRIMARY KEY,
                 label TEXT,
                 last_known_ips TEXT,
-                last_known_port INTEGER
+                last_known_port INTEGER,
+                static_key BLOB
             )",
             [],
         )?;
@@ -114,6 +116,23 @@ impl Store {
             );
             let _ = state_conn.execute(
                 "ALTER TABLE paired_devices ADD COLUMN last_known_port INTEGER",
+                [],
+            );
+        }
+
+        // Migration: Add static_key to paired_devices if it doesn't exist
+        let has_static_key: bool = state_conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('paired_devices') WHERE name='static_key'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+
+        if !has_static_key {
+            info!("Migrating paired_devices table: adding 'static_key' column...");
+            let _ = state_conn.execute(
+                "ALTER TABLE paired_devices ADD COLUMN static_key BLOB",
                 [],
             );
         }
@@ -583,12 +602,12 @@ impl Store {
         Ok((node_id, priv_bytes))
     }
 
-    pub fn add_paired_device(&self, node_id: &str, label: &str) -> Result<()> {
+    pub fn add_paired_device(&self, node_id: &str, label: &str, static_key: Option<&[u8]>) -> Result<()> {
         let conn = self.state_conn.lock();
         conn.execute(
-            "INSERT INTO paired_devices (node_id, label) VALUES (?1, ?2)
-             ON CONFLICT(node_id) DO UPDATE SET label = excluded.label",
-            (node_id, label),
+            "INSERT INTO paired_devices (node_id, label, static_key) VALUES (?1, ?2, ?3)
+             ON CONFLICT(node_id) DO UPDATE SET label = excluded.label, static_key = COALESCE(excluded.static_key, paired_devices.static_key)",
+            (node_id, label, static_key),
         )?;
         Ok(())
     }
@@ -602,7 +621,7 @@ impl Store {
     pub fn get_paired_devices(&self) -> Result<Vec<PairedDeviceRecord>> {
         let conn = self.state_conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT node_id, label, last_known_ips, last_known_port FROM paired_devices WHERE node_id != 'unknown'",
+            "SELECT node_id, label, last_known_ips, last_known_port, static_key FROM paired_devices WHERE node_id != 'unknown'",
         )?;
         let rows = stmt.query_map([], |row| {
             let ips_str: Option<String> = row.get(2)?;
@@ -618,6 +637,7 @@ impl Store {
                 label: row.get(1)?,
                 last_known_ips,
                 last_known_port: row.get::<_, Option<i64>>(3)?.map(|p| p as u16),
+                static_key: row.get(4)?,
             })
         })?;
 
@@ -626,6 +646,42 @@ impl Store {
             devices.push(row?);
         }
         Ok(devices)
+    }
+
+    pub fn get_paired_device(&self, node_id: &str) -> Result<Option<PairedDeviceRecord>> {
+        let conn = self.state_conn.lock();
+        conn.query_row(
+            "SELECT node_id, label, last_known_ips, last_known_port, static_key FROM paired_devices WHERE node_id = ?",
+            [node_id],
+            |row| {
+                let ips_str: Option<String> = row.get(2)?;
+                let last_known_ips = ips_str.map(|s| {
+                    s.split(',')
+                        .filter(|ss| !ss.is_empty())
+                        .map(|ss| ss.to_string())
+                        .collect()
+                });
+
+                Ok(PairedDeviceRecord {
+                    node_id: row.get(0)?,
+                    label: row.get(1)?,
+                    last_known_ips,
+                    last_known_port: row.get::<_, Option<i64>>(3)?.map(|p| p as u16),
+                    static_key: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+    }
+
+    pub fn get_node_id_by_static_key(&self, static_key: &[u8]) -> Result<Option<String>> {
+        let conn = self.state_conn.lock();
+        conn.query_row(
+            "SELECT node_id FROM paired_devices WHERE static_key = ?",
+            [static_key],
+            |row| row.get(0),
+        )
+        .optional()
     }
 
     pub fn is_device_paired(&self, node_id: &str) -> Result<bool> {

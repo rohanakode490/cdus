@@ -230,6 +230,10 @@ impl Libp2pManager {
         let _ = self.command_tx.send(SwarmCommand::AddAddress(peer_id, addr));
     }
 
+    pub fn get_peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
     pub fn get_sync_tx(&self) -> Sender<SyncMessage> {
         self.sync_tx.clone()
     }
@@ -413,12 +417,27 @@ impl Libp2pManager {
                                             if let Ok(sync_msg) = SyncMessage::from_slice(&message.data) {
                                                 // Verify peer is paired
                                                 if let Ok(true) = store.is_device_paired(&propagation_source.to_string()) {
-                                                    let SyncMessage::ClipboardUpdate { content, timestamp } = sync_msg;
-                                                    let _ = tx.send(IpcMessage::SetClipboard {
-                                                        content,
-                                                        timestamp,
-                                                        source: format!("libp2p:{}", propagation_source)
-                                                    });
+                                                    match sync_msg {
+                                                        SyncMessage::ClipboardUpdate { content, timestamp } => {
+                                                            let _ = tx.send(IpcMessage::SetClipboard {
+                                                                content,
+                                                                timestamp,
+                                                                source: format!("libp2p:{}", propagation_source)
+                                                            });
+                                                        }
+                                                        SyncMessage::PeerExchange { peers } => {
+                                                            info!("Received PEX via Gossipsub from {} ({} peers)", propagation_source, peers.len());
+                                                            for peer_rec in peers {
+                                                                if let Ok(peer_id) = peer_rec.node_id.parse::<libp2p::PeerId>() {
+                                                                    for addr_str in peer_rec.addresses {
+                                                                        if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                                                                            swarm.add_peer_address(peer_id, addr);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -426,11 +445,38 @@ impl Libp2pManager {
                                             match message {
                                                 request_response::Message::Request { request, channel, .. } => {
                                                     info!("Received libp2p Request from {}: {:?}", peer, request);
+                                                    
+                                                    // If it's PEX, process it
+                                                    if let SyncMessage::PeerExchange { ref peers } = request {
+                                                        info!("Processing PEX Request from {} ({} peers)", peer, peers.len());
+                                                        for peer_rec in peers {
+                                                            if let Ok(peer_id) = peer_rec.node_id.parse::<libp2p::PeerId>() {
+                                                                for addr_str in &peer_rec.addresses {
+                                                                    if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                                                                        swarm.add_peer_address(peer_id, addr);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
                                                     // Echo back for testing
                                                     let _ = swarm.behaviour_mut().request_response.send_response(channel, request);
                                                 }
                                                 request_response::Message::Response { response, .. } => {
                                                     info!("Received libp2p Response from {}: {:?}", peer, response);
+                                                    if let SyncMessage::PeerExchange { peers } = response {
+                                                        info!("Processing PEX Response from {} ({} peers)", peer, peers.len());
+                                                        for peer_rec in peers {
+                                                            if let Ok(peer_id) = peer_rec.node_id.parse::<libp2p::PeerId>() {
+                                                                for addr_str in peer_rec.addresses {
+                                                                    if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                                                                        swarm.add_peer_address(peer_id, addr);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }

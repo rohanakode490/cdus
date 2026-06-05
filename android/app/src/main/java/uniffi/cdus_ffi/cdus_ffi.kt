@@ -684,6 +684,12 @@ internal interface UniffiCallbackInterfaceFileTransferListenerMethod8 : com.sun.
     fun callback(`uniffiHandle`: Long,`nodeId`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceFileTransferListenerMethod9 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`nodeId`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFileTransferListenerMethod10 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`success`: Byte,`nodeId`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFileTransferListenerMethod11 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`transferId`: RustBuffer.ByValue,`state`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 @Structure.FieldOrder("onClipboardUpdate", "uniffiFree")
@@ -702,7 +708,7 @@ internal open class UniffiVTableCallbackInterfaceClipboardListener(
     }
 
 }
-@Structure.FieldOrder("onIncomingRequest", "onIncomingTransferStarted", "onOutgoingTransferStarted", "onTransferProgress", "onTransferComplete", "onTransferError", "onPeerAccepted", "onPeerRejected", "onPeerDisconnected", "onTransferStateChanged", "uniffiFree")
+@Structure.FieldOrder("onIncomingRequest", "onIncomingTransferStarted", "onOutgoingTransferStarted", "onTransferProgress", "onTransferComplete", "onTransferError", "onPeerAccepted", "onPeerRejected", "onPeerDisconnected", "onPeerConnected", "onPairingResult", "onTransferStateChanged", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceFileTransferListener(
     @JvmField internal var `onIncomingRequest`: UniffiCallbackInterfaceFileTransferListenerMethod0? = null,
     @JvmField internal var `onIncomingTransferStarted`: UniffiCallbackInterfaceFileTransferListenerMethod1? = null,
@@ -713,7 +719,9 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
     @JvmField internal var `onPeerAccepted`: UniffiCallbackInterfaceFileTransferListenerMethod6? = null,
     @JvmField internal var `onPeerRejected`: UniffiCallbackInterfaceFileTransferListenerMethod7? = null,
     @JvmField internal var `onPeerDisconnected`: UniffiCallbackInterfaceFileTransferListenerMethod8? = null,
-    @JvmField internal var `onTransferStateChanged`: UniffiCallbackInterfaceFileTransferListenerMethod9? = null,
+    @JvmField internal var `onPeerConnected`: UniffiCallbackInterfaceFileTransferListenerMethod9? = null,
+    @JvmField internal var `onPairingResult`: UniffiCallbackInterfaceFileTransferListenerMethod10? = null,
+    @JvmField internal var `onTransferStateChanged`: UniffiCallbackInterfaceFileTransferListenerMethod11? = null,
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
 ) : Structure() {
     class UniffiByValue(
@@ -726,9 +734,11 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
         `onPeerAccepted`: UniffiCallbackInterfaceFileTransferListenerMethod6? = null,
         `onPeerRejected`: UniffiCallbackInterfaceFileTransferListenerMethod7? = null,
         `onPeerDisconnected`: UniffiCallbackInterfaceFileTransferListenerMethod8? = null,
-        `onTransferStateChanged`: UniffiCallbackInterfaceFileTransferListenerMethod9? = null,
+        `onPeerConnected`: UniffiCallbackInterfaceFileTransferListenerMethod9? = null,
+        `onPairingResult`: UniffiCallbackInterfaceFileTransferListenerMethod10? = null,
+        `onTransferStateChanged`: UniffiCallbackInterfaceFileTransferListenerMethod11? = null,
         `uniffiFree`: UniffiCallbackInterfaceFree? = null,
-    ): UniffiVTableCallbackInterfaceFileTransferListener(`onIncomingRequest`,`onIncomingTransferStarted`,`onOutgoingTransferStarted`,`onTransferProgress`,`onTransferComplete`,`onTransferError`,`onPeerAccepted`,`onPeerRejected`,`onPeerDisconnected`,`onTransferStateChanged`,`uniffiFree`,), Structure.ByValue
+    ): UniffiVTableCallbackInterfaceFileTransferListener(`onIncomingRequest`,`onIncomingTransferStarted`,`onOutgoingTransferStarted`,`onTransferProgress`,`onTransferComplete`,`onTransferError`,`onPeerAccepted`,`onPeerRejected`,`onPeerDisconnected`,`onPeerConnected`,`onPairingResult`,`onTransferStateChanged`,`uniffiFree`,), Structure.ByValue
 
    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceFileTransferListener) {
         `onIncomingRequest` = other.`onIncomingRequest`
@@ -740,11 +750,21 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
         `onPeerAccepted` = other.`onPeerAccepted`
         `onPeerRejected` = other.`onPeerRejected`
         `onPeerDisconnected` = other.`onPeerDisconnected`
+        `onPeerConnected` = other.`onPeerConnected`
+        `onPairingResult` = other.`onPairingResult`
         `onTransferStateChanged` = other.`onTransferStateChanged`
         `uniffiFree` = other.`uniffiFree`
     }
 
 }
+
+
+
+
+
+
+
+
 
 
 
@@ -901,6 +921,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_clear_discovered_devices(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_fn_func_clear_finished_transfers(uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_cdus_ffi_fn_func_confirm_pairing(`accepted`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_connect_relay(uniffi_out_err: UniffiRustCallStatus, 
@@ -915,6 +937,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_pairing_status(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_cdus_ffi_fn_func_get_qr_pairing_payload(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_greet_from_rust(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_init_core(`dataDir`: RustBuffer.ByValue,`deviceName`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -922,6 +946,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_init_logging(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_initiate_pairing(`nodeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_pair_with_qr(`payload`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_register_device(`nodeId`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,`port`: Short,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1067,6 +1093,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_clear_discovered_devices(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_clear_finished_transfers(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_confirm_pairing(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_connect_relay(
@@ -1081,6 +1109,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_pairing_status(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_get_qr_pairing_payload(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_greet_from_rust(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_init_core(
@@ -1088,6 +1118,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_func_init_logging(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_initiate_pairing(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_pair_with_qr(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_register_device(
     ): Short
@@ -1131,6 +1163,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_peer_disconnected(
     ): Short
+    fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_peer_connected(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_pairing_result(
+    ): Short
     fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_transfer_state_changed(
     ): Short
     fun ffi_cdus_ffi_uniffi_contract_version(
@@ -1165,6 +1201,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_clear_discovered_devices() != 26911.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_clear_finished_transfers() != 35096.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_confirm_pairing() != 36292.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1177,13 +1216,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_get_discovered_devices() != 33769.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_cdus_ffi_checksum_func_get_file_transfer_history() != 50618.toShort()) {
+    if (lib.uniffi_cdus_ffi_checksum_func_get_file_transfer_history() != 13032.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_get_paired_devices() != 8212.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_get_pairing_status() != 51352.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_get_qr_pairing_payload() != 63476.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_greet_from_rust() != 12695.toShort()) {
@@ -1196,6 +1238,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_initiate_pairing() != 41491.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_pair_with_qr() != 18481.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_register_device() != 23243.toShort()) {
@@ -1261,7 +1306,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_peer_disconnected() != 8312.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_transfer_state_changed() != 29122.toShort()) {
+    if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_peer_connected() != 13798.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_pairing_result() != 17589.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_transfer_state_changed() != 47151.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1592,7 +1643,7 @@ public object FfiConverterTypeDiscoveredDevice: FfiConverterRustBuffer<Discovere
 
 
 
-data class FileTransferRecord (
+data class FileTransfer (
     var `transferId`: kotlin.String, 
     var `direction`: kotlin.String, 
     var `peerNodeId`: kotlin.String, 
@@ -1602,7 +1653,8 @@ data class FileTransferRecord (
     var `bytesConfirmed`: kotlin.ULong, 
     var `status`: kotlin.String, 
     var `errorMessage`: kotlin.String?, 
-    var `createdAt`: kotlin.ULong
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong
 ) {
     
     companion object
@@ -1611,9 +1663,9 @@ data class FileTransferRecord (
 /**
  * @suppress
  */
-public object FfiConverterTypeFileTransferRecord: FfiConverterRustBuffer<FileTransferRecord> {
-    override fun read(buf: ByteBuffer): FileTransferRecord {
-        return FileTransferRecord(
+public object FfiConverterTypeFileTransfer: FfiConverterRustBuffer<FileTransfer> {
+    override fun read(buf: ByteBuffer): FileTransfer {
+        return FileTransfer(
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
@@ -1624,10 +1676,11 @@ public object FfiConverterTypeFileTransferRecord: FfiConverterRustBuffer<FileTra
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
         )
     }
 
-    override fun allocationSize(value: FileTransferRecord) = (
+    override fun allocationSize(value: FileTransfer) = (
             FfiConverterString.allocationSize(value.`transferId`) +
             FfiConverterString.allocationSize(value.`direction`) +
             FfiConverterString.allocationSize(value.`peerNodeId`) +
@@ -1637,10 +1690,11 @@ public object FfiConverterTypeFileTransferRecord: FfiConverterRustBuffer<FileTra
             FfiConverterULong.allocationSize(value.`bytesConfirmed`) +
             FfiConverterString.allocationSize(value.`status`) +
             FfiConverterOptionalString.allocationSize(value.`errorMessage`) +
-            FfiConverterULong.allocationSize(value.`createdAt`)
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`)
     )
 
-    override fun write(value: FileTransferRecord, buf: ByteBuffer) {
+    override fun write(value: FileTransfer, buf: ByteBuffer) {
             FfiConverterString.write(value.`transferId`, buf)
             FfiConverterString.write(value.`direction`, buf)
             FfiConverterString.write(value.`peerNodeId`, buf)
@@ -1651,6 +1705,7 @@ public object FfiConverterTypeFileTransferRecord: FfiConverterRustBuffer<FileTra
             FfiConverterString.write(value.`status`, buf)
             FfiConverterOptionalString.write(value.`errorMessage`, buf)
             FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
     }
 }
 
@@ -1843,6 +1898,10 @@ public interface FileTransferListener {
     
     fun `onPeerDisconnected`(`nodeId`: kotlin.String)
     
+    fun `onPeerConnected`(`nodeId`: kotlin.String)
+    
+    fun `onPairingResult`(`success`: kotlin.Boolean, `nodeId`: kotlin.String, `label`: kotlin.String)
+    
     fun `onTransferStateChanged`(`transferId`: kotlin.String, `state`: kotlin.String)
     
     companion object
@@ -1973,7 +2032,33 @@ internal object uniffiCallbackInterfaceFileTransferListener {
             uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
         }
     }
-    internal object `onTransferStateChanged`: UniffiCallbackInterfaceFileTransferListenerMethod9 {
+    internal object `onPeerConnected`: UniffiCallbackInterfaceFileTransferListenerMethod9 {
+        override fun callback(`uniffiHandle`: Long,`nodeId`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFileTransferListener.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onPeerConnected`(
+                    FfiConverterString.lift(`nodeId`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+    internal object `onPairingResult`: UniffiCallbackInterfaceFileTransferListenerMethod10 {
+        override fun callback(`uniffiHandle`: Long,`success`: Byte,`nodeId`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFileTransferListener.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onPairingResult`(
+                    FfiConverterBoolean.lift(`success`),
+                    FfiConverterString.lift(`nodeId`),
+                    FfiConverterString.lift(`label`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+    internal object `onTransferStateChanged`: UniffiCallbackInterfaceFileTransferListenerMethod11 {
         override fun callback(`uniffiHandle`: Long,`transferId`: RustBuffer.ByValue,`state`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
             val uniffiObj = FfiConverterTypeFileTransferListener.handleMap.get(uniffiHandle)
             val makeCall = { ->
@@ -2003,6 +2088,8 @@ internal object uniffiCallbackInterfaceFileTransferListener {
         `onPeerAccepted`,
         `onPeerRejected`,
         `onPeerDisconnected`,
+        `onPeerConnected`,
+        `onPairingResult`,
         `onTransferStateChanged`,
         uniffiFree,
     )
@@ -2175,24 +2262,24 @@ public object FfiConverterSequenceTypeDiscoveredDevice: FfiConverterRustBuffer<L
 /**
  * @suppress
  */
-public object FfiConverterSequenceTypeFileTransferRecord: FfiConverterRustBuffer<List<FileTransferRecord>> {
-    override fun read(buf: ByteBuffer): List<FileTransferRecord> {
+public object FfiConverterSequenceTypeFileTransfer: FfiConverterRustBuffer<List<FileTransfer>> {
+    override fun read(buf: ByteBuffer): List<FileTransfer> {
         val len = buf.getInt()
-        return List<FileTransferRecord>(len) {
-            FfiConverterTypeFileTransferRecord.read(buf)
+        return List<FileTransfer>(len) {
+            FfiConverterTypeFileTransfer.read(buf)
         }
     }
 
-    override fun allocationSize(value: List<FileTransferRecord>): ULong {
+    override fun allocationSize(value: List<FileTransfer>): ULong {
         val sizeForLength = 4UL
-        val sizeForItems = value.map { FfiConverterTypeFileTransferRecord.allocationSize(it) }.sum()
+        val sizeForItems = value.map { FfiConverterTypeFileTransfer.allocationSize(it) }.sum()
         return sizeForLength + sizeForItems
     }
 
-    override fun write(value: List<FileTransferRecord>, buf: ByteBuffer) {
+    override fun write(value: List<FileTransfer>, buf: ByteBuffer) {
         buf.putInt(value.size)
         value.iterator().forEach {
-            FfiConverterTypeFileTransferRecord.write(it, buf)
+            FfiConverterTypeFileTransfer.write(it, buf)
         }
     }
 }
@@ -2263,6 +2350,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
 }
     
     
+ fun `clearFinishedTransfers`()
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_clear_finished_transfers(
+        _status)
+}
+    
+    
  fun `confirmPairing`(`accepted`: kotlin.Boolean)
         = 
     uniffiRustCall() { _status ->
@@ -2297,8 +2392,8 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     )
     }
     
- fun `getFileTransferHistory`(`limit`: kotlin.UInt): List<FileTransferRecord> {
-            return FfiConverterSequenceTypeFileTransferRecord.lift(
+ fun `getFileTransferHistory`(`limit`: kotlin.UInt): List<FileTransfer> {
+            return FfiConverterSequenceTypeFileTransfer.lift(
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_file_transfer_history(
         FfiConverterUInt.lower(`limit`),_status)
@@ -2319,6 +2414,15 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
             return FfiConverterOptionalTypePairingStatus.lift(
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_pairing_status(
+        _status)
+}
+    )
+    }
+    
+ fun `getQrPairingPayload`(): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_qr_pairing_payload(
         _status)
 }
     )
@@ -2355,6 +2459,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_initiate_pairing(
         FfiConverterString.lower(`nodeId`),_status)
+}
+    
+    
+ fun `pairWithQr`(`payload`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_pair_with_qr(
+        FfiConverterString.lower(`payload`),_status)
 }
     
     

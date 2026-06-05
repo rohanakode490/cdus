@@ -100,6 +100,14 @@ pub enum IpcMessage {
     },
     ConnectRelay,
     ListenEvents,
+    // QR / OOB Pairing
+    GetQrPairingPayload,
+    QrPairingPayloadResponse {
+        payload: String,
+    },
+    PairWithQr {
+        payload: String,
+    },
     // File Transfer
     SendFile {
         node_id: String,
@@ -275,10 +283,19 @@ pub struct TransferProgress {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PeerExchangeRecord {
+    pub node_id: String,
+    pub addresses: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum SyncMessage {
     ClipboardUpdate {
         content: String,
         timestamp: u64,
+    },
+    PeerExchange {
+        peers: Vec<PeerExchangeRecord>,
     },
 }
 

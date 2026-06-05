@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
+import QRCode from "qrcode";
+import { Html5Qrcode } from "html5-qrcode";
 
 // --- State Management ---
 let pairedDeviceIds: string[] = [];
@@ -11,6 +13,7 @@ let currentPairingDevice: any = null;
 const transfers = new Map<string, any>();
 let isDeveloperMode = false;
 let currentIncomingTransferId = "";
+let html5QrCode: Html5Qrcode | null = null;
 
 // --- UI Elements (initialized in DOMContentLoaded) ---
 let fileTransferModal: Element | null = null;
@@ -27,6 +30,12 @@ let devicesEmpty: Element | null = null;
 let discoveryList: Element | null = null;
 let discoverySection: Element | null = null;
 let scanBtn: Element | null = null;
+let showQrBtn: Element | null = null;
+let scanQrBtn: Element | null = null;
+let showQrModal: Element | null = null;
+let scanQrModal: Element | null = null;
+let closeQrBtn: Element | null = null;
+let closeScanQrBtn: Element | null = null;
 let pairingModal: Element | null = null;
 let cancelPairingBtn: Element | null = null;
 let confirmPairingBtn: HTMLButtonElement | null = null;
@@ -429,7 +438,7 @@ async function startPairingPoll() {
   }, 1000);
 }
 
-function showPairingModal(device: any, isInitiator: boolean) {
+function showPairingModal(device: any, isInitiator: boolean, silent: boolean = false) {
   if (!pairingModal) return;
   currentPairingDevice = device;
   pairingModal.classList.remove("hidden");
@@ -439,12 +448,19 @@ function showPairingModal(device: any, isInitiator: boolean) {
   const confirmBtn = document.querySelector("#pairing-confirm-btn") as HTMLButtonElement;
 
   if (confirmBtn) {
-    confirmBtn.style.setProperty("display", "block", "important");
-    confirmBtn.disabled = false;
-    confirmBtn.textContent = "Confirm PIN Matches";
+    if (silent) {
+      confirmBtn.style.setProperty("display", "none", "important");
+    } else {
+      confirmBtn.style.setProperty("display", "block", "important");
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = "Confirm PIN Matches";
+    }
   }
 
-  if (isInitiator) {
+  if (silent) {
+    if (modalTitle) modalTitle.textContent = "Auto-Pairing...";
+    if (modalDesc) modalDesc.textContent = `Pairing with ${device.name} using QR code. Please wait...`;
+  } else if (isInitiator) {
     if (modalTitle) modalTitle.textContent = "Confirm Pairing";
     if (modalDesc) modalDesc.textContent = `Please verify that the PIN below matches on ${device.name}. Click Confirm once you have verified it.`;
   } else {
@@ -454,7 +470,7 @@ function showPairingModal(device: any, isInitiator: boolean) {
   
   const digits = document.querySelectorAll(".pin-digit");
   digits.forEach((el) => {
-    el.textContent = "?";
+    el.textContent = silent ? "." : "?";
   });
 }
 
@@ -478,6 +494,12 @@ window.addEventListener("DOMContentLoaded", () => {
   discoveryList = document.querySelector("#discovery-list");
   discoverySection = document.querySelector("#discovery-section");
   scanBtn = document.querySelector("#scan-btn");
+  showQrBtn = document.querySelector("#show-qr-btn");
+  scanQrBtn = document.querySelector("#scan-qr-btn");
+  showQrModal = document.querySelector("#show-qr-modal");
+  scanQrModal = document.querySelector("#scan-qr-modal");
+  closeQrBtn = document.querySelector("#close-qr-btn");
+  closeScanQrBtn = document.querySelector("#close-scan-qr-btn");
   pairingModal = document.querySelector("#pairing-modal");
   cancelPairingBtn = document.querySelector("#pairing-cancel-btn");
   confirmPairingBtn = document.querySelector("#pairing-confirm-btn") as HTMLButtonElement;
@@ -604,6 +626,84 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  showQrBtn?.addEventListener("click", async () => {
+    try {
+      const payload: string = await invoke("get_qr_pairing_payload");
+      const container = document.querySelector("#qr-container");
+      if (container) {
+        container.innerHTML = "";
+        const canvas = document.createElement("canvas");
+        container.appendChild(canvas);
+        await QRCode.toCanvas(canvas, payload, { width: 250, margin: 2 });
+      }
+      showQrModal?.classList.remove("hidden");
+    } catch (err) {
+      console.error("Failed to generate QR:", err);
+      alert("Failed to generate pairing QR.");
+    }
+  });
+
+  closeQrBtn?.addEventListener("click", () => {
+    showQrModal?.classList.add("hidden");
+  });
+
+  scanQrBtn?.addEventListener("click", async () => {
+    scanQrModal?.classList.remove("hidden");
+    if (!html5QrCode) {
+      html5QrCode = new Html5Qrcode("reader");
+    }
+
+    try {
+      await html5QrCode.start(
+        { facingMode: "user" },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        async (decodedText) => {
+          console.log("QR Decoded:", decodedText);
+          stopScanQr();
+
+          // Show connecting feedback
+          if (pairingModal) {
+            showPairingModal({ id: "remote", name: "Device", os: "Unknown" }, true, true);
+          }
+
+          try {
+            await invoke("pair_with_qr", { payload: decodedText });
+            // Start polling to wait for PIN derivation or completion
+            startPairingPoll();
+          } catch (err: any) {
+            console.error("Failed to pair with QR:", err);
+            pairingModal?.classList.add("hidden");
+            if (err.toString().includes("Already paired")) {
+              alert("This device is already paired!");
+            } else {
+              alert("Pairing failed: " + err);
+            }
+          }
+        },
+        (_errorMessage) => {
+          // ignore scan errors
+        }
+      );
+    } catch (err) {
+      console.error("Failed to start camera:", err);
+      alert("Could not access camera.");
+      scanQrModal?.classList.add("hidden");
+    }
+  });
+
+  async function stopScanQr() {
+    if (html5QrCode && html5QrCode.isScanning) {
+      try {
+        await html5QrCode.stop();
+      } catch (err) {
+        console.error("Failed to stop scanner:", err);
+      }
+    }
+    scanQrModal?.classList.add("hidden");
+  }
+
+  closeScanQrBtn?.addEventListener("click", stopScanQr);
+
   cancelPairingBtn?.addEventListener("click", async () => {
     try {
       await invoke("confirm_pairing", { accepted: false });
@@ -682,12 +782,14 @@ window.addEventListener("DOMContentLoaded", () => {
       try {
         const status: [string | null, boolean, boolean, string, boolean] = await invoke("get_pairing_status");
         const [pin, active, isInitiator, remoteLabel, silent] = status;
-        if (active && pin && !silent) {
-          showPairingModal({ id: "remote", name: remoteLabel, os: "Unknown" }, isInitiator);
-          const digits = document.querySelectorAll(".pin-digit");
-          digits.forEach((el, i) => {
-            el.textContent = pin[i];
-          });
+        if (active && (pin || silent)) {
+          showPairingModal({ id: "remote", name: remoteLabel, os: "Unknown" }, isInitiator, silent);
+          if (pin) {
+            const digits = document.querySelectorAll(".pin-digit");
+            digits.forEach((el, i) => {
+              el.textContent = pin[i];
+            });
+          }
           startPairingPoll();
         }
       } catch (err) { }
@@ -853,7 +955,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   listen("pairing-result", (event: any) => {
-    const [success, nodeId, label] = event.payload;
+    const [success, _nodeId, label] = event.payload;
     if (success) {
       console.log(`Pairing successful with ${label}`);
       renderPairedDevices().then(() => {

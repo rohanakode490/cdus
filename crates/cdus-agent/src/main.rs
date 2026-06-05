@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Arc; use parking_lot::Mutex;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use cdus_agent::{broadcast_event, daemon_loop, EVENT_BUS};
 use cdus_common::{IpcMessage, TransportType};
@@ -31,16 +31,16 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    #[arg(short, long, default_value = "5200")]
+    #[arg(short, long, default_value = "5200", env = "CDUS_PORT")]
     port: u16,
 
-    #[arg(short, long, default_value = "/tmp/cdus-agent.sock")]
+    #[arg(short, long, default_value = "/tmp/cdus-agent.sock", env = "CDUS_AGENT_SOCKET")]
     socket: String,
 
-    #[arg(long)]
+    #[arg(long, env = "CDUS_DATA_DIR")]
     data_dir: Option<String>,
 
-    #[arg(long, default_value = "http://localhost:8080")]
+    #[arg(long, default_value = "http://localhost:8080", env = "CDUS_RELAY_URL")]
     relay_url: String,
 }
 
@@ -287,6 +287,13 @@ fn main() {
                         match stream.read(&mut buffer) {
                             Ok(0) => break,
                             Ok(n) => {
+                                let raw_json = String::from_utf8_lossy(&buffer[..n]);
+                                let is_noisy = raw_json.contains("Ping") || raw_json.contains("GetPairingStatus") || raw_json.contains("GetPairedDevices") || (raw_json.contains("GetState") && raw_json.contains("sync_enabled"));
+                                if is_noisy {
+                                    debug!("IPC: Received raw: {}", raw_json);
+                                } else {
+                                    info!("IPC: Received raw: {}", raw_json);
+                                }
                                 if let Ok(msg) = serde_json::from_slice::<IpcMessage>(&buffer[..n])
                                 {
                                     match msg {
@@ -311,6 +318,52 @@ fn main() {
                                                 }
                                             }
                                             break;
+                                        }
+                                        IpcMessage::GetQrPairingPayload => {
+                                            match pm_clone.generate_qr_payload() {
+                                                Ok(payload) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::QrPairingPayloadResponse {
+                                                            payload,
+                                                        },
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!(
+                                                            "Error generating QR: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
+                                        IpcMessage::PairWithQr { payload } => {
+                                            match pm_clone.pair_with_qr(payload) {
+                                                Ok(_) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(
+                                                            "QR pairing started".to_string(),
+                                                        ),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!(
+                                                            "Error processing QR: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
                                         }
                                         IpcMessage::StartScan => {
                                             info!("IPC: Received StartScan request. Registering device and starting discovery.");
@@ -387,7 +440,7 @@ fn main() {
                                                         if let Ok(ip_addr) = ip.parse() {
                                                             let addr = SocketAddr::new(ip_addr, port);
                                                             info!("Attempting manual pairing with {} at {}", node_id_clone, addr);
-                                                            if pm_init.initiate_pairing(addr) {
+                                                            if pm_init.initiate_pairing(addr, Some(node_id_clone.clone())) {
                                                                 info!("Manual pairing initiated with {} at {}", node_id_clone, addr);
                                                                 success = true;
                                                                 break;
@@ -427,7 +480,7 @@ fn main() {
                                                 let addr = SocketAddr::new(ip_addr, port);
                                                 let pm_init = Arc::clone(&pm_clone);
                                                 thread::spawn(move || {
-                                                    pm_init.initiate_pairing(addr);
+                                                    pm_init.initiate_pairing(addr, None);
                                                 });
                                                 let resp_bytes =
                                                     serde_json::to_vec(&IpcMessage::Log(
@@ -692,6 +745,100 @@ fn main() {
                                             ))
                                             .unwrap();
                                             let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        IpcMessage::SimulateCrash { transfer_id } => {
+                                            let _ = tx_clone
+                                                .send(IpcMessage::SimulateCrash { transfer_id });
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
+                                                "Crash simulation requested".to_string(),
+                                            ))
+                                            .unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        IpcMessage::SetCrashTrigger {
+                                            transfer_id,
+                                            offset,
+                                        } => {
+                                            let _ = tx_clone.send(IpcMessage::SetCrashTrigger {
+                                                transfer_id,
+                                                offset,
+                                            });
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
+                                                "Crash trigger set".to_string(),
+                                            ))
+                                            .unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        IpcMessage::ResumeFileTransfer { transfer_id } => {
+                                            let _ = tx_clone
+                                                .send(IpcMessage::ResumeFileTransfer { transfer_id });
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
+                                                "File transfer resume requested".to_string(),
+                                            ))
+                                            .unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        IpcMessage::GetFileTransferHistory { limit } => {
+                                            match store_clone.get_transfer_history(limit) {
+                                                Ok(history) => {
+                                                    let mapped_history = history
+                                                        .into_iter()
+                                                        .map(|t| cdus_common::FileTransferRecord {
+                                                            transfer_id: t.transfer_id,
+                                                            direction: t.direction,
+                                                            peer_node_id: t.peer_node_id,
+                                                            file_path: t.file_path,
+                                                            file_name: t.file_name,
+                                                            total_bytes: t.total_bytes as u64,
+                                                            bytes_confirmed: t.bytes_confirmed as u64,
+                                                            status: t.status,
+                                                            error_message: t.error_message,
+                                                            created_at: t.created_at as u64,
+                                                            updated_at: t.updated_at as u64,
+                                                        })
+                                                        .collect();
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::FileTransferHistoryResponse(
+                                                            mapped_history,
+                                                        ),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!(
+                                                            "Error fetching transfer history: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
+                                        IpcMessage::ClearFinishedTransfers => {
+                                            match store_clone.clear_finished_transfers() {
+                                                Ok(_) => {
+                                                    let resp_bytes =
+                                                        serde_json::to_vec(&IpcMessage::Log(
+                                                            "Finished transfers cleared"
+                                                                .to_string(),
+                                                        ))
+                                                        .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!(
+                                                            "Error clearing transfers: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
                                         }
                                         _ => {
                                             let resp_bytes = serde_json::to_vec(&IpcMessage::Log(

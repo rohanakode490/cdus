@@ -29,11 +29,33 @@ import uniffi.cdus_ffi.unpairDevice
 import uniffi.cdus_ffi.PairedDevice
 import uniffi.cdus_ffi.sendFile
 import uniffi.cdus_ffi.startBenchmark
+import uniffi.cdus_ffi.getQrPairingPayload
+import uniffi.cdus_ffi.pairWithQr
 import io.cdus.app.utils.FileUtils
+import io.cdus.app.utils.Logger
 import io.cdus.app.utils.UIUtils
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.asImageBitmap
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
+import android.graphics.Bitmap
+import android.graphics.Color as AndroidColor
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.common.InputImage
+import java.util.concurrent.Executors
+
+import androidx.compose.foundation.Image
+import androidx.compose.ui.draw.clip
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 @Composable
 fun DevicesScreen() {
@@ -42,8 +64,21 @@ fun DevicesScreen() {
     var pairedDevices by remember { mutableStateOf<List<PairedDevice>>(emptyList()) }
     var pairingStatus by remember { mutableStateOf<PairingStatus?>(null) }
     var isDeveloperMode by remember { mutableStateOf(false) }
-    
+    var showQrDialog by remember { mutableStateOf(false) }
+    var showScannerDialog by remember { mutableStateOf(false) }
+
     val context = LocalContext.current
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            showScannerDialog = true
+        } else {
+            android.widget.Toast.makeText(context, "Camera permission required for QR scanning", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+    
     val sharedPref = remember { context.getSharedPreferences("cdus_settings", android.content.Context.MODE_PRIVATE) }
     
     var selectedDeviceForFile by remember { mutableStateOf<String?>(null) }
@@ -93,6 +128,23 @@ fun DevicesScreen() {
             onDismiss = { cancelPairing() },
             onConfirm = { confirmPairing(true) },
             onDecline = { confirmPairing(false) }
+        )
+    }
+
+    if (showQrDialog) {
+        QrPairingDialog(
+            onDismiss = { showQrDialog = false }
+        )
+    }
+
+    if (showScannerDialog) {
+        QrScannerDialog(
+            onDismiss = { showScannerDialog = false },
+            onQrScanned = { payload ->
+                showScannerDialog = false
+                pairWithQr(payload)
+                android.widget.Toast.makeText(context, "Pairing with QR...", android.widget.Toast.LENGTH_SHORT).show()
+            }
         )
     }
 
@@ -150,22 +202,39 @@ fun DevicesScreen() {
             modifier = Modifier.padding(bottom = 8.dp)
         )
 
-        Button(
-            onClick = { isScanning = !isScanning },
-            modifier = Modifier.fillMaxWidth()
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            if (isScanning) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Stop Scan")
+            Button(
+                onClick = { showQrDialog = true },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Show QR")
+            }
+            Button(
+                onClick = { cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA) },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Scan QR")
+            }
+            Button(
+                onClick = { isScanning = !isScanning },
+                modifier = Modifier.weight(1.5f)
+            ) {
+                if (isScanning) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Stop")
+                    }
+                } else {
+                    Text("Scan LAN")
                 }
-            } else {
-                Text("Start Scan")
             }
         }
 
@@ -339,6 +408,129 @@ fun PairingDialog(
         dismissButton = {
             TextButton(onClick = onDecline) {
                 Text("Decline")
+            }
+        }
+    )
+}
+
+@Composable
+fun QrPairingDialog(onDismiss: () -> Unit) {
+    val payload = remember { getQrPairingPayload() }
+    val qrBitmap = remember(payload) {
+        if (payload.isNotEmpty()) {
+            val writer = QRCodeWriter()
+            val bitMatrix = writer.encode(payload, BarcodeFormat.QR_CODE, 512, 512)
+            val width = bitMatrix.width
+            val height = bitMatrix.height
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
+            for (x in 0 until width) {
+                for (y in 0 until height) {
+                    bitmap.setPixel(x, y, if (bitMatrix.get(x, y)) AndroidColor.BLACK else AndroidColor.WHITE)
+                }
+            }
+            bitmap.asImageBitmap()
+        } else {
+            null
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("My Pairing QR") },
+        text = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                if (qrBitmap != null) {
+                    Image(
+                        bitmap = qrBitmap,
+                        contentDescription = "Pairing QR Code",
+                        modifier = Modifier.size(250.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Scan this from another device", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    CircularProgressIndicator()
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
+}
+
+@Composable
+fun QrScannerDialog(onDismiss: () -> Unit, onQrScanned: (String) -> Unit) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val executor = remember { Executors.newSingleThreadExecutor() }
+    val scanner = remember { BarcodeScanning.getClient() }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Scan QR Code") },
+        text = {
+            Box(modifier = Modifier.size(300.dp).clip(MaterialTheme.shapes.medium)) {
+                AndroidView(
+                    factory = { ctx ->
+                        val previewView = PreviewView(ctx)
+                        val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+                        cameraProviderFuture.addListener({
+                            val cameraProvider = cameraProviderFuture.get()
+                            val preview = Preview.Builder().build().also {
+                                it.setSurfaceProvider(previewView.surfaceProvider)
+                            }
+
+                            val imageAnalysis = ImageAnalysis.Builder()
+                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                .build()
+
+                            imageAnalysis.setAnalyzer(executor) { imageProxy ->
+                                val mediaImage = imageProxy.image
+                                if (mediaImage != null) {
+                                    val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+                                    scanner.process(image)
+                                        .addOnSuccessListener { barcodes ->
+                                            for (barcode in barcodes) {
+                                                val rawValue = barcode.rawValue
+                                                if (rawValue != null && rawValue.startsWith("cdus://pair")) {
+                                                    onQrScanned(rawValue)
+                                                    break
+                                                }
+                                            }
+                                        }
+                                        .addOnCompleteListener {
+                                            imageProxy.close()
+                                        }
+                                } else {
+                                    imageProxy.close()
+                                }
+                            }
+
+                            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                            try {
+                                cameraProvider.unbindAll()
+                                cameraProvider.bindToLifecycle(
+                                    lifecycleOwner,
+                                    cameraSelector,
+                                    preview,
+                                    imageAnalysis
+                                )
+                            } catch (e: Exception) {
+                                Logger.e("Camera binding failed: \${e.message}")
+                            }
+                        }, ContextCompat.getMainExecutor(ctx))
+                        previewView
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
             }
         }
     )

@@ -26,7 +26,11 @@
         <div id="view-devices" class="view active">
           <div class="header-with-action">
             <h2>Devices</h2>
-            <button id="scan-btn" class="secondary-btn">Scan for Devices</button>
+            <div class="header-btns">
+              <button id="show-qr-btn" class="secondary-btn">Show My QR</button>
+              <button id="scan-qr-btn" class="secondary-btn">Scan QR</button>
+              <button id="scan-btn" class="secondary-btn">Scan for Devices</button>
+            </div>
           </div>
 
           <div id="discovery-section" class="hidden">
@@ -55,6 +59,30 @@
             <div id="paired-list"></div>
             <div id="devices-empty" class="empty-state-container">
               <p class="empty-state">No devices paired yet. Start scanning to connect your first device.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Show QR Modal -->
+        <div id="show-qr-modal" class="modal hidden">
+          <div class="modal-content">
+            <h3>My Pairing QR</h3>
+            <p>Scan this QR code from your other device to pair instantly.</p>
+            <div id="qr-container"></div>
+            <div class="modal-actions">
+              <button id="close-qr-btn" class="secondary-btn">Close</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Scan QR Modal -->
+        <div id="scan-qr-modal" class="modal hidden">
+          <div class="modal-content">
+            <h3>Scan QR Code</h3>
+            <p>Point your camera at the QR code on your other device.</p>
+            <div id="reader" style="width: 300px; height: 300px; margin: 0 auto; overflow: hidden; border-radius: 8px;"></div>
+            <div class="modal-actions" style="margin-top: 20px;">
+              <button id="close-scan-qr-btn" class="secondary-btn">Cancel</button>
             </div>
           </div>
         </div>

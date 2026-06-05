@@ -265,6 +265,30 @@ async fn start_benchmark(node_id: String) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+async fn get_qr_pairing_payload() -> Result<String, String> {
+    let msg = IpcMessage::GetQrPairingPayload;
+    match send_ipc_message(msg)? {
+        IpcMessage::QrPairingPayloadResponse { payload } => Ok(payload),
+        _ => Err("Failed to get QR payload".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn pair_with_qr(payload: String) -> Result<String, String> {
+    let msg = IpcMessage::PairWithQr { payload };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => {
+            if msg.starts_with("Error") {
+                Err(msg)
+            } else {
+                Ok(msg)
+            }
+        }
+        _ => Err("Failed to initiate QR pairing".to_string()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -509,7 +533,9 @@ pub fn run() {
             reject_file_transfer,
             get_file_transfer_history,
             clear_finished_transfers,
-            start_benchmark
+            start_benchmark,
+            get_qr_pairing_payload,
+            pair_with_qr
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
