@@ -8,8 +8,9 @@ import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -20,9 +21,31 @@ import io.cdus.app.data.FileTransferManager
 import io.cdus.app.data.FileTransferInfo
 import io.cdus.app.data.TransferStatus
 
+enum class SortOption(val label: String) {
+    NEWEST("Newest First"),
+    OLDEST("Oldest First"),
+    NAME_ASC("Name (A-Z)"),
+    NAME_DESC("Name (Z-A)"),
+    SIZE_DESC("Size (Largest First)"),
+    SIZE_ASC("Size (Smallest First)")
+}
+
 @Composable
 fun FilesScreen() {
-    val transfers = FileTransferManager.transfers.values.toList().reversed()
+    var currentSortOption by remember { mutableStateOf(SortOption.NEWEST) }
+    var sortMenuExpanded by remember { mutableStateOf(false) }
+
+    val rawTransfers = FileTransferManager.transfers.values.toList()
+    val sortedTransfers = remember(rawTransfers, currentSortOption) {
+        when (currentSortOption) {
+            SortOption.NEWEST -> rawTransfers.reversed()
+            SortOption.OLDEST -> rawTransfers
+            SortOption.NAME_ASC -> rawTransfers.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.fileName })
+            SortOption.NAME_DESC -> rawTransfers.sortedWith(compareByDescending(String.CASE_INSENSITIVE_ORDER) { it.fileName })
+            SortOption.SIZE_DESC -> rawTransfers.sortedByDescending { it.totalBytes }
+            SortOption.SIZE_ASC -> rawTransfers.sortedBy { it.totalBytes }
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Row(
@@ -31,21 +54,44 @@ fun FilesScreen() {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(text = "File Transfers", style = MaterialTheme.typography.headlineMedium)
-            if (transfers.any { it.status == TransferStatus.COMPLETE || it.status == TransferStatus.ERROR || it.status == TransferStatus.REJECTED }) {
-                TextButton(onClick = { FileTransferManager.clearFinished() }) {
-                    Text("Clear")
+            
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box {
+                    TextButton(onClick = { sortMenuExpanded = true }) {
+                        Text("Sort: ${currentSortOption.label}")
+                    }
+                    DropdownMenu(
+                        expanded = sortMenuExpanded,
+                        onDismissRequest = { sortMenuExpanded = false }
+                    ) {
+                        SortOption.values().forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option.label) },
+                                onClick = {
+                                    currentSortOption = option
+                                    sortMenuExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+                
+                if (rawTransfers.any { it.status == TransferStatus.COMPLETE || it.status == TransferStatus.ERROR || it.status == TransferStatus.REJECTED }) {
+                    TextButton(onClick = { FileTransferManager.clearFinished() }) {
+                        Text("Clear")
+                    }
                 }
             }
         }
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (transfers.isEmpty()) {
+        if (sortedTransfers.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(text = "No transfers yet.", color = MaterialTheme.colorScheme.outline)
             }
         } else {
             LazyColumn {
-                items(transfers) { transfer ->
+                items(sortedTransfers) { transfer ->
                     TransferItem(transfer)
                 }
             }
@@ -56,20 +102,19 @@ fun FilesScreen() {
 @Composable
 fun TransferItem(transfer: FileTransferInfo) {
     val context = LocalContext.current
+    var showMenu by remember { mutableStateOf(false) }
+
     Card(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         colors = CardDefaults.cardColors(
-            containerColor = when(transfer.status) {
-                TransferStatus.COMPLETE -> MaterialTheme.colorScheme.surfaceVariant
-                TransferStatus.ERROR -> MaterialTheme.colorScheme.errorContainer
-                TransferStatus.REJECTED -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                TransferStatus.HASHING -> MaterialTheme.colorScheme.surfaceVariant
-                else -> MaterialTheme.colorScheme.surface
-            }
+            containerColor = MaterialTheme.colorScheme.surface
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Icon(
                     imageVector = when(transfer.status) {
                         TransferStatus.INCOMING -> Icons.Default.FileDownload
@@ -129,46 +174,61 @@ fun TransferItem(transfer: FileTransferInfo) {
                         Text(text = "Waiting for your action...", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                     }
                 }
-            }
-            
-            if (transfer.status == TransferStatus.INCOMING) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = { 
-                        uniffi.cdus_ffi.rejectFileTransfer(transfer.transferId)
-                        FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.REJECTED))
-                        // Dismiss notification
-                        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                        notificationManager.cancel(2) // FILE_NOTIFICATION_ID
-                    }) {
-                        Text("Decline", color = MaterialTheme.colorScheme.error)
+                
+                Box {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "Options"
+                        )
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(onClick = { 
-                        uniffi.cdus_ffi.acceptFileTransfer(transfer.transferId)
-                        FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.DOWNLOADING))
-                        // Dismiss notification
-                        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                        notificationManager.cancel(2) // FILE_NOTIFICATION_ID
-                    }) {
-                        Text("Accept")
-                    }
-                }
-            } else if (transfer.status == TransferStatus.OUTGOING || transfer.status == TransferStatus.DOWNLOADING || transfer.status == TransferStatus.HASHING) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = { 
-                        uniffi.cdus_ffi.cancelFileTransfer(transfer.transferId)
-                        FileTransferManager.markError(transfer.transferId, "Cancelled")
-                    }) {
-                        Text("Cancel", color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            } else if (transfer.status == TransferStatus.COMPLETE || transfer.status == TransferStatus.ERROR || transfer.status == TransferStatus.REJECTED) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = { FileTransferManager.removeTransfer(transfer.transferId) }) {
-                        Text("Dismiss")
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        when (transfer.status) {
+                            TransferStatus.INCOMING -> {
+                                DropdownMenuItem(
+                                    text = { Text("Accept") },
+                                    onClick = {
+                                        showMenu = false
+                                        uniffi.cdus_ffi.acceptFileTransfer(transfer.transferId)
+                                        FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.DOWNLOADING))
+                                        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                                        notificationManager.cancel(2) // FILE_NOTIFICATION_ID
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Decline", color = MaterialTheme.colorScheme.error) },
+                                    onClick = {
+                                        showMenu = false
+                                        uniffi.cdus_ffi.rejectFileTransfer(transfer.transferId)
+                                        FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.REJECTED))
+                                        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                                        notificationManager.cancel(2) // FILE_NOTIFICATION_ID
+                                    }
+                                )
+                            }
+                            TransferStatus.OUTGOING, TransferStatus.DOWNLOADING, TransferStatus.HASHING -> {
+                                DropdownMenuItem(
+                                    text = { Text("Cancel", color = MaterialTheme.colorScheme.error) },
+                                    onClick = {
+                                        showMenu = false
+                                        uniffi.cdus_ffi.cancelFileTransfer(transfer.transferId)
+                                        FileTransferManager.markError(transfer.transferId, "Cancelled")
+                                    }
+                                )
+                            }
+                            TransferStatus.COMPLETE, TransferStatus.ERROR, TransferStatus.REJECTED -> {
+                                DropdownMenuItem(
+                                    text = { Text("Dismiss") },
+                                    onClick = {
+                                        showMenu = false
+                                        FileTransferManager.removeTransfer(transfer.transferId)
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }

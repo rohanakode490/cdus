@@ -23,6 +23,10 @@ import io.cdus.app.utils.Logger
 
 class SyncService : Service(), ClipboardListener, FileTransferListener {
 
+    companion object {
+        const val ACTION_STOP_SERVICE = "io.cdus.app.service.STOP_SERVICE"
+    }
+
     private val CHANNEL_ID = "sync_channel"
     private val FILE_CHANNEL_ID = "file_transfer_channel"
     private val NOTIFICATION_ID = 1
@@ -97,7 +101,8 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
                 progress = 0f,
                 status = TransferStatus.INCOMING,
                 nodeId = nodeId,
-                senderLabel = senderLabel
+                senderLabel = senderLabel,
+                totalBytes = totalBytes.toLong()
             )
         )
 
@@ -154,7 +159,8 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
                 progress = 0f,
                 status = TransferStatus.DOWNLOADING,
                 nodeId = existing?.nodeId,
-                senderLabel = existing?.senderLabel
+                senderLabel = existing?.senderLabel,
+                totalBytes = totalBytes.toLong()
             )
         )
     }
@@ -170,13 +176,18 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         if (existing != null) {
             FileTransferManager.linkPathToId(existing.transferId, transferId)
             FileTransferManager.updateProgress(transferId, 0f) // Reset to 0% for actual transfer
+            val current = FileTransferManager.transfers[transferId]
+            if (current != null) {
+                FileTransferManager.updateTransfer(current.copy(totalBytes = totalBytes.toLong()))
+            }
         } else {
             FileTransferManager.updateTransfer(
                 FileTransferInfo(
                     transferId = transferId,
                     fileName = fileName,
                     progress = 0f,
-                    status = TransferStatus.OUTGOING
+                    status = TransferStatus.OUTGOING,
+                    totalBytes = totalBytes.toLong()
                 )
             )
         }
@@ -406,12 +417,32 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP_SERVICE) {
+            Logger.i("Stop service requested via notification action")
+            val sharedPref = getSharedPreferences("cdus_settings", Context.MODE_PRIVATE)
+            sharedPref.edit().putBoolean("clipboard_sync", false).apply()
+            stopForeground(true)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        val stopIntent = Intent(this, SyncService::class.java).apply {
+            action = ACTION_STOP_SERVICE
+        }
+        val stopPendingIntent = android.app.PendingIntent.getService(
+            this,
+            0,
+            stopIntent,
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_popup_sync)
             .setContentTitle("CDUS Sync Active")
             .setContentText("Syncing clipboard across devices...")
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopPendingIntent)
             .build()
 
         startForeground(NOTIFICATION_ID, notification)

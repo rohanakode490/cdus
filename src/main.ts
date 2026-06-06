@@ -144,7 +144,8 @@ async function loadFileHistory() {
         progress: record.total_bytes > 0 ? Math.round((Number(record.bytes_confirmed) / Number(record.total_bytes)) * 100) : 0,
         status: status,
         direction: record.direction,
-        error: record.error_message
+        error: record.error_message,
+        totalBytes: Number(record.total_bytes)
       });
     });
     renderFiles();
@@ -153,12 +154,25 @@ async function loadFileHistory() {
   }
 }
 
+let currentSortOrder = "newest";
+
 function renderFiles() {
   const listContainer = document.querySelector("#files-list");
   const emptyState = document.querySelector("#files-empty");
   if (!listContainer) return;
 
-  const transferList = Array.from(transfers.values()).reverse();
+  let transferList = Array.from(transfers.values());
+  if (currentSortOrder === "newest") {
+    transferList.reverse();
+  } else if (currentSortOrder === "name-asc") {
+    transferList.sort((a, b) => a.fileName.localeCompare(b.fileName, undefined, { sensitivity: "base" }));
+  } else if (currentSortOrder === "name-desc") {
+    transferList.sort((a, b) => b.fileName.localeCompare(a.fileName, undefined, { sensitivity: "base" }));
+  } else if (currentSortOrder === "size-desc") {
+    transferList.sort((a, b) => (b.totalBytes || 0) - (a.totalBytes || 0));
+  } else if (currentSortOrder === "size-asc") {
+    transferList.sort((a, b) => (a.totalBytes || 0) - (b.totalBytes || 0));
+  } // "oldest" maintains insertion order (no-op)
   
   if (transferList.length === 0) {
     listContainer.innerHTML = "";
@@ -195,12 +209,32 @@ function renderFiles() {
           <span>${transfer.direction === "incoming" ? "from" : "to"} ${getDeviceLabel(transfer.nodeId)}</span>
           <span style="color: var(--tertiary-color);">${transfer.speedMbps ? transfer.speedMbps.toFixed(1) + " Mbps" : ""}</span>
           <span>${transfer.progress}%</span>
-          <button class="text-btn action-btn ${isFinished ? "dismiss-btn" : "cancel-btn"}" data-id="${transfer.transferId}">
-            ${isFinished ? "Dismiss" : "Cancel"}
-          </button>
+        </div>
+      </div>
+      <div class="transfer-actions-menu">
+        <button class="options-trigger-btn" data-id="${transfer.transferId}">⋮</button>
+        <div class="options-dropdown hidden" id="dropdown-${transfer.transferId}">
+          ${isFinished ? `
+            <button class="dismiss-btn dropdown-option" data-id="${transfer.transferId}">Dismiss</button>
+          ` : `
+            <button class="cancel-btn danger-option dropdown-option" data-id="${transfer.transferId}">Cancel</button>
+          `}
         </div>
       </div>
     `;
+
+    const triggerBtn = itemEl.querySelector(".options-trigger-btn");
+    const dropdown = itemEl.querySelector(".options-dropdown");
+    
+    triggerBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      document.querySelectorAll(".options-dropdown").forEach((el) => {
+        if (el !== dropdown) {
+          el.classList.add("hidden");
+        }
+      });
+      dropdown?.classList.toggle("hidden");
+    });
 
     if (isFinished) {
       itemEl.querySelector(".dismiss-btn")?.addEventListener("click", () => {
@@ -515,6 +549,38 @@ window.addEventListener("DOMContentLoaded", () => {
     renderFiles();
   });
 
+  const sortTrigger = document.querySelector("#files-sort-trigger");
+  const sortDropdown = document.querySelector("#files-sort-dropdown");
+  
+  sortTrigger?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.querySelectorAll(".options-dropdown").forEach(el => el.classList.add("hidden"));
+    sortDropdown?.classList.toggle("hidden");
+  });
+
+  document.querySelectorAll(".custom-select-option").forEach((opt) => {
+    opt.addEventListener("click", () => {
+      const value = opt.getAttribute("data-value") || "newest";
+      currentSortOrder = value;
+      
+      document.querySelectorAll(".custom-select-option").forEach((o) => o.classList.remove("active"));
+      opt.classList.add("active");
+      
+      const labelEl = document.querySelector("#files-sort-current");
+      if (labelEl) labelEl.textContent = opt.textContent;
+      
+      sortDropdown?.classList.add("hidden");
+      renderFiles();
+    });
+  });
+
+  document.addEventListener("click", () => {
+    document.querySelectorAll(".options-dropdown").forEach((el) => {
+      el.classList.add("hidden");
+    });
+    sortDropdown?.classList.add("hidden");
+  });
+
   const navItems = document.querySelectorAll(".nav-item");
   const views = document.querySelectorAll(".view");
 
@@ -807,7 +873,8 @@ window.addEventListener("DOMContentLoaded", () => {
       nodeId: nodeId,
       progress: 0,
       status: "offered",
-      direction: "incoming"
+      direction: "incoming",
+      totalBytes: Number(offer.total_size)
     });
     renderFiles();
 
@@ -836,7 +903,8 @@ window.addEventListener("DOMContentLoaded", () => {
       nodeId: nodeId,
       progress: 0,
       status: "pending",
-      direction: "incoming"
+      direction: "incoming",
+      totalBytes: Number(manifest.total_size)
     });
     renderFiles();
 
@@ -897,13 +965,15 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     if (transfer) {
+      const isBenchmark = transferId === "ffffffff-ffff-ffff-ffff-ffffffffffff";
+      const totalSize = isBenchmark ? 1024 * 1024 * 1024 : 10 * 1024 * 1024;
+      if (!transfer.totalBytes) {
+        transfer.totalBytes = totalSize;
+      }
       if (transfer.lastUpdate) {
         const timeDiff = (now - transfer.lastUpdate) / 1000;
         const progressDiff = progress - transfer.progress;
         if (progressDiff > 0 && timeDiff > 0) {
-          // Assume 1GB for benchmark, 10MB for others as estimate
-          const isBenchmark = transferId === "ffffffff-ffff-ffff-ffff-ffffffffffff";
-          const totalSize = isBenchmark ? 1024 * 1024 * 1024 : 10 * 1024 * 1024;
           const bytesDiff = (progressDiff / 100) * totalSize;
           transfer.speedMbps = (bytesDiff * 8 / (1024 * 1024)) / timeDiff;
         }

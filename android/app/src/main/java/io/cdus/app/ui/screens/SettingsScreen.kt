@@ -15,6 +15,7 @@ import android.os.Build
 import android.content.Context
 import androidx.core.content.ContextCompat
 import io.cdus.app.service.SyncService
+import android.content.SharedPreferences
 
 @Composable
 fun SettingsScreen() {
@@ -23,6 +24,18 @@ fun SettingsScreen() {
     
     var isSyncEnabled by remember { 
         mutableStateOf(sharedPref.getBoolean("clipboard_sync", false)) 
+    }
+
+    DisposableEffect(context) {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "clipboard_sync") {
+                isSyncEnabled = sharedPref.getBoolean("clipboard_sync", false)
+            }
+        }
+        sharedPref.registerOnSharedPreferenceChangeListener(listener)
+        onDispose {
+            sharedPref.unregisterOnSharedPreferenceChangeListener(listener)
+        }
     }
     var deviceName by remember { mutableStateOf(Build.MODEL) }
     var clipboardLimit by remember { 

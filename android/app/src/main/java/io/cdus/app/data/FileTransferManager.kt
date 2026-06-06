@@ -14,7 +14,8 @@ data class FileTransferInfo(
     val nodeId: String? = null,
     val senderLabel: String? = null,
     val error: String? = null,
-    val speedMbps: Float? = null
+    val speedMbps: Float? = null,
+    val totalBytes: Long = 0L
 )
 
 object FileTransferManager {
@@ -85,7 +86,8 @@ object FileTransferManager {
                     progress = if (record.totalBytes > 0uL) (record.bytesConfirmed.toFloat() / record.totalBytes.toFloat()) * 100f else 0f,
                     status = status,
                     nodeId = record.peerNodeId,
-                    error = record.errorMessage
+                    error = record.errorMessage,
+                    totalBytes = record.totalBytes.toLong()
                 )
                 transfers[record.transferId] = info
             }

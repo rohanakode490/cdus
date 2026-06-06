@@ -186,15 +186,23 @@ h3 {
   border-radius: 50%;
 }
 
-.status-dot.online { background-color: #4caf50; }
-.status-dot.offline { background-color: #9e9e9e; }
+.status-dot.online {
+  background-color: #4caf50;
+}
+
+.status-dot.offline {
+  background-color: #9e9e9e;
+}
 
 @media (prefers-color-scheme: dark) {
   .device-row {
     background-color: #262626;
     border-color: #333;
   }
-  .device-name-label { color: #eee; }
+
+  .device-name-label {
+    color: #eee;
+  }
 }
 
 .scanning-indicator {
@@ -216,7 +224,9 @@ h3 {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Modal */
@@ -318,7 +328,9 @@ h3 {
   font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.2s, transform 0.1s;
+  transition:
+    background-color 0.2s,
+    transform 0.1s;
 }
 
 .primary-btn:hover {
@@ -351,6 +363,7 @@ h3 {
     color: #eee;
     border-color: #444;
   }
+
   .secondary-btn:hover {
     background-color: #444;
   }
@@ -368,7 +381,9 @@ h3 {
   border-radius: 8px;
   padding: 12px 16px;
   cursor: pointer;
-  transition: transform 0.1s, border-color 0.2s;
+  transition:
+    transform 0.1s,
+    border-color 0.2s;
   position: relative;
 }
 
@@ -429,15 +444,15 @@ h3 {
     background-color: #262626;
     border-color: #333;
   }
-  
+
   .clipboard-item:hover {
     background-color: #2d2d2d;
   }
-  
+
   .clipboard-content {
     color: #eee;
   }
-  
+
   .device-badge {
     background-color: #00363a;
     color: #4dd0e1;
@@ -490,7 +505,7 @@ input[type="range"] {
   .setting-hint {
     color: #999;
   }
-  
+
   #limit-value {
     color: #4dd0e1;
   }
@@ -570,7 +585,7 @@ input[type="text"] {
   color: white;
   padding: 16px 20px;
   border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   z-index: 1100;
   min-width: 250px;
 }
@@ -795,3 +810,234 @@ input[type="text"] {
   background: rgba(36, 200, 219, 0.1);
 }
 
+/* Header Actions and Sorting Selector */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sort-select {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  background-color: #fff;
+  font-size: 0.85rem;
+  color: #333;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.sort-select:focus {
+  border-color: #00838f;
+}
+
+@media (prefers-color-scheme: dark) {
+  .sort-select {
+    background-color: #2b2b2b;
+    border-color: #444;
+    color: #eee;
+  }
+}
+
+/* File Transfer Item Dropdown Menu */
+.transfer-actions-menu {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.options-trigger-btn {
+  background: none;
+  border: none;
+  font-size: 1.25rem;
+  cursor: pointer;
+  color: #888;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition:
+    background-color 0.2s,
+    color 0.2s;
+  line-height: 1;
+}
+
+.options-trigger-btn:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+  color: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  .options-trigger-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #eee;
+  }
+}
+
+.options-dropdown {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  background-color: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  min-width: 110px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .options-dropdown {
+    background-color: #2b2b2b;
+    border-color: #444;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
+}
+
+.options-dropdown button {
+  background: none;
+  border: none;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: #333;
+  width: 100%;
+  transition: background-color 0.2s;
+  display: block;
+}
+
+@media (prefers-color-scheme: dark) {
+  .options-dropdown button {
+    color: #eee;
+  }
+}
+
+.options-dropdown button:hover {
+  background-color: #f5f5f5;
+}
+
+@media (prefers-color-scheme: dark) {
+  .options-dropdown button:hover {
+    background-color: #3a3a3a;
+  }
+}
+
+.options-dropdown button.danger-option {
+  color: #ef4444;
+}
+
+.options-dropdown button.danger-option:hover {
+  background-color: #fef2f2;
+}
+
+@media (prefers-color-scheme: dark) {
+  .options-dropdown button.danger-option:hover {
+    background-color: rgba(239, 68, 68, 0.15);
+  }
+}
+
+.custom-select-container {
+  position: relative;
+  display: inline-block;
+}
+
+.custom-select-trigger {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  background-color: #fff;
+  font-size: 0.85rem;
+  color: #333;
+  cursor: pointer;
+  outline: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 140px;
+  justify-content: space-between;
+  transition: border-color 0.2s;
+}
+
+.custom-select-trigger:focus {
+  border-color: #00838f;
+}
+
+.custom-select-trigger .arrow {
+  font-size: 0.65rem;
+  color: #888;
+}
+
+@media (prefers-color-scheme: dark) {
+  .custom-select-trigger {
+    background-color: #2b2b2b;
+    border-color: #444;
+    color: #eee;
+  }
+}
+
+.custom-select-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background-color: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 200;
+  margin-top: 4px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (prefers-color-scheme: dark) {
+  .custom-select-dropdown {
+    background-color: #2b2b2b;
+    border-color: #444;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
+}
+
+.custom-select-option {
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  color: #333;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  text-align: left;
+}
+
+@media (prefers-color-scheme: dark) {
+  .custom-select-option {
+    color: #eee;
+  }
+}
+
+.custom-select-option:hover {
+  background-color: #f5f5f5;
+}
+
+@media (prefers-color-scheme: dark) {
+  .custom-select-option:hover {
+    background-color: #3a3a3a;
+  }
+}
+
+.custom-select-option.active {
+  background-color: #e0f7fa;
+  color: #00838f;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .custom-select-option.active {
+    background-color: rgba(0, 131, 143, 0.25);
+    color: #24c8db;
+  }
+}
