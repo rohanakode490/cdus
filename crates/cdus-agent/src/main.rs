@@ -343,24 +343,57 @@ fn main() {
                                             }
                                         }
                                         IpcMessage::PairWithQr { payload } => {
-                                            match pm_clone.pair_with_qr(payload) {
-                                                Ok(_) => {
-                                                    let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log(
-                                                            "QR pairing started".to_string(),
-                                                        ),
-                                                    )
-                                                    .unwrap();
+                                            match pm_clone.parse_qr_payload(&payload) {
+                                                Ok((node_id, secret, label, port, ips)) => {
+                                                    if pm_clone.is_device_paired(&node_id) {
+                                                        let _ = stream.write_all(&serde_json::to_vec(&IpcMessage::Log("Already paired".to_string())).unwrap());
+                                                        continue;
+                                                    }
+
+                                                    info!("IPC: Scanned QR for {} ({}). IPs: {:?}, Port: {}. Setting OOB secret and starting direct pairing.", label, node_id, ips, port);
+                                                    pm_clone.set_target_oob_secret(node_id.clone(), secret);
+
+                                                    // Pre-populate peer_map with data from QR
+                                                    {
+                                                        let mut map = peer_map_clone.lock();
+                                                        map.insert(
+                                                            node_id.clone(),
+                                                            (
+                                                                label.clone(),
+                                                                "Unknown".to_string(),
+                                                                ips.clone(),
+                                                                port,
+                                                                std::time::Instant::now(),
+                                                            ),
+                                                        );
+                                                    }
+
+                                                    let pm_init = Arc::clone(&pm_clone);
+                                                    let node_id_inner = node_id.clone();
+                                                    let ips_inner = ips.clone();
+                                                    thread::spawn(move || {
+                                                        let mut success = false;
+                                                        for ip in ips_inner {
+                                                            if let Ok(ip_addr) = ip.parse() {
+                                                                let addr = SocketAddr::new(ip_addr, port);
+                                                                if pm_init.initiate_pairing(addr, Some(node_id_inner.clone())) {
+                                                                    success = true;
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                        
+                                                        if !success {
+                                                            info!("Direct connection failed for QR device {}, falling back to relay", node_id_inner);
+                                                            pm_init.initiate_remote_pairing(node_id_inner);
+                                                        }
+                                                    });
+
+                                                    let resp_bytes = serde_json::to_vec(&IpcMessage::Log("QR pairing process started".to_string())).unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                                 Err(e) => {
-                                                    let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log(format!(
-                                                            "Error processing QR: {}",
-                                                            e
-                                                        )),
-                                                    )
-                                                    .unwrap();
+                                                    let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Error processing QR: {}", e))).unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                             }
@@ -450,7 +483,11 @@ fn main() {
                                                     
                                                     if !success {
                                                         info!("mDNS failed for {}, falling back to relay", node_id_clone);
-                                                        pm_init.initiate_remote_pairing(node_id_clone);
+                                                        if pm_init.is_device_paired(&node_id_clone) {
+                                                            pm_init.reconnect_known_device(node_id_clone);
+                                                        } else {
+                                                            pm_init.initiate_remote_pairing(node_id_clone);
+                                                        }
                                                     }
                                                 });
                                                 let resp_bytes =
@@ -465,7 +502,11 @@ fn main() {
                                                 let node_id_clone = node_id.clone();
                                                 thread::spawn(move || {
                                                     info!("Device {} not found in local discovery, trying relay", node_id_clone);
-                                                    pm_init.initiate_remote_pairing(node_id_clone);
+                                                    if pm_init.is_device_paired(&node_id_clone) {
+                                                        pm_init.reconnect_known_device(node_id_clone);
+                                                    } else {
+                                                        pm_init.initiate_remote_pairing(node_id_clone);
+                                                    }
                                                 });
                                                 let resp_bytes =
                                                     serde_json::to_vec(&IpcMessage::Log(
@@ -493,7 +534,11 @@ fn main() {
                                         IpcMessage::PairWithRemote { uuid } => {
                                             let pm_init = Arc::clone(&pm_clone);
                                             thread::spawn(move || {
-                                                pm_init.initiate_remote_pairing(uuid);
+                                                if pm_init.is_device_paired(&uuid) {
+                                                    pm_init.reconnect_known_device(uuid);
+                                                } else {
+                                                    pm_init.initiate_remote_pairing(uuid);
+                                                }
                                             });
                                             let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
                                                 "Remote pairing initiated".to_string(),

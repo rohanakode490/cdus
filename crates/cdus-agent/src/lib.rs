@@ -187,6 +187,12 @@ pub fn daemon_loop(
                     }
                     broadcast_event(IpcMessage::PairingResult { success, node_id, label });
                 }
+                IpcMessage::AlreadyPaired { node_id, label } => {
+                    broadcast_event(IpcMessage::AlreadyPaired { node_id, label });
+                }
+                IpcMessage::StalePairing { node_id, label } => {
+                    broadcast_event(IpcMessage::StalePairing { node_id, label });
+                }
                 IpcMessage::DeviceLost { node_id } => {
                     let mut list = discovered_devices.lock();
                     list.retain(|(id, _, _, _, _)| !id.starts_with(&node_id));

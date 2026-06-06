@@ -78,6 +78,14 @@ pub enum IpcMessage {
         node_id: String,
         label: String,
     },
+    AlreadyPaired {
+        node_id: String,
+        label: String,
+    },
+    StalePairing {
+        node_id: String,
+        label: String,
+    },
     GetPairingStatus,
     PairingStatusResponse {
         pin: Option<String>,

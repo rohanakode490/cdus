@@ -23,6 +23,13 @@ pub enum RelaySignal {
     Noise(Vec<u8>),
     TurnCandidate { relayed_addr: SocketAddr },
     Libp2pCandidate { multiaddr: Multiaddr },
+    PairingError { node_id: String, message: String },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum HandshakeIntent {
+    Pair,
+    Reconnect,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -31,6 +38,7 @@ pub struct HandshakePayload {
     pub node_id: String,
     pub libp2p_addresses: Vec<String>,
     pub oob_secret: Option<String>,
+    pub intent: Option<HandshakeIntent>,
 }
 
 #[derive(Clone)]
@@ -161,6 +169,10 @@ impl PairingManager {
         }
     }
 
+    pub fn is_device_paired(&self, node_id: &str) -> bool {
+        self.store.is_device_paired(node_id).unwrap_or(false)
+    }
+
     pub fn handle_relay_message(&self, source_uuid: String, payload: Vec<u8>) {
         info!(
             "Processing relay signaling message from {} ({} bytes)",
@@ -181,6 +193,23 @@ impl PairingManager {
                 if let Err(e) = self.handle_noise_signal(source_uuid, noise_payload) {
                     error!("Relay Noise signaling error: {}", e);
                 }
+            }
+            RelaySignal::PairingError { node_id, message } => {
+                if message == "stale" {
+                    warn!("Remote device {} reports stale pairing.", node_id);
+                    let label = if let Ok(Some(device)) = self.store.get_paired_device(&node_id) {
+                        device.label
+                    } else {
+                        "Unknown Device".to_string()
+                    };
+                    let _ = self.ipc_tx.send(IpcMessage::StalePairing {
+                        node_id,
+                        label,
+                    });
+                }
+                let mut ap = self.active_pairing.lock();
+                *ap = None;
+                return;
             }
             RelaySignal::TurnCandidate { relayed_addr } => {
                 self.handle_turn_candidate(source_uuid, relayed_addr)
@@ -242,12 +271,14 @@ impl PairingManager {
                     
                     let mut initiator_label = "Unknown Device".to_string();
                     let mut remote_node_id = source_uuid.clone();
+                    let mut initiator_payload_opt: Option<HandshakePayload> = None;
 
                     if use_ik && payload_len > 0 {
                         let payload_slice = &initiator_payload_buf[..payload_len];
                         if let Ok(initiator_payload) = serde_json::from_slice::<HandshakePayload>(payload_slice) {
-                            initiator_label = initiator_payload.label;
-                            remote_node_id = initiator_payload.node_id;
+                            initiator_label = initiator_payload.label.clone();
+                            remote_node_id = initiator_payload.node_id.clone();
+                            initiator_payload_opt = Some(initiator_payload.clone());
 
                             // Peer Exchange: Inject libp2p addresses
                             if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
@@ -257,6 +288,19 @@ impl PairingManager {
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    // Stale pairing check
+                    if let Some(HandshakeIntent::Reconnect) = initiator_payload_opt.as_ref().and_then(|p| p.intent.clone()) {
+                        if !self.is_device_paired(&remote_node_id) {
+                            warn!("Stale pairing attempt from {}. Rejecting.", remote_node_id);
+                            let err_sig = RelaySignal::PairingError {
+                                node_id: self.node_id.clone(),
+                                message: "stale".to_string(),
+                            };
+                            let _ = self.relay_manager.send_signal(source_uuid, serde_json::to_vec(&err_sig).unwrap());
+                            return Ok(());
                         }
                     }
 
@@ -270,6 +314,7 @@ impl PairingManager {
                         node_id: self.node_id.clone(),
                         libp2p_addresses: self.libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
                         oob_secret: self.active_oob_secret.lock().clone(),
+                        intent: Some(if use_ik { HandshakeIntent::Reconnect } else { HandshakeIntent::Pair }),
                     };
                     let self_payload_bytes = serde_json::to_vec(&self_payload).unwrap();
                     let mut out_buf = [0u8; 1024];
@@ -389,6 +434,21 @@ impl PairingManager {
                                 let remote_node_id = payload.node_id;
                                 let remote_label = payload.label;
 
+                                // Stale pairing check
+                                if let Some(HandshakeIntent::Reconnect) = payload.intent {
+                                    if !self.is_device_paired(&remote_node_id) {
+                                        warn!("Stale XX pairing attempt from {}. Rejecting.", remote_node_id);
+                                        let err_sig = RelaySignal::PairingError {
+                                            node_id: self.node_id.clone(),
+                                            message: "stale".to_string(),
+                                        };
+                                        let _ = self.relay_manager.send_signal(source_uuid, serde_json::to_vec(&err_sig).unwrap());
+                                        drop(handshake_lock);
+                                        *ap = None;
+                                        return Ok(());
+                                    }
+                                }
+
                                 // Peer Exchange: Inject libp2p addresses
                                 if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
                                     for addr_str in payload.libp2p_addresses {
@@ -476,11 +536,13 @@ impl PairingManager {
                                     .get_state("device_name")
                                     .unwrap()
                                     .unwrap_or_else(|| "Unknown Device".to_string());
+                                let is_reconnect = self.is_device_paired(&state.remote_id);
                                 let self_payload = HandshakePayload {
                                     label: self_label,
                                     node_id: self.node_id.clone(),
                                     libp2p_addresses: self.libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
                                     oob_secret,
+                                    intent: Some(if is_reconnect { HandshakeIntent::Reconnect } else { HandshakeIntent::Pair }),
                                 };
                                 let self_payload_bytes = serde_json::to_vec(&self_payload).unwrap();
                                 let mut out_buf = [0u8; 1024];
@@ -656,9 +718,11 @@ impl PairingManager {
                             let res = state.confirmed.lock();
                             *res
                         } else {
+                            warn!("Relay pairing monitor: remote_id mismatch (expected {}, got {}). Terminating.", remote_uuid, state.remote_id);
                             break;
                         }
                     } else {
+                        info!("Relay pairing monitor: ActivePairingState cleared. Terminating loop for {}.", remote_uuid);
                         break;
                     }
                 };
@@ -676,8 +740,10 @@ impl PairingManager {
                                     let relayed_addr = conn.local_relayed_addr;
                                     let sig = RelaySignal::TurnCandidate { relayed_addr };
                                     let sig_bytes = serde_json::to_vec(&sig).unwrap();
-                                    let _ =
-                                        relay_manager.send_signal(remote_uuid.clone(), sig_bytes);
+                                    if let Err(e) =
+                                        relay_manager.send_signal(remote_uuid.clone(), sig_bytes) {
+                                            error!("Failed to send TURN candidate via relay: {}", e);
+                                        }
 
                                     // The session will be started in handle_turn_candidate when peer responds
                                 }
@@ -687,15 +753,25 @@ impl PairingManager {
                                 ),
                             }
                         }
+                    } else {
+                        info!("Relay pairing for {} was declined locally.", remote_uuid);
                     }
                     break;
                 }
-                thread::sleep(Duration::from_millis(500));
+                thread::sleep(Duration::from_millis(200));
             }
         });
     }
 
     pub fn initiate_remote_pairing(&self, target_uuid: String) {
+        if self.store.is_device_paired(&target_uuid).unwrap_or(false) {
+            info!(
+                "Device {} is already paired. Skipping new remote pairing initiation.",
+                target_uuid
+            );
+            return;
+        }
+
         info!("Initiating remote pairing with {} via relay", target_uuid);
 
         let mut remote_static = None;
@@ -718,16 +794,27 @@ impl PairingManager {
         }
         let mut noise = builder.build_initiator().unwrap();
 
-        let mut initiator_payload_bytes = Vec::new();
-        if use_ik {
-            let initiator_payload = HandshakePayload {
-                label: self.store.get_state("device_name").unwrap().unwrap_or_else(|| "Unknown Device".to_string()),
-                node_id: self.node_id.clone(),
-                libp2p_addresses: self.libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
-                oob_secret: None,
-            };
-            initiator_payload_bytes = serde_json::to_vec(&initiator_payload).unwrap();
-        }
+        let initiator_payload = HandshakePayload {
+            label: self
+                .store
+                .get_state("device_name")
+                .unwrap()
+                .unwrap_or_else(|| "Unknown Device".to_string()),
+            node_id: self.node_id.clone(),
+            libp2p_addresses: self
+                .libp2p_manager
+                .get_listen_addresses()
+                .into_iter()
+                .map(|a| a.to_string())
+                .collect(),
+            oob_secret: None,
+            intent: Some(if use_ik {
+                HandshakeIntent::Reconnect
+            } else {
+                HandshakeIntent::Pair
+            }),
+        };
+        let initiator_payload_bytes = serde_json::to_vec(&initiator_payload).unwrap();
 
         let mut buf = [0u8; 1024];
         match noise.write_message(&initiator_payload_bytes, &mut buf) {
@@ -775,6 +862,96 @@ impl PairingManager {
                 self.monitor_relay_pairing(target_uuid);
             }
             Err(e) => error!("Failed to write Noise message (step 1): {}", e),
+        }
+    }
+
+    pub fn reconnect_known_device(&self, target_uuid: String) {
+        if !self.store.is_device_paired(&target_uuid).unwrap_or(false) {
+            warn!(
+                "reconnect_known_device called for unpaired device {}",
+                target_uuid
+            );
+            return;
+        }
+        info!("Reconnecting to known device {} via relay", target_uuid);
+        self.initiate_remote_pairing_silent(target_uuid);
+    }
+
+    fn initiate_remote_pairing_silent(&self, target_uuid: String) {
+        let mut remote_static = None;
+        if let Ok(Some(device)) = self.store.get_paired_device(&target_uuid) {
+            remote_static = device.static_key;
+        }
+
+        let use_ik = remote_static.is_some();
+        let pattern = if use_ik {
+            "Noise_IK_25519_ChaChaPoly_BLAKE2s"
+        } else {
+            "Noise_XX_25519_ChaChaPoly_BLAKE2s"
+        };
+
+        let params: NoiseParams = pattern.parse().unwrap();
+        let mut builder = Builder::new(params);
+        builder = builder.local_private_key(&self.private_key);
+        if let Some(ref rs) = remote_static {
+            builder = builder.remote_public_key(rs);
+        }
+        let mut noise = builder.build_initiator().unwrap();
+
+        let initiator_payload = HandshakePayload {
+            label: self
+                .store
+                .get_state("device_name")
+                .unwrap()
+                .unwrap_or_else(|| "Unknown Device".to_string()),
+            node_id: self.node_id.clone(),
+            libp2p_addresses: self
+                .libp2p_manager
+                .get_listen_addresses()
+                .into_iter()
+                .map(|a| a.to_string())
+                .collect(),
+            oob_secret: None,
+            intent: Some(HandshakeIntent::Reconnect),
+        };
+        let initiator_payload_bytes = serde_json::to_vec(&initiator_payload).unwrap();
+
+        let mut buf = [0u8; 1024];
+        match noise.write_message(&initiator_payload_bytes, &mut buf) {
+            Ok(n) => {
+                info!(
+                    "Sending silent handshake initiation (step 1) to {} via relay using {}",
+                    target_uuid,
+                    if use_ik { "IK" } else { "XX" }
+                );
+                let prefix = if use_ik { 0x01 } else { 0x00 };
+                let mut prefixed_msg = vec![prefix];
+                prefixed_msg.extend_from_slice(&buf[..n]);
+
+                let sig = RelaySignal::Noise(prefixed_msg);
+                let sig_bytes = serde_json::to_vec(&sig).unwrap();
+                if let Err(e) = self
+                    .relay_manager
+                    .send_signal(target_uuid.clone(), sig_bytes)
+                {
+                    error!("Failed to send silent handshake initiation via relay: {}", e);
+                    return;
+                }
+
+                let mut ap = self.active_pairing.lock();
+                *ap = Some(ActivePairingState {
+                    pin: String::new(),
+                    is_initiator: true,
+                    remote_id: target_uuid.clone(),
+                    remote_label: "Known Device".to_string(),
+                    confirmed: Arc::new(Mutex::new(Some(true))), // Auto-confirmed
+                    handshake: Arc::new(Mutex::new(Some(noise))),
+                    silent: true,
+                });
+
+                self.monitor_relay_pairing(target_uuid);
+            }
+            Err(e) => error!("Failed to write silent Noise message (step 1): {}", e),
         }
     }
 
@@ -846,23 +1023,38 @@ impl PairingManager {
             .get_state("device_name")?
             .unwrap_or_else(|| "Unknown".to_string());
 
+        let mut ips = Vec::new();
+        for addr in self.libp2p_manager.get_listen_addresses() {
+            let addr_str = addr.to_string();
+            // Extract IP from multiaddr e.g. /ip4/192.168.1.5/tcp/12345
+            if let Some(ip) = addr_str.split('/').nth(2) {
+                if !ips.contains(&ip.to_string()) && ip != "127.0.0.1" && !ip.starts_with("172.17.") {
+                    ips.push(ip.to_string());
+                }
+            }
+        }
+
         let payload = format!(
-            "cdus://pair?v=1&id={}&s={}&l={}",
+            "cdus://pair?v=1&id={}&s={}&l={}&p={}&a={}",
             self.node_id,
             secret,
-            urlencoding::encode(&label)
+            urlencoding::encode(&label),
+            self.port,
+            urlencoding::encode(&ips.join(","))
         );
         Ok(payload)
     }
 
-    pub fn pair_with_qr(&self, payload: String) -> Result<()> {
-        info!("Processing scanned QR payload");
-        let url = url::Url::parse(&payload).map_err(|_| anyhow::anyhow!("Invalid QR format"))?;
+    pub fn set_target_oob_secret(&self, node_id: String, secret: String) {
+        *self.target_oob_secret.lock() = Some((node_id, secret));
+    }
+
+    pub fn parse_qr_payload(&self, payload: &str) -> Result<(String, String, String, u16, Vec<String>)> {
+        let url = url::Url::parse(payload).map_err(|_| anyhow::anyhow!("Invalid QR format"))?;
         if url.scheme() != "cdus" {
             return Err(anyhow::anyhow!("Not a CDUS pairing QR"));
         }
         
-        // Handle both cdus://pair?... and cdus:pair?...
         let is_pair = url.path() == "/pair" || url.host_str() == Some("pair") || url.path() == "pair";
         if !is_pair {
             return Err(anyhow::anyhow!("Invalid CDUS QR path"));
@@ -870,13 +1062,17 @@ impl PairingManager {
 
         let mut node_id = String::new();
         let mut secret = String::new();
-        let mut _label = String::new();
+        let mut label = String::new();
+        let mut port = 5200;
+        let mut ips = Vec::new();
 
         for (key, value) in url.query_pairs() {
             match key.as_ref() {
                 "id" => node_id = value.into_owned(),
                 "s" => secret = value.into_owned(),
-                "l" => _label = value.into_owned(),
+                "l" => label = value.into_owned(),
+                "p" => port = value.parse().unwrap_or(5200),
+                "a" => ips = value.split(',').map(|s| s.to_string()).filter(|s| !s.is_empty()).collect(),
                 _ => {}
             }
         }
@@ -885,13 +1081,26 @@ impl PairingManager {
             return Err(anyhow::anyhow!("Missing required fields in QR"));
         }
 
+        Ok((node_id, secret, label, port, ips))
+    }
+
+    pub fn pair_with_qr(&self, payload: String) -> Result<()> {
+        info!("Processing scanned QR payload");
+        let (node_id, secret, label, _port, _ips) = self.parse_qr_payload(&payload)?;
+
         if self.store.is_device_paired(&node_id).unwrap_or(false) {
-            info!("Device {} is already paired. Storing OOB secret and skipping Noise XX.", node_id);
-            *self.target_oob_secret.lock() = Some((node_id.clone(), secret));
-            return Err(anyhow::anyhow!("Already paired"));
+            info!(
+                "QR scan for {} ({}) — already paired, nothing to do.",
+                label, node_id
+            );
+            let _ = self.ipc_tx.send(IpcMessage::AlreadyPaired {
+                node_id,
+                label,
+            });
+            return Ok(());
         }
 
-        info!("Scanned QR for device: {} ({})", _label, node_id);
+        info!("Scanned QR for new device: {} ({})", label, node_id);
         *self.target_oob_secret.lock() = Some((node_id.clone(), secret));
 
         // Start pairing attempt
@@ -1204,6 +1413,7 @@ fn handle_incoming_connection_inner(
         node_id: self_node_id.clone(),
         libp2p_addresses: libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
         oob_secret: active_oob_secret.lock().clone(),
+        intent: None, // Responder doesn't need to send intent
     };
     let self_payload_bytes = serde_json::to_vec(&self_payload).map_err(|e| anyhow::anyhow!(e))?;
     
@@ -1216,6 +1426,7 @@ fn handle_incoming_connection_inner(
     let mut initiator_label = "Unknown Device".to_string();
     let mut remote_node_id = String::new();
     let mut initiator_oob_secret = None;
+    let mut initiator_intent = None;
 
     if !use_ik {
         // 3. Read Message 3 (Only for XX)
@@ -1245,6 +1456,7 @@ fn handle_incoming_connection_inner(
             initiator_label = initiator_payload.label;
             remote_node_id = initiator_payload.node_id;
             initiator_oob_secret = initiator_payload.oob_secret;
+            initiator_intent = initiator_payload.intent;
 
             // Peer Exchange: Inject libp2p addresses
             if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
@@ -1269,6 +1481,7 @@ fn handle_incoming_connection_inner(
             initiator_label = initiator_payload.label;
             remote_node_id = initiator_payload.node_id;
             initiator_oob_secret = initiator_payload.oob_secret;
+            initiator_intent = initiator_payload.intent;
 
             // Peer Exchange: Inject libp2p addresses
             if let Ok(peer_id) = remote_node_id.parse::<libp2p::PeerId>() {
@@ -1320,6 +1533,16 @@ fn handle_incoming_connection_inner(
         .map_err(|e| anyhow::anyhow!(e))?;
 
     let is_paired = store.is_device_paired(&remote_node_id)?;
+
+    // Stale pairing check
+    if let Some(HandshakeIntent::Reconnect) = initiator_intent {
+        if !is_paired {
+            warn!("Stale LAN pairing attempt from {}. Rejecting.", remote_node_id);
+            // Send error code 0xFF framed
+            write_ws_framed(&mut ws, &mut transport, &[0xFF])?;
+            return Err(anyhow::anyhow!("Stale pairing"));
+        }
+    }
 
     if is_paired {
         info!(
@@ -1568,16 +1791,29 @@ fn handle_outgoing_connection_inner(
     // 1. Write Message 1
     // For XX: -> e
     // For IK: -> e, es, ss
-    let mut initiator_payload_bytes = Vec::new();
-    if use_ik {
-        let initiator_payload = HandshakePayload {
+    let is_reconnect = if let Some(ref tid) = target_node_id {
+        store.is_device_paired(tid).unwrap_or(false)
+    } else {
+        false
+    };
+
+    let initiator_payload = if use_ik {
+        Some(HandshakePayload {
             label: self_label.clone(),
             node_id: self_node_id.clone(),
             libp2p_addresses: libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
-            oob_secret: None, // No OOB for reconnect
-        };
-        initiator_payload_bytes = serde_json::to_vec(&initiator_payload).map_err(|e| anyhow::anyhow!(e))?;
-    }
+            oob_secret: None,
+            intent: Some(HandshakeIntent::Reconnect),
+        })
+    } else {
+        None
+    };
+
+    let initiator_payload_bytes = if let Some(p) = initiator_payload {
+        serde_json::to_vec(&p).map_err(|e| anyhow::anyhow!(e))?
+    } else {
+        Vec::new()
+    };
 
     let n = noise
         .write_message(&initiator_payload_bytes, &mut buf)
@@ -1662,6 +1898,7 @@ fn handle_outgoing_connection_inner(
                 node_id: self_node_id.clone(),
                 libp2p_addresses: libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
                 oob_secret: oob_secret.clone(),
+                intent: Some(if is_reconnect { HandshakeIntent::Reconnect } else { HandshakeIntent::Pair }),
             };
             let self_payload_bytes =
                 serde_json::to_vec(&self_payload).map_err(|e| anyhow::anyhow!(e))?;
@@ -1818,6 +2055,19 @@ fn handle_outgoing_connection_inner(
              match read_ws_framed(&mut ws, &mut transport) {
                  Ok(data) if !data.is_empty() && data[0] == 1 => {
                      info!("Remote side also trusted us. Session established.");
+                 }
+                 Ok(data) if !data.is_empty() && data[0] == 0xFF => {
+                     warn!("Remote device rejected reconnection (stale pairing).");
+                     let label = if let Ok(Some(device)) = store.get_paired_device(&remote_node_id) {
+                         device.label
+                     } else {
+                         responder_label.clone()
+                     };
+                     let _ = ipc_tx.send(IpcMessage::StalePairing {
+                         node_id: remote_node_id.clone(),
+                         label,
+                     });
+                     return Err(anyhow::anyhow!("Stale pairing"));
                  }
                  _ => return Err(anyhow::anyhow!("Remote side did not confirm trusted session")),
              }

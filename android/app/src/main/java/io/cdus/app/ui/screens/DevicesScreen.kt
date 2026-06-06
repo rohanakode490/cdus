@@ -49,8 +49,11 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.google.android.gms.tasks.Tasks
+import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.common.InputImage
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
 
 import androidx.compose.foundation.Image
@@ -141,9 +144,16 @@ fun DevicesScreen() {
         QrScannerDialog(
             onDismiss = { showScannerDialog = false },
             onQrScanned = { payload ->
+                Logger.i("Handling scanned QR payload...")
                 showScannerDialog = false
-                pairWithQr(payload)
-                android.widget.Toast.makeText(context, "Pairing with QR...", android.widget.Toast.LENGTH_SHORT).show()
+                try {
+                    pairWithQr(payload)
+                    android.widget.Toast.makeText(context, "Pairing with QR...", android.widget.Toast.LENGTH_SHORT).show()
+                    Logger.i("pairWithQr called successfully")
+                } catch (e: Exception) {
+                    Logger.e("Error calling pairWithQr: ${e.message}")
+                    android.widget.Toast.makeText(context, "Pairing failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                }
             }
         )
     }
@@ -463,9 +473,49 @@ fun QrPairingDialog(onDismiss: () -> Unit) {
 @Composable
 fun QrScannerDialog(onDismiss: () -> Unit, onQrScanned: (String) -> Unit) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
     val executor = remember { Executors.newSingleThreadExecutor() }
     val scanner = remember { BarcodeScanning.getClient() }
+    
+    // Create a local lifecycle owner for this dialog to ensure CameraX shuts down correctly
+    val lifecycleOwner = remember {
+        object : androidx.lifecycle.LifecycleOwner {
+            private val lifecycleRegistry = androidx.lifecycle.LifecycleRegistry(this)
+            init {
+                lifecycleRegistry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_CREATE)
+                lifecycleRegistry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_START)
+                lifecycleRegistry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_RESUME)
+            }
+            override val lifecycle: androidx.lifecycle.Lifecycle = lifecycleRegistry
+            fun destroy() {
+                lifecycleRegistry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_PAUSE)
+                lifecycleRegistry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_STOP)
+                lifecycleRegistry.handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_DESTROY)
+            }
+        }
+    }
+
+    var isScanned by remember { mutableStateOf(false) }
+    val cameraProviderState = remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    val imageAnalysisState = remember { mutableStateOf<ImageAnalysis?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            Logger.i("QrScannerDialog: Disposing resources")
+            isScanned = true
+            
+            // Aggressively stop the analyzer and unbind the camera
+            imageAnalysisState.value?.clearAnalyzer()
+            cameraProviderState.value?.unbindAll()
+            
+            lifecycleOwner.destroy()
+            executor.shutdownNow()
+            try {
+                scanner.close()
+            } catch (e: Exception) {
+                Logger.e("Error closing scanner: ${e.message}")
+            }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -474,10 +524,21 @@ fun QrScannerDialog(onDismiss: () -> Unit, onQrScanned: (String) -> Unit) {
             Box(modifier = Modifier.size(300.dp).clip(MaterialTheme.shapes.medium)) {
                 AndroidView(
                     factory = { ctx ->
-                        val previewView = PreviewView(ctx)
+                        val previewView = PreviewView(ctx).apply {
+                            scaleType = PreviewView.ScaleType.FILL_CENTER
+                        }
                         val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
                         cameraProviderFuture.addListener({
-                            val cameraProvider = cameraProviderFuture.get()
+                            if (isScanned || lifecycleOwner.lifecycle.currentState == androidx.lifecycle.Lifecycle.State.DESTROYED) return@addListener
+                            
+                            val cameraProvider = try {
+                                cameraProviderFuture.get()
+                            } catch (e: Exception) {
+                                Logger.e("Failed to get camera provider: ${e.message}")
+                                return@addListener
+                            }
+                            cameraProviderState.value = cameraProvider
+
                             val preview = Preview.Builder().build().also {
                                 it.setSurfaceProvider(previewView.surfaceProvider)
                             }
@@ -485,25 +546,40 @@ fun QrScannerDialog(onDismiss: () -> Unit, onQrScanned: (String) -> Unit) {
                             val imageAnalysis = ImageAnalysis.Builder()
                                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                                 .build()
+                            imageAnalysisState.value = imageAnalysis
 
                             imageAnalysis.setAnalyzer(executor) { imageProxy ->
-                                val mediaImage = imageProxy.image
-                                if (mediaImage != null) {
-                                    val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                                    scanner.process(image)
-                                        .addOnSuccessListener { barcodes ->
-                                            for (barcode in barcodes) {
-                                                val rawValue = barcode.rawValue
-                                                if (rawValue != null && rawValue.startsWith("cdus://pair")) {
+                                if (isScanned) {
+                                    imageProxy.close()
+                                    return@setAnalyzer
+                                }
+
+                                try {
+                                    val mediaImage = imageProxy.image
+                                    if (mediaImage != null) {
+                                        val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+                                        // Use a timeout to prevent hanging the executor thread indefinitely
+                                        val barcodes = Tasks.await(scanner.process(image), 1, TimeUnit.SECONDS)
+                                        
+                                        if (isScanned) return@setAnalyzer
+                                        
+                                        for (barcode in barcodes) {
+                                            val rawValue = barcode.rawValue
+                                            if (rawValue != null && rawValue.startsWith("cdus://pair")) {
+                                                isScanned = true
+                                                Logger.i("QR Scanned successfully")
+                                                android.os.Handler(android.os.Looper.getMainLooper()).post {
                                                     onQrScanned(rawValue)
-                                                    break
                                                 }
+                                                break
                                             }
                                         }
-                                        .addOnCompleteListener {
-                                            imageProxy.close()
-                                        }
-                                } else {
+                                    }
+                                } catch (e: Exception) {
+                                    if (!isScanned) {
+                                        Logger.e("QR scanning error: ${e.message}")
+                                    }
+                                } finally {
                                     imageProxy.close()
                                 }
                             }
@@ -518,7 +594,7 @@ fun QrScannerDialog(onDismiss: () -> Unit, onQrScanned: (String) -> Unit) {
                                     imageAnalysis
                                 )
                             } catch (e: Exception) {
-                                Logger.e("Camera binding failed: \${e.message}")
+                                Logger.e("Camera binding failed: ${e.message}")
                             }
                         }, ContextCompat.getMainExecutor(ctx))
                         previewView

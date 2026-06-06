@@ -367,6 +367,20 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         }
     }
 
+    override fun onAlreadyPaired(nodeId: String, label: String) {
+        Logger.i("Already paired with $label ($nodeId)")
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            android.widget.Toast.makeText(this, "Already paired with $label", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onStalePairing(nodeId: String, label: String) {
+        Logger.w("Stale pairing detected for $label ($nodeId)")
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            android.widget.Toast.makeText(this, "Pairing with $label is stale. Please re-pair.", android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
     override fun onTransferStateChanged(transferId: String, state: String) {
         Logger.i("Transfer state changed: $transferId -> $state")
         when (state) {

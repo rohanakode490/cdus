@@ -29,9 +29,9 @@ dist-ssr
 *.sln
 *.sw?
 target/
-# docs/
-# agent-workspace
-# GEMINI.md
+docs/
+agent-workspace
+GEMINI.md
 
 # Android JNI binaries
 android/app/src/main/jniLibs/**/*.so

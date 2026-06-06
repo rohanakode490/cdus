@@ -825,4 +825,133 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_pair_with_qr_already_paired() {
+        let _ = tracing_subscriber::fmt::try_init();
+        let dir = tempdir().unwrap();
+        let store = Arc::new(Store::init(dir.path()).unwrap());
+        let (tx, rx) = flume::unbounded();
+        let ap = Arc::new(Mutex::new(None));
+        let sm = Arc::new(SyncManager::new());
+        let tm = Arc::new(TurnManager::new().unwrap());
+        let (node_id, priv_key) = store.get_or_create_identity(dir.path()).unwrap();
+        
+        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), flume::unbounded().0));
+        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
+        let pm = PairingManager::new(
+            Arc::clone(&store),
+            tx,
+            node_id.clone(),
+            priv_key,
+            5601,
+            Arc::clone(&ap),
+            sm,
+            Arc::new(RelayManager::new(node_id.clone(), "http://localhost".to_string(), flume::unbounded().0).0),
+            tm,
+            lm,
+        );
+
+        // 1. Manually mark a device as paired in the store
+        let remote_id = "remote_node_id".to_string();
+        store.add_paired_device(&remote_id, "Remote Device", None).unwrap();
+
+        // 2. Scan a QR for that device
+        let payload = format!("cdus://pair?id={}&s=secret&l=Remote", remote_id);
+        let result = pm.pair_with_qr(payload);
+
+        // 3. Verify result is Ok and IPC message is sent
+        assert!(result.is_ok());
+        
+        let msg = rx.recv_timeout(Duration::from_secs(1)).expect("Should receive IPC message");
+        match msg {
+            IpcMessage::AlreadyPaired { node_id, label } => {
+                assert_eq!(node_id, remote_id);
+                assert_eq!(label, "Remote");
+            }
+            _ => panic!("Expected AlreadyPaired message, got {:?}", msg),
+        }
+    }
+
+    #[test]
+    fn test_asymmetrical_pairing_reconnect_rejection() {
+        let _ = tracing_subscriber::fmt::try_init();
+        let dir1 = tempdir().unwrap();
+        let dir2 = tempdir().unwrap();
+
+        let store1 = Arc::new(Store::init(dir1.path()).unwrap());
+        let store2 = Arc::new(Store::init(dir2.path()).unwrap());
+
+        let (tx1, rx1) = flume::unbounded();
+        let (tx2, _rx2) = flume::unbounded();
+
+        let (id1, priv1) = store1.get_or_create_identity(dir1.path()).unwrap();
+        let (id2, priv2) = store2.get_or_create_identity(dir2.path()).unwrap();
+
+        let ftm1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), flume::unbounded().0));
+        let lm1 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx1.clone(), Arc::clone(&store1), ftm1).unwrap());
+        let pm1 = Arc::new(PairingManager::new(
+            Arc::clone(&store1),
+            tx1,
+            id1.clone(),
+            priv1,
+            5701,
+            Arc::new(Mutex::new(None)),
+            Arc::new(SyncManager::new()),
+            Arc::new(RelayManager::new(id1.clone(), "http://localhost".to_string(), flume::unbounded().0).0),
+            Arc::new(TurnManager::new().unwrap()),
+            lm1,
+        ));
+
+        let ftm2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), flume::unbounded().0));
+        let lm2 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2).unwrap());
+        let pm2 = Arc::new(PairingManager::new(
+            Arc::clone(&store2),
+            tx2,
+            id2.clone(),
+            priv2,
+            5702,
+            Arc::new(Mutex::new(None)),
+            Arc::new(SyncManager::new()),
+            Arc::new(RelayManager::new(id2.clone(), "http://localhost".to_string(), flume::unbounded().0).0),
+            Arc::new(TurnManager::new().unwrap()),
+            lm2,
+        ));
+
+        // 1. Manually establish pairing on Device 1 ONLY (Asymmetrical)
+        store1.add_paired_device(&id2, "Device 2", None).unwrap();
+        // Device 2 does NOT have Device 1 in its store.
+
+        // 2. Start listener on Device 2
+        let pm2_c = Arc::clone(&pm2);
+        thread::spawn(move || pm2_c.start_listener());
+        thread::sleep(Duration::from_millis(100));
+
+        // 3. Device 1 attempts reconnection to Device 2
+        let pm1_init = Arc::clone(&pm1);
+        let addr = "127.0.0.1:5702".parse().unwrap();
+        let id2_c = id2.clone();
+        thread::spawn(move || {
+            pm1_init.initiate_pairing(addr, Some(id2_c.clone()));
+        });
+
+        // 4. Verify Device 1 receives StalePairing message
+        let msg = rx1.recv_timeout(Duration::from_secs(2)).expect("Should receive IPC message");
+        match msg {
+            IpcMessage::Log(ref s) if s.contains("Manual pairing initiated") => {
+                // Skip the initial log message and wait for the actual result
+                let msg2 = rx1.recv_timeout(Duration::from_secs(2)).expect("Should receive second IPC message");
+                match msg2 {
+                    IpcMessage::StalePairing { ref node_id, .. } => {
+                        assert_eq!(node_id, &id2);
+                    }
+                    _ => panic!("Expected StalePairing, got {:?}", msg2),
+                }
+            }
+            IpcMessage::StalePairing { ref node_id, .. } => {
+                assert_eq!(node_id, &id2);
+            }
+            _ => panic!("Expected StalePairing, got {:?}", msg),
+        }
+    }
 }
