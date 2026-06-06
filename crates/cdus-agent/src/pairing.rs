@@ -1557,17 +1557,19 @@ fn handle_incoming_connection_inner(
                 initiator_label, remote_node_id, pin
             );
 
-            // Check if OOB secret matches
-            let mut local_confirmed = false;
+            // Check if OOB secret matches (but still require manual confirmation)
+            let mut _oob_matched = false;
             {
                 let mut active = active_oob_secret.lock();
                 if let Some(ref secret) = *active {
                     if let Some(ref initiator_secret) = initiator_oob_secret {
                         if secret == initiator_secret {
-                            info!("OOB pairing: secret matched! Auto-confirming.");
-                            local_confirmed = true;
+                            info!("OOB pairing: secret matched!");
+                            _oob_matched = true;
                         } else {
                             warn!("OOB pairing: secret mismatch! initiator sent {}, expected {}", initiator_secret, secret);
+                            // We could reject here, but letting it proceed to PIN check is also safe
+                            // as long as we don't auto-confirm.
                         }
                     }
                 }
@@ -1576,7 +1578,7 @@ fn handle_incoming_connection_inner(
             }
 
             // Update state for UI
-            let confirmed = Arc::new(Mutex::new(if local_confirmed { Some(true) } else { None }));
+            let confirmed = Arc::new(Mutex::new(None));
             {
                 let mut ap = active_pairing.lock();
                 *ap = Some(ActivePairingState {
@@ -1586,16 +1588,13 @@ fn handle_incoming_connection_inner(
                     remote_label: initiator_label.clone(),
                     confirmed: Arc::clone(&confirmed),
                     handshake: Arc::new(Mutex::new(None)),
-                    silent: local_confirmed, // Don't show modal if already confirmed via QR
+                    silent: false, // Always show modal for first-time pairing
                 });
             }
 
             // Wait for both local and remote confirmation
+            let mut local_confirmed = false;
             let mut remote_confirmed = false;
-
-            if local_confirmed {
-                write_ws_framed(&mut ws, &mut transport, &[1])?;
-            }
 
             let _ = ws
                 .get_ref()
@@ -1942,12 +1941,12 @@ fn handle_outgoing_connection_inner(
                 responder_label, remote_node_id, pin
             );
 
-            // If we have an OOB secret, we skip manual PIN confirmation
-            let mut local_confirmed = oob_secret.is_some();
+            // Even for OOB pairing, we now require manual PIN confirmation to avoid ghost pairing.
+            let mut local_confirmed = false;
             let mut remote_confirmed = false;
 
             // Update state for UI
-            let confirmed = Arc::new(Mutex::new(if local_confirmed { Some(true) } else { None }));
+            let confirmed = Arc::new(Mutex::new(None));
             {
                 let mut ap = active_pairing.lock();
                 *ap = Some(ActivePairingState {
@@ -1957,13 +1956,8 @@ fn handle_outgoing_connection_inner(
                     remote_label: responder_label.clone(),
                     confirmed: Arc::clone(&confirmed),
                     handshake: Arc::new(Mutex::new(None)),
-                    silent: local_confirmed, // Don't show modal if already confirmed via QR
+                    silent: false, // Always show modal for first-time pairing
                 });
-            }
-
-            if local_confirmed {
-                info!("OOB pairing: auto-confirming local side");
-                write_ws_framed(&mut ws, &mut transport, &[1])?;
             }
 
             let _ = ws
