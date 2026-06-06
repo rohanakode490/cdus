@@ -54,6 +54,8 @@ pub trait FileTransferListener: Send + Sync {
     fn on_peer_disconnected(&self, node_id: String);
     fn on_peer_connected(&self, node_id: String);
     fn on_pairing_result(&self, success: bool, node_id: String, label: String);
+    fn on_already_paired(&self, node_id: String, label: String);
+    fn on_stale_pairing(&self, node_id: String, label: String);
     fn on_transfer_state_changed(&self, transfer_id: String, state: String);
 }
 
@@ -378,6 +380,16 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                     }
                                     if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
                                         listener.on_pairing_result(success, node_id, label);
+                                    }
+                                }
+                                IpcMessage::AlreadyPaired { node_id, label } => {
+                                    if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                                        listener.on_already_paired(node_id, label);
+                                    }
+                                }
+                                IpcMessage::StalePairing { node_id, label } => {
+                                    if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                                        listener.on_stale_pairing(node_id, label);
                                     }
                                 }
                                 IpcMessage::FileProgress(_event) => {
@@ -707,8 +719,46 @@ pub fn get_qr_pairing_payload() -> String {
 
 #[uniffi::export]
 pub fn pair_with_qr(payload: String) {
+    let mut should_initiate = false;
+    let mut target_node_id = String::new();
+
     if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
-        let _ = pm.pair_with_qr(payload);
+        match pm.parse_qr_payload(&payload) {
+            Ok((node_id, secret, label, port, ips)) => {
+                if pm.is_device_paired(&node_id) {
+                    if let Some(tx) = AGENT_TX.lock().unwrap().as_ref() {
+                        let _ = tx.send(IpcMessage::AlreadyPaired { node_id, label });
+                    }
+                    return;
+                }
+                
+                info!("FFI: Scanned QR for {} ({}). IPs: {:?}, Port: {}. Setting OOB secret and attempting direct pairing.", label, node_id, ips, port);
+                pm.set_target_oob_secret(node_id.clone(), secret);
+                
+                // Pre-populate PEER_MAP with data from QR to bypass mDNS discovery delay
+                {
+                    let mut peer_map = PEER_MAP.lock().unwrap();
+                    peer_map.insert(node_id.clone(), (DiscoveredDevice {
+                        node_id: node_id.clone(),
+                        label: label.clone(),
+                        os: "Unknown".to_string(),
+                        ips,
+                        port,
+                    }, std::time::Instant::now()));
+                }
+
+                should_initiate = true;
+                target_node_id = node_id;
+            }
+            Err(e) => {
+                error!("FFI: Failed to parse QR payload: {}", e);
+            }
+        }
+    }
+
+    if should_initiate {
+        // Now trigger local-first pairing (called outside the PAIRING_MANAGER lock to avoid deadlock)
+        initiate_pairing(target_node_id);
     }
 }
 
