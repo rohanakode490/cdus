@@ -40,6 +40,9 @@ struct Cli {
     #[arg(long, env = "CDUS_DATA_DIR")]
     data_dir: Option<String>,
 
+    #[arg(long, env = "CDUS_DOWNLOAD_DIR")]
+    download_dir: Option<String>,
+
     #[arg(long, default_value = "http://localhost:8080", env = "CDUS_RELAY_URL")]
     relay_url: String,
 }
@@ -141,11 +144,12 @@ fn main() {
 
     // Initialize Libp2p Manager
     let libp2p_manager = Arc::new(
-        Libp2pManager::new(
+        Libp2pManager::new_with_download_dir(
             private_key.clone(),
             tx.clone(),
             Arc::clone(&store),
             Arc::clone(&transfer_manager),
+            cli.download_dir.map(std::path::PathBuf::from),
         )
         .expect("Failed to initialize Libp2pManager"),
     );

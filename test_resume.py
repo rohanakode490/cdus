@@ -29,14 +29,15 @@ def cleanup():
     subprocess.run(["killall", "-9", "cdus-agent"], stderr=subprocess.DEVNULL)
     for f in ["/tmp/cdus1.sock", "/tmp/cdus2.sock"]:
         if os.path.exists(f): os.remove(f)
-    subprocess.run(["rm", "-rf", "/tmp/cdus1", "/tmp/cdus2"])
+    subprocess.run(["rm", "-rf", "/tmp/cdus1", "/tmp/cdus2", "/tmp/cdus-downloads-resume"])
     os.makedirs("/tmp/cdus1", exist_ok=True)
     os.makedirs("/tmp/cdus2", exist_ok=True)
+    os.makedirs("/tmp/cdus-downloads-resume", exist_ok=True)
 
 def start_agents():
     print("Starting agents...")
     a1 = subprocess.Popen(["./target/debug/cdus-agent", "--port", "5200", "--socket", "/tmp/cdus1.sock", "--data-dir", "/tmp/cdus1"], stdout=open("/tmp/agent1.log", "w"), stderr=subprocess.STDOUT)
-    a2 = subprocess.Popen(["./target/debug/cdus-agent", "--port", "5201", "--socket", "/tmp/cdus2.sock", "--data-dir", "/tmp/cdus2"], stdout=open("/tmp/agent2.log", "w"), stderr=subprocess.STDOUT)
+    a2 = subprocess.Popen(["./target/debug/cdus-agent", "--port", "5201", "--socket", "/tmp/cdus2.sock", "--data-dir", "/tmp/cdus2", "--download-dir", "/tmp/cdus-downloads-resume"], stdout=open("/tmp/agent2.log", "w"), stderr=subprocess.STDOUT)
     time.sleep(2)
     return a1, a2
 

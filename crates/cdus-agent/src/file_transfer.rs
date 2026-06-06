@@ -11,7 +11,7 @@ use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, aead::{Aead, KeyInit}};
 use crate::store::Store;
 use cdus_common::{FileMessage, TransferRequest, TransferAcceptance, ChunkFrame, ChunkAck, TransferComplete, TransferError, ProgressEvent};
 use flume::{Sender, Receiver};
-use tracing::{info, error};
+use tracing::{info, error, debug};
 use futures::{AsyncReadExt, AsyncWriteExt};
 use std::collections::HashMap;
 use parking_lot::Mutex;
@@ -26,6 +26,8 @@ pub struct ChunkMeta {
 }
 
 pub struct SessionKey(pub [u8; 32]);
+
+pub const MAX_TIMEOUT_RETRIES: u32 = 12; // 12 * 5s = 60s total timeout for inactivity
 
 pub struct FileTransferManager {
     pub db: Arc<Store>,
@@ -220,76 +222,77 @@ pub struct Libp2pFileStream {
 
 impl Libp2pFileStream {
     pub fn new(stream: libp2p::Stream, runtime: &tokio::runtime::Handle) -> Self {
-        let (in_tx, in_rx) = flume::bounded::<FileMessage>(32);
-        let (out_tx, out_rx) = flume::bounded::<FileMessage>(32);
+        let (in_tx, in_rx) = flume::unbounded::<FileMessage>();
+        let (out_tx, out_rx) = flume::unbounded::<FileMessage>();
 
         runtime.spawn(async move {
-            let mut stream = stream;
+            let (mut read_half, mut write_half) = futures::AsyncReadExt::split(stream);
             let mut in_rx_stream = in_rx.into_stream();
 
-            info!("Libp2pWorker: started background task for stream");
+            info!("Libp2pWorker: started background tasks for stream");
             
-            loop {
-                tokio::select! {
-                    // Outgoing: Sync -> Async
-                    msg_opt = futures::StreamExt::next(&mut in_rx_stream) => {
-                        match msg_opt {
-                            Some(msg) => {
-                                match msg.to_vec() {
-                                    Ok(data) => {
-                                        let len = data.len() as u32;
-                                        if let Err(e) = stream.write_all(&len.to_be_bytes()).await {
-                                            error!("Libp2pWorker: write length error: {}", e);
-                                            break;
-                                        }
-                                        if let Err(e) = stream.write_all(&data).await {
-                                            error!("Libp2pWorker: write body error: {}", e);
-                                            break;
-                                        }
-                                        if let Err(e) = stream.flush().await {
-                                            error!("Libp2pWorker: flush error: {}", e);
-                                            break;
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Libp2pWorker: serialization error: {}", e);
-                                    }
-                                }
+            let write_task = async move {
+                while let Some(msg) = futures::StreamExt::next(&mut in_rx_stream).await {
+                    match msg.to_vec() {
+                        Ok(data) => {
+                            let len = data.len() as u32;
+                            if let Err(e) = write_half.write_all(&len.to_be_bytes()).await {
+                                error!("Libp2pWorker: write length error: {}", e);
+                                break;
                             }
-                            None => {
-                                info!("Libp2pWorker: input channel closed, shutting down");
+                            if let Err(e) = write_half.write_all(&data).await {
+                                error!("Libp2pWorker: write body error: {}", e);
+                                break;
+                            }
+                            if let Err(e) = write_half.flush().await {
+                                error!("Libp2pWorker: flush error: {}", e);
                                 break;
                             }
                         }
-                    }
-                    // Incoming: Async -> Sync
-                    res = async {
-                        let mut len_bytes = [0u8; 4];
-                        stream.read_exact(&mut len_bytes).await?;
-                        let len = u32::from_be_bytes(len_bytes) as usize;
-                        
-                        let mut data = vec![0u8; len];
-                        stream.read_exact(&mut data).await?;
-                        
-                        FileMessage::from_slice(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-                    } => {
-                        match res {
-                            Ok(msg) => {
-                                if let Err(_) = out_tx.send_async(msg).await {
-                                    info!("Libp2pWorker: output channel closed, shutting down");
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                error!("Libp2pWorker: read/decode error: {}", e);
-                                break;
-                            }
+                        Err(e) => {
+                            error!("Libp2pWorker: serialization error: {}", e);
                         }
                     }
                 }
-            }
-            let _ = stream.close().await;
-            info!("Libp2pWorker: background task finished");
+                let _ = write_half.close().await;
+                info!("Libp2pWorker: write task finished");
+            };
+
+            let read_task = async move {
+                loop {
+                    let mut len_bytes = [0u8; 4];
+                    if let Err(e) = read_half.read_exact(&mut len_bytes).await {
+                        if e.kind() != std::io::ErrorKind::UnexpectedEof {
+                            error!("Libp2pWorker: read length error: {}", e);
+                        }
+                        break;
+                    }
+                    let len = u32::from_be_bytes(len_bytes) as usize;
+                    
+                    let mut data = vec![0u8; len];
+                    if let Err(e) = read_half.read_exact(&mut data).await {
+                        error!("Libp2pWorker: read body error: {}", e);
+                        break;
+                    }
+                    
+                    match FileMessage::from_slice(&data) {
+                        Ok(msg) => {
+                            if let Err(_) = out_tx.send_async(msg).await {
+                                info!("Libp2pWorker: output channel closed, shutting down read task");
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Libp2pWorker: read/decode error: {}", e);
+                            break;
+                        }
+                    }
+                }
+                info!("Libp2pWorker: read task finished");
+            };
+
+            tokio::join!(write_task, read_task);
+            info!("Libp2pWorker: background tasks completed");
         });
 
         Libp2pFileStream { tx: in_tx, rx: out_rx }
@@ -299,28 +302,31 @@ impl Libp2pFileStream {
 impl FileStream for Libp2pFileStream {
     fn write_message(&mut self, msg: &FileMessage) -> Result<()> {
         match msg {
-            FileMessage::Chunk(ref c) => info!("Libp2pStream: queueing Chunk(index={}, offset={})", c.chunk_index, c.byte_offset),
-            _ => info!("Libp2pStream: queueing message {:?}", msg),
+            FileMessage::Chunk(ref c) => debug!("Libp2pStream: queueing Chunk(index={}, offset={})", c.chunk_index, c.byte_offset),
+            _ => debug!("Libp2pStream: queueing message {:?}", msg),
         }
         self.tx.send(msg.clone()).map_err(|e| anyhow!("Failed to send to worker: {}", e))
     }
 
     fn read_message(&mut self) -> Result<FileMessage> {
-        info!("Libp2pStream: waiting to read message from channel...");
+        debug!("Libp2pStream: waiting to read message from channel...");
         let msg = self.rx.recv().map_err(|e| anyhow!("Failed to read from worker: {}", e))?;
         match msg {
-            FileMessage::Chunk(ref c) => info!("Libp2pStream: received Chunk(index={}, offset={}) from channel", c.chunk_index, c.byte_offset),
-            _ => info!("Libp2pStream: received message: {:?}", msg),
+            FileMessage::Chunk(ref c) => debug!("Libp2pStream: received Chunk(index={}, offset={}) from channel", c.chunk_index, c.byte_offset),
+            _ => debug!("Libp2pStream: received message: {:?}", msg),
         }
         Ok(msg)
     }
 
     fn read_message_timeout(&mut self, timeout: Duration) -> Result<FileMessage> {
-        info!("Libp2pStream: waiting to read message from channel (timeout={:?})...", timeout);
-        let msg = self.rx.recv_timeout(timeout).map_err(|e| anyhow!("Read timeout or worker closed: {}", e))?;
+        debug!("Libp2pStream: waiting to read message from channel (timeout={:?})...", timeout);
+        let msg = self.rx.recv_timeout(timeout).map_err(|e| match e {
+            flume::RecvTimeoutError::Timeout => anyhow!("Read timeout"),
+            flume::RecvTimeoutError::Disconnected => anyhow!("Worker closed: Disconnected"),
+        })?;
         match msg {
-            FileMessage::Chunk(ref c) => info!("Libp2pStream: received Chunk(index={}, offset={}) from channel", c.chunk_index, c.byte_offset),
-            _ => info!("Libp2pStream: received message: {:?}", msg),
+            FileMessage::Chunk(ref c) => debug!("Libp2pStream: received Chunk(index={}, offset={}) from channel", c.chunk_index, c.byte_offset),
+            _ => debug!("Libp2pStream: received message: {:?}", msg),
         }
         Ok(msg)
     }
@@ -555,6 +561,7 @@ fn handle_incoming_transfer_inner(
     })?;
 
     info!("Starting receive loop for {}", transfer_id);
+    let mut timeout_count = 0;
     let loop_res = loop {
         if cancel_rx.try_recv().is_ok() {
             info!("Incoming transfer {} cancelled by user (receiver loop)", transfer_id);
@@ -568,6 +575,7 @@ fn handle_incoming_transfer_inner(
 
         match stream.read_message_timeout(Duration::from_secs(5)) {
             Ok(FileMessage::Chunk(chunk)) => {
+                timeout_count = 0;
                 let plaintext = match session_key.decrypt(&chunk.data) {
                     Ok(p) => p,
                     Err(e) => { error!("Decryption failed for {}: {}", transfer_id, e); break Err(e); }
@@ -599,6 +607,7 @@ fn handle_incoming_transfer_inner(
                 }
             }
             Ok(FileMessage::Complete(complete)) => {
+                timeout_count = 0;
                 if !is_benchmark {
                     if let Some(f) = file_opt.take() {
                         f.sync_all()?;
@@ -620,8 +629,15 @@ fn handle_incoming_transfer_inner(
             }
             Ok(FileMessage::Cancel { .. }) => { info!("Incoming transfer {} cancelled by remote", transfer_id); break Ok(()); }
             Ok(FileMessage::Error(e)) => { error!("Incoming transfer {} remote error: {}", transfer_id, e.reason); db.update_transfer_status_error(&transfer_id, &e.reason)?; break Err(anyhow!("Remote error: {}", e.reason)); }
-            Ok(_) => continue,
-            Err(e) if e.to_string().to_lowercase().contains("timeout") || e.to_string().to_lowercase().contains("timed out") || e.to_string().to_lowercase().contains("deadline has elapsed") => continue,
+            Ok(_) => { timeout_count = 0; continue; }
+            Err(e) if e.to_string().to_lowercase().contains("timeout") || e.to_string().to_lowercase().contains("timed out") || e.to_string().to_lowercase().contains("deadline has elapsed") => {
+                timeout_count += 1;
+                if timeout_count >= MAX_TIMEOUT_RETRIES {
+                    error!("Incoming transfer {} timed out after {} retries", transfer_id, timeout_count);
+                    break Err(anyhow!("Transfer timed out"));
+                }
+                continue;
+            }
             Err(e) => { error!("Incoming transfer {} stream error: {}", transfer_id, e); break Err(e); }
         }
     };
@@ -710,8 +726,8 @@ fn handle_outgoing_transfer_inner(
         is_outgoing: true 
     });
 
-    let max_in_flight_bytes: usize = 50 * record.chunk_size as usize;
-    let mut in_flight: usize = 0;
+    let max_pending_acks: usize = 50;
+    let mut pending_acks: usize = 0;
 
     for chunk_meta in chunk_plan {
         if cancel_rx.try_recv().is_ok() {
@@ -732,7 +748,8 @@ fn handle_outgoing_transfer_inner(
             if chunk_meta.offset + chunk_meta.length as u64 <= resume_from { continue; }
         }
 
-        while in_flight >= max_in_flight_bytes {
+        let mut timeout_count = 0;
+        while pending_acks >= max_pending_acks {
             if cancel_rx.try_recv().is_ok() {
                 info!("Outgoing transfer {} cancelled by user (during flow control)", transfer_id);
                 let _ = stream.write_message(&FileMessage::Cancel { transfer_id: transfer_id.clone() });
@@ -745,19 +762,27 @@ fn handle_outgoing_transfer_inner(
             }
             match stream.read_message_timeout(Duration::from_secs(5)) {
                 Ok(FileMessage::Ack(a)) => {
-                    in_flight = in_flight.saturating_sub(record.chunk_size as usize);
+                    timeout_count = 0;
+                    pending_acks = pending_acks.saturating_sub(1);
                     db.update_bytes_confirmed(&transfer_id, a.bytes_confirmed)?;
                     let _ = manager.progress_tx.send(ProgressEvent::Progress { 
-    transfer_id: transfer_id.clone(), 
-    bytes_confirmed: a.bytes_confirmed,
-    total_bytes: record.total_bytes as u64
-});
+                        transfer_id: transfer_id.clone(), 
+                        bytes_confirmed: a.bytes_confirmed,
+                        total_bytes: record.total_bytes as u64
+                    });
                 }
                 Ok(FileMessage::Error(e)) => return Err(anyhow!("Receiver error: {}", e.reason)),
                 Ok(FileMessage::Cancel { .. }) => return Ok(()),
-                Err(e) if e.to_string().to_lowercase().contains("timeout") || e.to_string().to_lowercase().contains("timed out") || e.to_string().to_lowercase().contains("deadline has elapsed") => continue,
+                Err(e) if e.to_string().to_lowercase().contains("timeout") || e.to_string().to_lowercase().contains("timed out") || e.to_string().to_lowercase().contains("deadline has elapsed") => {
+                    timeout_count += 1;
+                    if timeout_count >= MAX_TIMEOUT_RETRIES {
+                        error!("Outgoing transfer {} timed out in flow control after {} retries", transfer_id, timeout_count);
+                        return Err(anyhow!("Transfer timed out"));
+                    }
+                    continue;
+                }
                 Err(e) => return Err(e),
-                _ => continue,
+                _ => { timeout_count = 0; continue; }
             }
         }
 
@@ -774,12 +799,13 @@ fn handle_outgoing_transfer_inner(
         let chunk_hash = blake3::hash(&chunk_data).to_hex().to_string();
         let encrypted = session_key.encrypt(&chunk_data)?;
         stream.write_message(&FileMessage::Chunk(ChunkFrame { transfer_id: transfer_id.clone(), chunk_index: chunk_meta.index, byte_offset: chunk_meta.offset, data: encrypted, chunk_hash }))?;
-        in_flight += chunk_meta.length as usize;
+        pending_acks += 1;
         
         manager.check_crash_trigger(&transfer_id, chunk_meta.offset + chunk_meta.length as u64);
     }
 
-    while in_flight > 0 {
+    let mut timeout_count = 0;
+    while pending_acks > 0 {
         if cancel_rx.try_recv().is_ok() {
             info!("Outgoing transfer {} cancelled by user (during final drain)", transfer_id);
             let _ = stream.write_message(&FileMessage::Cancel { transfer_id: transfer_id.clone() });
@@ -792,19 +818,27 @@ fn handle_outgoing_transfer_inner(
         }
         match stream.read_message_timeout(Duration::from_secs(5)) {
             Ok(FileMessage::Ack(a)) => {
-                in_flight = in_flight.saturating_sub(record.chunk_size as usize);
+                timeout_count = 0;
+                pending_acks = pending_acks.saturating_sub(1);
                 db.update_bytes_confirmed(&transfer_id, a.bytes_confirmed)?;
                 let _ = manager.progress_tx.send(ProgressEvent::Progress { 
-    transfer_id: transfer_id.clone(), 
-    bytes_confirmed: a.bytes_confirmed,
-    total_bytes: record.total_bytes as u64
-});
+                    transfer_id: transfer_id.clone(), 
+                    bytes_confirmed: a.bytes_confirmed,
+                    total_bytes: record.total_bytes as u64
+                });
             }
             Ok(FileMessage::Error(e)) => return Err(anyhow!("Receiver error: {}", e.reason)),
             Ok(FileMessage::Cancel { .. }) => return Ok(()),
-            Err(e) if e.to_string().to_lowercase().contains("timeout") || e.to_string().to_lowercase().contains("timed out") || e.to_string().to_lowercase().contains("deadline has elapsed") => continue,
+            Err(e) if e.to_string().to_lowercase().contains("timeout") || e.to_string().to_lowercase().contains("timed out") || e.to_string().to_lowercase().contains("deadline has elapsed") => {
+                timeout_count += 1;
+                if timeout_count >= MAX_TIMEOUT_RETRIES {
+                    error!("Outgoing transfer {} timed out in final drain after {} retries", transfer_id, timeout_count);
+                    return Err(anyhow!("Transfer timed out"));
+                }
+                continue;
+            }
             Err(e) => return Err(e),
-            _ => continue,
+            _ => { timeout_count = 0; continue; }
         }
     }
 
@@ -846,8 +880,8 @@ mod tests {
         }
         fn read_message_timeout(&mut self, timeout: Duration) -> Result<FileMessage> {
             self.rx.recv_timeout(timeout).map_err(|e| match e {
-                flume::RecvTimeoutError::Timeout => anyhow!("Timed out"),
-                flume::RecvTimeoutError::Disconnected => anyhow!("Stream closed"),
+                flume::RecvTimeoutError::Timeout => anyhow!("Read timeout"),
+                flume::RecvTimeoutError::Disconnected => anyhow!("Worker closed: Disconnected"),
             })
         }
     }
@@ -1024,7 +1058,10 @@ mod tests {
             }
             fn read_message(&mut self) -> Result<FileMessage> { self.rx.recv().map_err(|_| anyhow!("Stream closed")) }
             fn read_message_timeout(&mut self, timeout: Duration) -> Result<FileMessage> {
-                self.rx.recv_timeout(timeout).map_err(|_| anyhow!("Timeout"))
+                self.rx.recv_timeout(timeout).map_err(|e| match e {
+                    flume::RecvTimeoutError::Timeout => anyhow!("Read timeout"),
+                    flume::RecvTimeoutError::Disconnected => anyhow!("Worker closed: Disconnected"),
+                })
             }
         }
 
@@ -1099,8 +1136,8 @@ mod tests {
         fn read_message(&mut self) -> Result<FileMessage> { self.rx.recv().map_err(|_| anyhow!("Stream closed")) }
         fn read_message_timeout(&mut self, timeout: Duration) -> Result<FileMessage> {
             self.rx.recv_timeout(timeout).map_err(|e| match e {
-                flume::RecvTimeoutError::Timeout => anyhow!("Timed out"),
-                flume::RecvTimeoutError::Disconnected => anyhow!("Stream closed"),
+                flume::RecvTimeoutError::Timeout => anyhow!("Read timeout"),
+                flume::RecvTimeoutError::Disconnected => anyhow!("Worker closed: Disconnected"),
             })
         }
     }
@@ -1155,8 +1192,8 @@ mod tests {
         fn read_message(&mut self) -> Result<FileMessage> { self.rx.recv().map_err(|_| anyhow!("Stream closed")) }
         fn read_message_timeout(&mut self, timeout: Duration) -> Result<FileMessage> {
             self.rx.recv_timeout(timeout).map_err(|e| match e {
-                flume::RecvTimeoutError::Timeout => anyhow!("Timed out"),
-                flume::RecvTimeoutError::Disconnected => anyhow!("Stream closed"),
+                flume::RecvTimeoutError::Timeout => anyhow!("Read timeout"),
+                flume::RecvTimeoutError::Disconnected => anyhow!("Worker closed: Disconnected"),
             })
         }
     }
