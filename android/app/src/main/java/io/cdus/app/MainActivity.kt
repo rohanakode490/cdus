@@ -47,6 +47,9 @@ import io.cdus.app.ui.components.DevicePickerDialog
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var multicastLock: WifiManager.MulticastLock? = null
@@ -74,8 +77,8 @@ class MainActivity : ComponentActivity() {
             if (clipboard.hasPrimaryClip()) {
                 val clipData = clipboard.primaryClip
                 if (clipData != null && clipData.itemCount > 0) {
-                    val content = clipData.getItemAt(0).text?.toString()
-                    if (content != null) {
+                    val content = clipData.getItemAt(0).coerceToText(this).toString()
+                    if (content.isNotEmpty()) {
                         val sharedPref = getSharedPreferences("cdus_settings", Context.MODE_PRIVATE)
                         if (sharedPref.getBoolean("clipboard_sync", false)) {
                             // Only broadcast if it's new
@@ -84,7 +87,9 @@ class MainActivity : ComponentActivity() {
                             if (currentHash != lastHash) {
                                 sharedPref.edit().putString("last_clip_hash", currentHash).apply()
                                 Logger.i("New clipboard content detected on resume, broadcasting")
-                                uniffi.cdus_ffi.broadcastClipboard(content)
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    uniffi.cdus_ffi.broadcastClipboard(content)
+                                }
                             }
                         }
                     }
@@ -107,7 +112,9 @@ class MainActivity : ComponentActivity() {
                 intent.getStringExtra(Intent.EXTRA_TEXT)?.let { text ->
                     Logger.i("Shared text received: $text")
                     // Pre-fill or broadcast directly
-                    uniffi.cdus_ffi.broadcastClipboard(text)
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        uniffi.cdus_ffi.broadcastClipboard(text)
+                    }
                 }
             } else {
                 val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

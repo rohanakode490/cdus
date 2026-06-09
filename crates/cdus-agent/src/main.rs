@@ -204,8 +204,9 @@ fn main() {
     // Start clipboard watcher thread
     let clipboard_tx = tx.clone();
     let last_written_watcher = Arc::clone(&last_written);
+    let store_watcher = Arc::clone(&store);
     thread::spawn(move || {
-        clipboard_watcher(clipboard_tx, last_written_watcher);
+        clipboard_watcher(clipboard_tx, last_written_watcher, store_watcher);
     });
 
     let discovered_devices = Arc::new(Mutex::new(
@@ -910,47 +911,62 @@ fn main() {
     }
 }
 
-fn clipboard_watcher(tx: Sender<IpcMessage>, last_written: Arc<Mutex<Option<String>>>) {
+fn clipboard_watcher(
+    tx: Sender<IpcMessage>,
+    last_written: Arc<Mutex<Option<String>>>,
+    store: Arc<Store>,
+) {
     #[cfg(not(target_os = "android"))]
     {
         use arboard::Clipboard;
 
-        let mut clipboard = match Clipboard::new() {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Failed to initialize clipboard: {}", e);
-                return;
-            }
-        };
+        let mut clipboard_opt = Clipboard::new().ok();
+        if clipboard_opt.is_none() {
+            tracing::warn!("Failed to initialize clipboard on startup, will retry in background");
+        }
 
-        let mut last_content = clipboard.get_text().unwrap_or_default();
-        info!(
-            "Clipboard watcher initialized with initial content length: {}",
-            last_content.len()
-        );
+        // Initialize last_content from state DB
+        let db_content = store.get_state("last_clipboard_content").ok().flatten();
+        let mut last_content = db_content.unwrap_or_default();
 
         loop {
-            if let Ok(current_content) = clipboard.get_text() {
-                if current_content != last_content {
-                    let mut lw = last_written.lock();
-                    if let Some(ref val) = *lw {
-                        if val == &current_content {
-                            info!("Ignoring clipboard change (self-triggered)");
-                            last_content = current_content;
-                            *lw = None;
-                            continue;
+            if let Some(ref mut clipboard) = clipboard_opt {
+                if let Ok(current_content) = clipboard.get_text() {
+                    if !current_content.trim().is_empty() && current_content != last_content {
+                        let mut lw = last_written.lock();
+                        if let Some(ref val) = *lw {
+                            if val == &current_content {
+                                info!("Ignoring clipboard change (self-triggered)");
+                                last_content = current_content;
+                                *lw = None;
+                                continue;
+                            }
                         }
-                    }
 
-                    info!("Clipboard change detected");
-                    last_content = current_content.clone();
-                    let _ = tx.send(IpcMessage::ClipboardChanged {
-                        content: current_content,
-                        timestamp: now_ms(),
-                    });
+                        info!("Clipboard change detected");
+                        last_content = current_content.clone();
+                        let _ = tx.send(IpcMessage::ClipboardChanged {
+                            content: current_content,
+                            timestamp: now_ms(),
+                        });
+                    }
+                }
+            } else {
+                // Retry initializing clipboard
+                match Clipboard::new() {
+                    Ok(mut c) => {
+                        info!("Clipboard watcher successfully initialized on retry");
+                        if last_content.is_empty() {
+                            last_content = c.get_text().unwrap_or_default();
+                        }
+                        clipboard_opt = Some(c);
+                    }
+                    Err(_) => {
+                        // Silently retry next time
+                    }
                 }
             }
-            thread::sleep(Duration::from_secs(1));
+            thread::sleep(Duration::from_secs(2));
         }
     }
     #[cfg(target_os = "android")]

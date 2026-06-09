@@ -293,12 +293,36 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                         while let Ok(msg) = rx.recv() {
                             match msg {
                                 IpcMessage::SetClipboard {
-                                    content, source, ..
+                                    content,
+                                    timestamp,
+                                    source,
                                 } => {
-                                    if let Some(listener) =
-                                        CLIPBOARD_LISTENER.lock().unwrap().as_ref()
-                                    {
-                                        listener.on_clipboard_update(content, source);
+                                    if content.trim().is_empty() {
+                                        continue;
+                                    }
+                                    let mut should_apply = true;
+                                    if let Some(store) = STORE.lock().unwrap().as_ref() {
+                                        if let Ok(Some(last_ts_str)) = store.get_state("last_sync_timestamp") {
+                                            if let Ok(last_ts) = last_ts_str.parse::<u64>() {
+                                                if timestamp <= last_ts {
+                                                    should_apply = false;
+                                                    info!("FFI: Ignoring outdated SetClipboard request from peer (timestamp: {}, last: {})", timestamp, last_ts);
+                                                }
+                                            }
+                                        }
+                                        
+                                        if should_apply {
+                                            let _ = store.append_event(content.as_bytes(), &source);
+                                            let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
+                                            let _ = store.set_state("last_clipboard_content", &content);
+                                        }
+                                    }
+                                    if should_apply {
+                                        if let Some(listener) =
+                                            CLIPBOARD_LISTENER.lock().unwrap().as_ref()
+                                        {
+                                            listener.on_clipboard_update(content, source);
+                                        }
                                     }
                                 }
                                 IpcMessage::DeviceDiscovered {
@@ -535,15 +559,20 @@ pub fn get_clipboard_history(limit: u32) -> Vec<ClipboardHistoryItem> {
 
 #[uniffi::export]
 pub fn broadcast_clipboard(content: String) {
+    if content.trim().is_empty() {
+        return;
+    }
     if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs();
+            .as_millis() as u64;
 
         // Save to local store first
         if let Some(store) = STORE.lock().unwrap().as_ref() {
             let _ = store.append_event(content.as_bytes(), "Local");
+            let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
+            let _ = store.set_state("last_clipboard_content", &content);
         }
 
         pm.sync_manager

@@ -117,14 +117,14 @@ async function checkSystemClipboard() {
     const syncEnabled: string | null = await invoke("get_state", { key: "sync_enabled" });
     if (syncEnabled !== "true") return;
 
-    const content = await navigator.clipboard.readText();
+    const content: string = await invoke("read_system_clipboard");
     if (content && content !== lastLocalClipboard) {
       lastLocalClipboard = content;
       console.log("New system clipboard detected on Desktop, broadcasting");
       await invoke("broadcast_clipboard", { content });
     }
   } catch (err) {
-    // Might fail if window not focused, ignore
+    // Ignore error (e.g. if clipboard is empty or error reading it)
   }
 }
 

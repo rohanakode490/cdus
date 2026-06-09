@@ -74,10 +74,14 @@ pub fn daemon_loop(
                     let _ = tx.send(IpcMessage::Pong);
                 }
                 IpcMessage::ClipboardChanged { content, timestamp } => {
+                    if content.trim().is_empty() {
+                        continue;
+                    }
                     let mut last_ts = last_processed_timestamp.lock();
                     if timestamp > *last_ts {
                         *last_ts = timestamp;
                         let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
+                        let _ = store.set_state("last_clipboard_content", &content);
 
                         info!("Syncing clipboard content: {}", content);
                         if let Err(e) = store.append_event(content.as_bytes(), "Local") {
@@ -98,10 +102,14 @@ pub fn daemon_loop(
                     timestamp,
                     source,
                 } => {
+                    if content.trim().is_empty() {
+                        continue;
+                    }
                     let mut last_ts = last_processed_timestamp.lock();
                     if timestamp > *last_ts {
                         *last_ts = timestamp;
                         let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
+                        let _ = store.set_state("last_clipboard_content", &content);
 
                         info!("Writing to clipboard from {}: {}", source, content);
 
@@ -402,7 +410,7 @@ pub fn daemon_loop(
                                     timestamp: std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .unwrap()
-                                        .as_secs(),
+                                        .as_millis() as u64,
                                 },
                             ));
                         } else {

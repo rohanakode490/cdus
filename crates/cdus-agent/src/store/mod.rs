@@ -493,7 +493,7 @@ impl Store {
         let conn = self.events_conn.lock();
 
         let mut stmt = conn.prepare(
-            "SELECT id, payload, source, timestamp FROM events ORDER BY id DESC LIMIT ?",
+            "SELECT id, payload, source, timestamp FROM events WHERE length(payload) > 0 ORDER BY id DESC LIMIT ?",
         )?;
 
         let event_iter = stmt.query_map([limit], |row| {
@@ -546,32 +546,49 @@ impl Store {
             .to_string();
         let service_name = format!("com.cdus.agent.{}", &dir_hash[..8]);
 
-        if let Some(existing_id) = self.get_state("node_id")? {
-            let entry = Entry::new(&service_name, "private_key")?;
+        let mut loaded_priv_bytes = None;
+
+        // Try keyring first
+        if let Ok(entry) = Entry::new(&service_name, "private_key") {
             if let Ok(priv_key_hex) = entry.get_password() {
                 if let Ok(priv_bytes) = hex::decode(priv_key_hex) {
-                    if self.get_state("id_migrated_v3")?.is_some() {
-                        // Check if it's actually a valid PeerId string (Base58)
-                        if existing_id.parse::<libp2p::PeerId>().is_ok() {
-                            return Ok((existing_id, priv_bytes));
-                        }
-                    }
+                    loaded_priv_bytes = Some(priv_bytes);
+                }
+            }
+        }
 
-                    // Attempt to migrate existing hex ID to PeerId
-                    let mut temp_builder = Builder::new(params.clone());
-                    temp_builder = temp_builder.local_private_key(&priv_bytes);
-                    if let Ok(_handshake) = temp_builder.build_initiator() {
-                        // In ed25519-dalek 2.0+, from_bytes returns SigningKey directly
-                        if let Ok(bytes) = priv_bytes.clone().try_into() {
-                            let signing_key = ed25519_dalek::SigningKey::from_bytes(&bytes);
-                            let pub_bytes = signing_key.verifying_key().to_bytes().to_vec();
-                            let pub_hex = hex::encode(&pub_bytes);
-                            if let Ok(node_id) = crate::utils::hex_to_peer_id(&pub_hex) {
-                                info!("Migrating hex node_id to PeerId: {}", node_id);
-                                self.set_state("node_id", &node_id)?;
-                                self.set_state("id_migrated_v3", "true")?;
-                                return Ok((node_id, priv_bytes));
-                            }
+        // Try database if keyring failed or was not available
+        if loaded_priv_bytes.is_none() {
+            if let Ok(Some(priv_key_hex)) = self.get_state("private_key") {
+                if let Ok(priv_bytes) = hex::decode(priv_key_hex) {
+                    info!("Loaded identity private key from state database fallback.");
+                    loaded_priv_bytes = Some(priv_bytes);
+                }
+            }
+        }
+
+        if let Some(priv_bytes) = loaded_priv_bytes {
+            if let Some(existing_id) = self.get_state("node_id")? {
+                if self.get_state("id_migrated_v3")?.is_some() {
+                    // Check if it's actually a valid PeerId string (Base58)
+                    if existing_id.parse::<libp2p::PeerId>().is_ok() {
+                        return Ok((existing_id, priv_bytes));
+                    }
+                }
+
+                // Attempt to migrate existing hex ID to PeerId
+                let mut temp_builder = Builder::new(params.clone());
+                temp_builder = temp_builder.local_private_key(&priv_bytes);
+                if let Ok(_handshake) = temp_builder.build_initiator() {
+                    if let Ok(bytes) = priv_bytes.clone().try_into() {
+                        let signing_key = ed25519_dalek::SigningKey::from_bytes(&bytes);
+                        let pub_bytes = signing_key.verifying_key().to_bytes().to_vec();
+                        let pub_hex = hex::encode(&pub_bytes);
+                        if let Ok(node_id) = crate::utils::hex_to_peer_id(&pub_hex) {
+                            info!("Migrating hex node_id to PeerId: {}", node_id);
+                            self.set_state("node_id", &node_id)?;
+                            self.set_state("id_migrated_v3", "true")?;
+                            return Ok((node_id, priv_bytes));
                         }
                     }
                 }
@@ -589,8 +606,16 @@ impl Store {
 
         self.set_state("node_id", &node_id)?;
         self.set_state("id_migrated_v3", "true")?; // Bump version to v3
-        let entry = Entry::new(&service_name, "private_key")?;
-        entry.set_password(&hex::encode(&priv_bytes))?;
+        
+        // Save to local database
+        self.set_state("private_key", &hex::encode(&priv_bytes))?;
+
+        // Save to keyring (best effort, do not crash if unsupported/fails)
+        if let Ok(entry) = Entry::new(&service_name, "private_key") {
+            if let Err(e) = entry.set_password(&hex::encode(&priv_bytes)) {
+                info!("Keyring is not available or failed to save private key (falling back to database): {}", e);
+            }
+        }
 
         if self.get_state("device_name")?.is_none() {
             let hostname = gethostname::gethostname()

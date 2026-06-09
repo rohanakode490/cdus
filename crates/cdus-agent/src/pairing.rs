@@ -1214,6 +1214,22 @@ fn run_turn_sync_session(
         }
     }
 
+    // Initial Clipboard Sync: Send our latest clipboard update to the peer via TURN
+    if let Ok(Some(ts_str)) = store.get_state("last_sync_timestamp") {
+        if let Ok(ts) = ts_str.parse::<u64>() {
+            if let Ok(Some(content)) = store.get_state("last_clipboard_content") {
+                info!("Sending initial clipboard update on connection to {} via TURN: timestamp={}", label, ts);
+                let sync_msg = SyncMessage::ClipboardUpdate { content, timestamp: ts };
+                if let Ok(data) = sync_msg.to_vec() {
+                    let mut out = vec![0u8; data.len() + 100];
+                    if let Ok(n) = transport.write_message(&data, &mut out) {
+                        let _ = conn.tx.send(out[..n].to_vec());
+                    }
+                }
+            }
+        }
+    }
+
     loop {
         // 1. Check for incoming messages from peer via TURN
         if let Ok(data) = conn.rx.try_recv() {
@@ -2146,6 +2162,19 @@ fn run_sync_session(
         let pex_msg = SyncMessage::PeerExchange { peers: pex_records };
         if let Ok(data) = pex_msg.to_vec() {
             let _ = write_ws_framed(&mut ws, &mut transport, &data);
+        }
+    }
+
+    // Initial Clipboard Sync: Send our latest clipboard update to the peer
+    if let Ok(Some(ts_str)) = store.get_state("last_sync_timestamp") {
+        if let Ok(ts) = ts_str.parse::<u64>() {
+            if let Ok(Some(content)) = store.get_state("last_clipboard_content") {
+                info!("Sending initial clipboard update on connection to {}: timestamp={}", label, ts);
+                let sync_msg = SyncMessage::ClipboardUpdate { content, timestamp: ts };
+                if let Ok(data) = sync_msg.to_vec() {
+                    let _ = write_ws_framed(&mut ws, &mut transport, &data);
+                }
+            }
         }
     }
 

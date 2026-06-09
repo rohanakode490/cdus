@@ -68,6 +68,26 @@ fn ping_agent() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn read_system_clipboard() -> Result<String, String> {
+    use arboard::Clipboard;
+    let mut clipboard = Clipboard::new().map_err(|e| e.to_string())?;
+    clipboard.get_text().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn broadcast_clipboard(content: String) -> Result<String, String> {
+    let msg = IpcMessage::ClipboardChanged {
+        content,
+        timestamp: now_ms(),
+    };
+
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        response => Ok(format!("{:?}", response)),
+    }
+}
+
+#[tauri::command]
 fn set_clipboard(content: String) -> Result<String, String> {
     let msg = IpcMessage::SetClipboard {
         content,
@@ -535,7 +555,9 @@ pub fn run() {
             clear_finished_transfers,
             start_benchmark,
             get_qr_pairing_payload,
-            pair_with_qr
+            pair_with_qr,
+            read_system_clipboard,
+            broadcast_clipboard
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

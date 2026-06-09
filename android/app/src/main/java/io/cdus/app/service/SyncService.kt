@@ -20,6 +20,9 @@ import io.cdus.app.data.FileTransferInfo
 import io.cdus.app.data.TransferStatus
 import io.cdus.app.utils.FileUtils
 import io.cdus.app.utils.Logger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class SyncService : Service(), ClipboardListener, FileTransferListener {
 
@@ -53,8 +56,8 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
             if (clipboardManager.hasPrimaryClip()) {
                 val clipData = clipboardManager.primaryClip
                 if (clipData != null && clipData.itemCount > 0) {
-                    val content = clipData.getItemAt(0).text?.toString()
-                    if (content != null && content != lastClipboardContent) {
+                    val content = clipData.getItemAt(0).coerceToText(this).toString()
+                    if (content.isNotEmpty() && content != lastClipboardContent) {
                         val sharedPref = getSharedPreferences("cdus_settings", Context.MODE_PRIVATE)
                         if (sharedPref.getBoolean("clipboard_sync", false)) {
                             // Only broadcast if it's new
@@ -64,7 +67,9 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
                                 sharedPref.edit().putString("last_clip_hash", currentHash).apply()
                                 lastClipboardContent = content
                                 Logger.i("New system clipboard content detected, broadcasting")
-                                uniffi.cdus_ffi.broadcastClipboard(content)
+                                CoroutineScope(Dispatchers.IO).launch {
+                                    uniffi.cdus_ffi.broadcastClipboard(content)
+                                }
                             }
                         }
                     }
@@ -79,6 +84,16 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         Logger.i("Received remote clipboard update from $source: $content")
         if (content != lastClipboardContent) {
             lastClipboardContent = content
+            
+            // Save hash to preferences to prevent self-echo when MainActivity gains focus
+            try {
+                val sharedPref = getSharedPreferences("cdus_settings", Context.MODE_PRIVATE)
+                val currentHash = content.hashCode().toString()
+                sharedPref.edit().putString("last_clip_hash", currentHash).apply()
+            } catch (e: Exception) {
+                Logger.e("Failed to update last_clip_hash in preferences: ${e.message}")
+            }
+
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 try {
                     val clip = android.content.ClipData.newPlainText("CDUS Remote", content)

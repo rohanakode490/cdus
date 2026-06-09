@@ -45,7 +45,10 @@ fun ClipboardScreen() {
     LaunchedEffect(Unit) {
         while (isActive) {
             if (!isRefreshing) {
-                clipboardHistory = getClipboardHistory(50u)
+                val freshHistory = withContext(Dispatchers.IO) {
+                    getClipboardHistory(50u)
+                }
+                clipboardHistory = freshHistory
             }
             delay(2000) // Poll every 2 seconds for updates
         }
