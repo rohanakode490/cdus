@@ -1,0 +1,9 @@
+[Trigger]
+Operation = Upgrade
+Type = Path
+Target = usr/bin/cdus-agent
+
+[Action]
+Description = Restarting CDUS user services...
+When = PostTransaction
+Exec = /usr/share/cdus/post-upgrade.sh

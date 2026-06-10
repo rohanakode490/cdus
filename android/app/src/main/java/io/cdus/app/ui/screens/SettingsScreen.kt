@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,6 +18,10 @@ import android.content.Context
 import androidx.core.content.ContextCompat
 import io.cdus.app.service.SyncService
 import android.content.SharedPreferences
+import io.cdus.app.utils.Logger
+import android.net.Uri
+import android.provider.Settings
+import android.widget.Toast
 
 @Composable
 fun SettingsScreen() {
@@ -45,6 +51,34 @@ fun SettingsScreen() {
         mutableStateOf(sharedPref.getBoolean("developer_mode", false)) 
     }
     var tapCount by remember { mutableIntStateOf(0) }
+
+    val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager }
+    var isIgnoringBatteryOptimizations by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                powerManager.isIgnoringBatteryOptimizations(context.packageName)
+            } else {
+                true
+            }
+        )
+    }
+
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                isIgnoringBatteryOptimizations = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    powerManager.isIgnoringBatteryOptimizations(context.packageName)
+                } else {
+                    true
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -111,6 +145,65 @@ fun SettingsScreen() {
                     },
                     valueRange = 10f..200f
                 )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(text = "Background Performance", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    text = "Android limits background network and synchronization tasks (Doze mode) to save power. Exempting CDUS from battery optimization ensures instant clipboard sync and file transfer when the screen is off.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                        Text(text = "Run in Background", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            text = if (isIgnoringBatteryOptimizations) "Exempted from battery restrictions" else "Subject to battery optimization",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isIgnoringBatteryOptimizations) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                    Switch(
+                        checked = isIgnoringBatteryOptimizations,
+                        onCheckedChange = { enabled ->
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                try {
+                                    if (enabled) {
+                                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                            data = Uri.parse("package:${context.packageName}")
+                                        }
+                                        context.startActivity(intent)
+                                    } else {
+                                        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                        context.startActivity(intent)
+                                        Toast.makeText(
+                                            context,
+                                            "Please find CDUS and select 'Optimize' to enable battery restrictions.",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                } catch (e: Exception) {
+                                    Logger.e("Failed to request battery status change: ${e.message}")
+                                }
+                            }
+                        }
+                    )
+                }
             }
         }
 

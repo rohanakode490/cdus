@@ -1,0 +1,20 @@
+#!/bin/bash
+# cdus-agent.postinst - Debian package post-installation script
+
+set -e
+
+case "$1" in
+    configure|abort-upgrade|abort-remove|abort-deconfigure)
+        # Run the post-upgrade script if it exists
+        if [ -x /usr/share/cdus/post-upgrade.sh ]; then
+            /usr/share/cdus/post-upgrade.sh
+        fi
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0

@@ -20,6 +20,7 @@ import io.cdus.app.data.FileTransferInfo
 import io.cdus.app.data.TransferStatus
 import io.cdus.app.utils.FileUtils
 import io.cdus.app.utils.Logger
+import io.cdus.app.CoreInitializer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -28,6 +29,8 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
 
     companion object {
         const val ACTION_STOP_SERVICE = "io.cdus.app.service.STOP_SERVICE"
+        @Volatile
+        var isRunning: Boolean = false
     }
 
     private val CHANNEL_ID = "sync_channel"
@@ -43,6 +46,7 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
 
     override fun onCreate() {
         super.onCreate()
+        isRunning = true
         createNotificationChannels()
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboardManager.addPrimaryClipChangedListener(clipChangedListener)
@@ -470,7 +474,9 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
 
     override fun onDestroy() {
         super.onDestroy()
+        isRunning = false
         clipboardManager.removePrimaryClipChangedListener(clipChangedListener)
+        CoreInitializer.cleanup()
         Logger.i("SyncService destroyed")
     }
 
