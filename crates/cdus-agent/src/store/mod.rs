@@ -460,33 +460,121 @@ impl Store {
     }
 
     pub fn append_event(&self, payload: &[u8], source: &str) -> Result<String> {
+        let new_hash = {
+            let conn = self.events_conn.lock();
+
+            let last_row: Option<(String, Vec<u8>)> = conn
+                .query_row(
+                    "SELECT hash, payload FROM events ORDER BY id DESC LIMIT 1",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                )
+                .optional()?;
+
+            if let Some((prev_hash, prev_payload)) = last_row {
+                let prev_str = String::from_utf8_lossy(&prev_payload);
+                let current_str = String::from_utf8_lossy(payload);
+                if prev_str.trim() == current_str.trim() {
+                    info!("Payload is identical (trimmed) to the most recent event, skipping append.");
+                    return Ok(prev_hash);
+                }
+            }
+
+            // Global deduplication: Find and delete any existing rows with matching trimmed payload.
+            let current_str = String::from_utf8_lossy(payload);
+            let current_trimmed = current_str.trim();
+
+            let mut stmt = conn.prepare("SELECT id, payload FROM events")?;
+            let event_rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?;
+
+            let mut ids_to_delete = Vec::new();
+            for r in event_rows {
+                if let Ok((id, db_payload)) = r {
+                    let db_str = String::from_utf8_lossy(&db_payload);
+                    if db_str.trim() == current_trimmed {
+                        ids_to_delete.push(id);
+                    }
+                }
+            }
+
+            for id in ids_to_delete {
+                conn.execute("DELETE FROM events WHERE id = ?", [id])?;
+            }
+
+            let last_hash: Option<String> = conn
+                .query_row(
+                    "SELECT hash FROM events ORDER BY id DESC LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+
+            let mut hasher = blake3::Hasher::new();
+            if let Some(prev_hash_str) = last_hash {
+                hasher.update(prev_hash_str.as_bytes());
+            } else {
+                hasher.update(b"CDUS_GENESIS");
+            }
+            hasher.update(payload);
+            hasher.update(source.as_bytes());
+            let hash = hasher.finalize().to_hex().to_string();
+
+            conn.execute(
+                "INSERT INTO events (payload, source, hash) VALUES (?1, ?2, ?3)",
+                (payload, source, &hash),
+            )?;
+
+            info!("Appended event from {} with hash: {}", source, hash);
+            hash
+        };
+
+        // Prune events based on history limit and auto-expiry configurations
+        let _ = self.prune_events();
+
+        Ok(new_hash)
+    }
+
+    pub fn delete_event(&self, id: i64) -> Result<()> {
+        let conn = self.events_conn.lock();
+        conn.execute("DELETE FROM events WHERE id = ?", [id])?;
+        Ok(())
+    }
+
+    pub fn clear_events(&self) -> Result<()> {
+        let conn = self.events_conn.lock();
+        conn.execute("DELETE FROM events", [])?;
+        Ok(())
+    }
+
+    pub fn prune_events(&self) -> Result<()> {
+        let limit = self.get_state("clipboard_limit")
+            .unwrap_or(None)
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(50);
+        let days = self.get_state("clipboard_expiry_days")
+            .unwrap_or(None)
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(7);
+
         let conn = self.events_conn.lock();
 
-        let last_hash: Option<String> = conn
-            .query_row(
-                "SELECT hash FROM events ORDER BY id DESC LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
-
-        let mut hasher = blake3::Hasher::new();
-        if let Some(prev_hash_str) = last_hash {
-            hasher.update(prev_hash_str.as_bytes());
-        } else {
-            hasher.update(b"CDUS_GENESIS");
-        }
-        hasher.update(payload);
-        hasher.update(source.as_bytes());
-        let new_hash = hasher.finalize().to_hex().to_string();
-
+        // 1. Delete events older than expiry days
         conn.execute(
-            "INSERT INTO events (payload, source, hash) VALUES (?1, ?2, ?3)",
-            (payload, source, &new_hash),
+            &format!("DELETE FROM events WHERE timestamp < datetime('now', '-{} days')", days),
+            [],
         )?;
 
-        info!("Appended event from {} with hash: {}", source, new_hash);
-        Ok(new_hash)
+        // 2. Keep only the latest 'limit' events
+        conn.execute(
+            "DELETE FROM events WHERE id NOT IN (
+                SELECT id FROM events ORDER BY id DESC LIMIT ?
+            )",
+            [limit],
+        )?;
+
+        Ok(())
     }
 
     pub fn get_recent_events(&self, limit: u32) -> Result<Vec<ClipboardEvent>> {
@@ -498,12 +586,15 @@ impl Store {
 
         let event_iter = stmt.query_map([limit], |row| {
             let payload: Vec<u8> = row.get(1)?;
+            let content = String::from_utf8(payload)
+                .unwrap_or_else(|_| "[invalid utf8]".to_string());
+            let is_sensitive = cdus_common::is_sensitive_content(&content);
             Ok(ClipboardEvent {
                 id: row.get(0)?,
-                content: String::from_utf8(payload)
-                    .unwrap_or_else(|_| "[invalid utf8]".to_string()),
+                content,
                 source: row.get(2)?,
                 timestamp: row.get(3)?,
+                is_sensitive,
             })
         })?;
 
@@ -759,5 +850,29 @@ mod tests {
         assert_eq!(events[0].source, "iPhone");
         assert_eq!(events[1].content, "event1");
         assert_eq!(events[1].source, "Local");
+    }
+
+    #[test]
+    fn test_append_event_deduplication() {
+        let dir = tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+
+        let h1 = store.append_event(b"same_content", "Local").unwrap();
+        let h2 = store.append_event(b"same_content\n", "Local").unwrap();
+        let h3 = store.append_event(b"different_content", "Local").unwrap();
+        let h4 = store.append_event(b"same_content ", "Local").unwrap();
+
+        assert_eq!(h1, h2);
+        assert_ne!(h2, h3);
+        assert_ne!(h3, h4);
+
+        let events = store.get_recent_events(10).unwrap();
+        // same_content (consecutive duplicate with newline) should be skipped once.
+        // different_content should be appended.
+        // same_content (non-consecutive with trailing space) should trigger global deduplication:
+        // the old instance of "same_content" is deleted, and "same_content " is moved/appended to the top.
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].content, "same_content ");
+        assert_eq!(events[1].content, "different_content");
     }
 }

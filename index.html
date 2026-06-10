@@ -166,7 +166,20 @@
         </div>
       </div>
       <div id="view-clipboard" class="view">
-        <h2>Clipboard</h2>
+        <div class="header-with-action">
+          <div class="header-main">
+            <h2>Clipboard History</h2>
+            <p class="setting-hint">Recent synced clipboard contents across your devices.</p>
+          </div>
+          <div class="header-actions">
+            <button id="clear-history-btn" class="danger-btn">Clear History</button>
+          </div>
+        </div>
+
+        <div class="search-container">
+          <input type="text" id="clipboard-search" placeholder="Search clipboard contents or devices..." />
+        </div>
+
         <div id="clipboard-list"></div>
         <p class="empty-state hidden" id="clipboard-empty">
           Clipboard history is empty.

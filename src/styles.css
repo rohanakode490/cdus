@@ -1041,3 +1041,117 @@ input[type="text"] {
     color: #24c8db;
   }
 }
+
+/* Clipboard History Features */
+.search-container {
+  margin-bottom: 16px;
+}
+.search-container input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  background-color: #ffffff;
+  color: #333333;
+  font-size: 0.95rem;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.search-container input:focus {
+  border-color: #24c8db;
+}
+@media (prefers-color-scheme: dark) {
+  .search-container input {
+    border-color: #333333;
+    background-color: #262626;
+    color: #eeeeee;
+  }
+  .search-container input:focus {
+    border-color: #24c8db;
+  }
+  .search-container input::placeholder {
+    color: #777777;
+  }
+}
+
+.danger-btn {
+  background-color: #ffebee;
+  color: #c62828;
+  border: 1px solid #ffcdd2;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+.danger-btn:hover {
+  background-color: #ffcdd2;
+}
+@media (prefers-color-scheme: dark) {
+  .danger-btn {
+    background-color: #3e2723;
+    color: #ff8a80;
+    border-color: #4e342e;
+  }
+  .danger-btn:hover {
+    background-color: #4e342e;
+  }
+}
+
+.clipboard-item {
+  position: relative;
+  padding-right: 90px !important; /* Make room for absolute actions */
+}
+
+.clipboard-actions {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 10;
+}
+
+.action-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px;
+  color: #888;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s, color 0.2s;
+  width: 28px;
+  height: 28px;
+  box-sizing: border-box;
+}
+.action-btn:hover {
+  background-color: #f0f0f0;
+  color: #333;
+}
+.action-btn.delete-btn:hover {
+  background-color: #ffebee;
+  color: #c62828;
+}
+@media (prefers-color-scheme: dark) {
+  .action-btn:hover {
+    background-color: #333;
+    color: #eee;
+  }
+  .action-btn.delete-btn:hover {
+    background-color: #3e2723;
+    color: #ff8a80;
+  }
+}
+
+.sensitive-text {
+  font-family: monospace;
+  letter-spacing: 2px;
+  font-weight: bold;
+}
+

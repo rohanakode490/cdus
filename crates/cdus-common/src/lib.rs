@@ -6,6 +6,26 @@ pub struct ClipboardEvent {
     pub content: String,
     pub source: String, // "Local" or remote device name
     pub timestamp: String,
+    pub is_sensitive: bool,
+}
+
+pub fn is_sensitive_content(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
+        return false;
+    }
+    
+    // Heuristic: If it looks like a password (mix of uppercase, lowercase, numbers/symbols, length 8-64)
+    if trimmed.len() < 8 || trimmed.len() > 64 {
+        return false;
+    }
+    
+    let has_upper = trimmed.chars().any(|c| c.is_ascii_uppercase());
+    let has_lower = trimmed.chars().any(|c| c.is_ascii_lowercase());
+    let has_digit = trimmed.chars().any(|c| c.is_ascii_digit());
+    let has_symbol = trimmed.chars().any(|c| c.is_ascii_punctuation() || "@#$%-+=_*^&".contains(c));
+    
+    has_upper && has_lower && (has_digit || has_symbol)
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
@@ -33,6 +53,10 @@ pub enum IpcMessage {
         limit: u32,
     },
     HistoryResponse(Vec<ClipboardEvent>),
+    DeleteHistoryItem {
+        id: i64,
+    },
+    ClearHistory,
     GetState {
         key: String,
     },

@@ -122,6 +122,24 @@ fn get_clipboard_history(
 }
 
 #[tauri::command]
+fn delete_clipboard_item(id: i64) -> Result<String, String> {
+    let msg = IpcMessage::DeleteHistoryItem { id };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+fn clear_clipboard_history() -> Result<String, String> {
+    let msg = IpcMessage::ClearHistory;
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
 fn get_state(key: String) -> Result<Option<String>, String> {
     let msg = IpcMessage::GetState { key };
     match send_ipc_message(msg)? {
@@ -537,6 +555,8 @@ pub fn run() {
             ping_agent,
             set_clipboard,
             get_clipboard_history,
+            delete_clipboard_item,
+            clear_clipboard_history,
             get_state,
             set_state,
             start_scan,

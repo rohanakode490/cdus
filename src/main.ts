@@ -42,48 +42,106 @@ let confirmPairingBtn: HTMLButtonElement | null = null;
 
 // --- Helper Functions ---
 
-async function renderClipboard() {
+let clipboardHistory: any[] = [];
+let clipboardSearchQuery = "";
+const visibleSensitiveIds = new Set<number>();
+
+function filterAndRenderClipboard() {
   const listContainer = document.querySelector("#clipboard-list");
   const emptyState = document.querySelector("#clipboard-empty");
   if (!listContainer) return;
 
-  // Proactively check system clipboard and broadcast if new
-  await checkSystemClipboard();
+  const query = clipboardSearchQuery.toLowerCase().trim();
+  const filtered = clipboardHistory.filter(item => 
+    item.content.toLowerCase().includes(query) || 
+    item.source.toLowerCase().includes(query)
+  );
 
-  try {
-    const history: any[] = await invoke("get_clipboard_history", { limit: 50 });
+  if (filtered.length === 0) {
+    listContainer.innerHTML = "";
+    emptyState?.classList.remove("hidden");
+    return;
+  }
+
+  emptyState?.classList.add("hidden");
+  listContainer.innerHTML = "";
+
+  filtered.forEach((item) => {
+    const itemEl = document.createElement("div");
+    itemEl.className = "clipboard-item";
     
-    if (history.length === 0) {
-      listContainer.innerHTML = "";
-      emptyState?.classList.remove("hidden");
-      return;
+    const isSensitive = item.is_sensitive;
+    const isVisible = visibleSensitiveIds.has(item.id);
+    
+    const displayContent = (isSensitive && !isVisible) ? "••••••••••••" : item.content;
+    const eyeIcon = isVisible ? "🙈" : "👁️";
+    const sensitiveToggle = isSensitive 
+      ? `<button class="action-btn toggle-sensitive-btn" title="${isVisible ? 'Hide password' : 'Show password'}">${eyeIcon}</button>` 
+      : "";
+
+    itemEl.innerHTML = `
+      <div class="clipboard-content ${isSensitive && !isVisible ? 'sensitive-text' : ''}">${displayContent}</div>
+      <div class="clipboard-meta">
+        <span class="device-badge">${item.source}</span>
+        <span class="timestamp">${item.timestamp}</span>
+      </div>
+      <div class="clipboard-actions">
+        ${sensitiveToggle}
+        <button class="action-btn delete-btn" title="Delete from history">🗑️</button>
+      </div>
+      <div class="copy-feedback">Copied!</div>
+    `;
+
+    itemEl.addEventListener("click", (e) => {
+      if ((e.target as Element).closest(".action-btn")) {
+        return;
+      }
+      
+      invoke("set_clipboard", { content: item.content }).then(() => {
+        const feedback = itemEl.querySelector(".copy-feedback");
+        feedback?.classList.add("show");
+        setTimeout(() => feedback?.classList.remove("show"), 1500);
+      }).catch((err) => {
+        console.error("Failed to copy to clipboard:", err);
+      });
+    });
+
+    if (isSensitive) {
+      const toggleBtn = itemEl.querySelector(".toggle-sensitive-btn");
+      toggleBtn?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (isVisible) {
+          visibleSensitiveIds.delete(item.id);
+        } else {
+          visibleSensitiveIds.add(item.id);
+        }
+        filterAndRenderClipboard();
+      });
     }
 
-    emptyState?.classList.add("hidden");
-    listContainer.innerHTML = "";
-    
-    history.forEach((item) => {
-      const itemEl = document.createElement("div");
-      itemEl.className = "clipboard-item";
-      itemEl.innerHTML = `
-        <div class="clipboard-content">${item.content}</div>
-        <div class="clipboard-meta">
-          <span class="device-badge">${item.source}</span>
-          <span class="timestamp">${item.timestamp}</span>
-        </div>
-        <div class="copy-feedback">Copied!</div>
-      `;
-
-      itemEl.addEventListener("click", () => {
-        navigator.clipboard.writeText(item.content).then(() => {
-          const feedback = itemEl.querySelector(".copy-feedback");
-          feedback?.classList.add("show");
-          setTimeout(() => feedback?.classList.remove("show"), 1500);
-        });
-      });
-
-      listContainer.appendChild(itemEl);
+    const deleteBtn = itemEl.querySelector(".delete-btn");
+    deleteBtn?.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (confirm("Delete this item from history?")) {
+        try {
+          await invoke("delete_clipboard_item", { id: item.id });
+          clipboardHistory = clipboardHistory.filter(i => i.id !== item.id);
+          filterAndRenderClipboard();
+        } catch (err) {
+          console.error("Failed to delete item:", err);
+        }
+      }
     });
+
+    listContainer.appendChild(itemEl);
+  });
+}
+
+async function renderClipboard() {
+  try {
+    const history: any[] = await invoke("get_clipboard_history", { limit: 50 });
+    clipboardHistory = history;
+    filterAndRenderClipboard();
   } catch (err) {
     console.error("Failed to fetch history:", err);
   }
@@ -111,22 +169,6 @@ async function loadSettings() {
   }
 }
 
-let lastLocalClipboard = "";
-async function checkSystemClipboard() {
-  try {
-    const syncEnabled: string | null = await invoke("get_state", { key: "sync_enabled" });
-    if (syncEnabled !== "true") return;
-
-    const content: string = await invoke("read_system_clipboard");
-    if (content && content !== lastLocalClipboard) {
-      lastLocalClipboard = content;
-      console.log("New system clipboard detected on Desktop, broadcasting");
-      await invoke("broadcast_clipboard", { content });
-    }
-  } catch (err) {
-    // Ignore error (e.g. if clipboard is empty or error reading it)
-  }
-}
 
 async function loadFileHistory() {
   try {
@@ -540,6 +582,25 @@ window.addEventListener("DOMContentLoaded", () => {
 
   loadSettings();
   loadFileHistory();
+
+  const searchInput = document.querySelector("#clipboard-search") as HTMLInputElement;
+  searchInput?.addEventListener("input", (e) => {
+    clipboardSearchQuery = (e.target as HTMLInputElement).value;
+    filterAndRenderClipboard();
+  });
+
+  document.querySelector("#clear-history-btn")?.addEventListener("click", async () => {
+    if (confirm("Are you sure you want to clear all clipboard history?")) {
+      try {
+        await invoke("clear_clipboard_history");
+        clipboardHistory = [];
+        filterAndRenderClipboard();
+      } catch (err) {
+        console.error("Failed to clear history:", err);
+      }
+    }
+  });
+
   document.querySelector("#clear-finished-btn")?.addEventListener("click", () => {
     transfers.forEach((transfer, hash) => {
       if (transfer.status === "complete" || transfer.status === "error") {
@@ -1038,10 +1099,6 @@ window.addEventListener("DOMContentLoaded", () => {
     renderPairedDevices();
   });
 
-  window.addEventListener("focus", () => {
-    checkSystemClipboard();
-  });
-
   // Initial load
   renderPairedDevices();
 
@@ -1055,9 +1112,6 @@ window.addEventListener("DOMContentLoaded", () => {
     const clipboardView = document.querySelector("#view-clipboard");
     if (clipboardView?.classList.contains("active")) {
       renderClipboard();
-    } else {
-      // Check system clipboard even if view not active
-      checkSystemClipboard();
     }
   }, 5000);
 });

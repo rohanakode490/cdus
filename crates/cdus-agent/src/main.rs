@@ -741,6 +741,48 @@ fn main() {
                                                 }
                                             }
                                         }
+                                        IpcMessage::DeleteHistoryItem { id } => {
+                                            match store_clone.delete_event(id) {
+                                                Ok(_) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log("Clipboard item deleted".to_string()),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!(
+                                                            "Error deleting item: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
+                                        IpcMessage::ClearHistory => {
+                                            match store_clone.clear_events() {
+                                                Ok(_) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log("Clipboard history cleared".to_string()),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!(
+                                                            "Error clearing history: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
                                         IpcMessage::GetState { key } => {
                                             match store_clone.get_state(&key) {
                                                 Ok(val) => {
@@ -935,7 +977,7 @@ fn clipboard_watcher(
                     if !current_content.trim().is_empty() && current_content != last_content {
                         let mut lw = last_written.lock();
                         if let Some(ref val) = *lw {
-                            if val == &current_content {
+                            if val.trim() == current_content.trim() {
                                 info!("Ignoring clipboard change (self-triggered)");
                                 last_content = current_content;
                                 *lw = None;

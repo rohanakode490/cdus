@@ -5,6 +5,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,12 +27,16 @@ import kotlinx.coroutines.*
 import com.google.accompanist.swiperefresh.SwipeRefresh
 import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import uniffi.cdus_ffi.getClipboardHistory
+import uniffi.cdus_ffi.deleteClipboardItem
+import uniffi.cdus_ffi.clearClipboardHistory
 import uniffi.cdus_ffi.ClipboardHistoryItem
 
 @Composable
 fun ClipboardScreen() {
     var clipboardHistory by remember { mutableStateOf<List<ClipboardHistoryItem>>(emptyList()) }
     var isRefreshing by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    val visibleSensitiveIds = remember { mutableStateListOf<Long>() }
     val scope = rememberCoroutineScope()
 
     fun refreshHistory() {
@@ -54,33 +63,101 @@ fun ClipboardScreen() {
         }
     }
 
+    val filteredHistory = remember(clipboardHistory, searchQuery) {
+        if (searchQuery.isBlank()) {
+            clipboardHistory
+        } else {
+            clipboardHistory.filter {
+                it.content.contains(searchQuery, ignoreCase = true) ||
+                        it.source.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Text(
-            text = "Clipboard History",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 16.dp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Clipboard History",
+                style = MaterialTheme.typography.headlineMedium
+            )
+            if (clipboardHistory.isNotEmpty()) {
+                IconButton(onClick = {
+                    scope.launch(Dispatchers.IO) {
+                        clearClipboardHistory()
+                        val freshHistory = getClipboardHistory(50u)
+                        withContext(Dispatchers.Main) {
+                            clipboardHistory = freshHistory
+                        }
+                    }
+                }) {
+                    Icon(
+                        imageVector = Icons.Default.DeleteSweep,
+                        contentDescription = "Clear all history",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Search clipboard or devices...") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
         )
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         SwipeRefresh(
             state = rememberSwipeRefreshState(isRefreshing),
             onRefresh = { refreshHistory() },
             modifier = Modifier.fillMaxSize()
         ) {
-            if (clipboardHistory.isEmpty()) {
+            if (filteredHistory.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(text = "No clipboard history yet.", color = MaterialTheme.colorScheme.outline)
+                    Text(
+                        text = if (searchQuery.isBlank()) "No clipboard history yet." else "No matches found.",
+                        color = MaterialTheme.colorScheme.outline
+                    )
                 }
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(clipboardHistory) { item ->
-                        ClipboardListItem(item)
+                    items(filteredHistory, key = { it.id }) { item ->
+                        val isVisible = visibleSensitiveIds.contains(item.id)
+                        ClipboardListItem(
+                            item = item,
+                            isVisible = isVisible,
+                            onToggleVisibility = {
+                                if (isVisible) {
+                                    visibleSensitiveIds.remove(item.id)
+                                } else {
+                                    visibleSensitiveIds.add(item.id)
+                                }
+                            },
+                            onDelete = {
+                                scope.launch(Dispatchers.IO) {
+                                    deleteClipboardItem(item.id)
+                                    val freshHistory = getClipboardHistory(50u)
+                                    withContext(Dispatchers.Main) {
+                                        clipboardHistory = freshHistory
+                                    }
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -89,13 +166,17 @@ fun ClipboardScreen() {
 }
 
 @Composable
-fun ClipboardListItem(item: ClipboardHistoryItem) {
+fun ClipboardListItem(
+    item: ClipboardHistoryItem,
+    isVisible: Boolean,
+    onToggleVisibility: () -> Unit,
+    onDelete: () -> Unit
+) {
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
     
     val displayTime = remember(item.timestamp) {
         try {
-            // SQLite CURRENT_TIMESTAMP is "yyyy-MM-dd HH:mm:ss" in UTC
             val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
             val utcDateTime = LocalDateTime.parse(item.timestamp, formatter)
             val zonedDateTime = utcDateTime.atZone(ZoneOffset.UTC)
@@ -105,6 +186,9 @@ fun ClipboardListItem(item: ClipboardHistoryItem) {
             item.timestamp
         }
     }
+
+    val isSensitive = item.isSensitive
+    val displayText = if (isSensitive && !isVisible) "••••••••••••" else item.content
 
     Card(
         modifier = Modifier
@@ -118,12 +202,46 @@ fun ClipboardListItem(item: ClipboardHistoryItem) {
         Column(
             modifier = Modifier.padding(16.dp)
         ) {
-            Text(
-                text = item.content,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Text(
+                    text = displayText,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = if (isSensitive && !isVisible) 1 else 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (isSensitive) {
+                        IconButton(
+                            onClick = onToggleVisibility,
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (isVisible) "Hide password" else "Show password",
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Delete item",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
             Spacer(modifier = Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),

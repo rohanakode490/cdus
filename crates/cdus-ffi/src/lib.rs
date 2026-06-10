@@ -34,6 +34,7 @@ pub struct ClipboardHistoryItem {
     pub content: String,
     pub source: String,
     pub timestamp: String,
+    pub is_sensitive: bool,
 }
 
 #[uniffi::export(callback_interface)]
@@ -548,12 +549,27 @@ pub fn get_clipboard_history(limit: u32) -> Vec<ClipboardHistoryItem> {
                     content: e.content,
                     source: e.source,
                     timestamp: e.timestamp,
+                    is_sensitive: e.is_sensitive,
                 })
                 .collect(),
             Err(_) => Vec::new(),
         }
     } else {
         Vec::new()
+    }
+}
+
+#[uniffi::export]
+pub fn delete_clipboard_item(id: i64) {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let _ = store.delete_event(id);
+    }
+}
+
+#[uniffi::export]
+pub fn clear_clipboard_history() {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let _ = store.clear_events();
     }
 }
 
