@@ -198,6 +198,35 @@ impl Store {
             [],
         )?;
 
+        // Synced folders table
+        state_conn.execute(
+            "CREATE TABLE IF NOT EXISTS synced_folders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                path TEXT UNIQUE NOT NULL,
+                label TEXT,
+                status TEXT NOT NULL DEFAULT 'synced',
+                added_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
+
+        // Conflicted files table
+        state_conn.execute(
+            "CREATE TABLE IF NOT EXISTS conflicted_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                folder_id INTEGER NOT NULL,
+                file_path TEXT NOT NULL,
+                local_size INTEGER NOT NULL,
+                local_modified TEXT NOT NULL,
+                remote_size INTEGER NOT NULL,
+                remote_modified TEXT NOT NULL,
+                remote_device_name TEXT NOT NULL,
+                detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(folder_id) REFERENCES synced_folders(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
         Ok(Store {
             events_conn: Mutex::new(events_conn),
             state_conn: Mutex::new(state_conn),
@@ -663,6 +692,137 @@ impl Store {
             )
             .optional()?;
         Ok(local_only.unwrap_or(false))
+    }
+
+    // --- Folder Sync CRUD ---
+
+    pub fn add_synced_folder(&self, path: &str, label: Option<&str>) -> Result<i64> {
+        let conn = self.state_conn.lock();
+        conn.execute(
+            "INSERT INTO synced_folders (path, label) VALUES (?1, ?2)",
+            (path, label),
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn remove_synced_folder(&self, id: i64) -> Result<()> {
+        let conn = self.state_conn.lock();
+        conn.execute("DELETE FROM synced_folders WHERE id = ?", [id])?;
+        Ok(())
+    }
+
+    pub fn get_synced_folders(&self) -> Result<Vec<cdus_common::SyncedFolder>> {
+        let conn = self.state_conn.lock();
+        let mut stmt = conn.prepare("SELECT id, path, label, status FROM synced_folders ORDER BY id ASC")?;
+        let rows = stmt.query_map([], |row| {
+            let label: Option<String> = row.get(2)?;
+            Ok(cdus_common::SyncedFolder {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                label: label.unwrap_or_default(),
+                status: row.get(3)?,
+            })
+        })?;
+
+        let mut folders = Vec::new();
+        for r in rows {
+            folders.push(r?);
+        }
+        Ok(folders)
+    }
+
+    pub fn get_conflicted_files(&self, folder_id: i64) -> Result<Vec<cdus_common::ConflictedFile>> {
+        let conn = self.state_conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, folder_id, file_path, local_size, local_modified, remote_size, remote_modified, remote_device_name 
+             FROM conflicted_files WHERE folder_id = ? ORDER BY id ASC"
+        )?;
+        let rows = stmt.query_map([folder_id], |row| {
+            let local_size_i64: i64 = row.get(3)?;
+            let remote_size_i64: i64 = row.get(5)?;
+            Ok(cdus_common::ConflictedFile {
+                id: row.get(0)?,
+                folder_id: row.get(1)?,
+                file_path: row.get(2)?,
+                local_size: local_size_i64 as u64,
+                local_modified: row.get(4)?,
+                remote_size: remote_size_i64 as u64,
+                remote_modified: row.get(6)?,
+                remote_device_name: row.get(7)?,
+            })
+        })?;
+
+        let mut files = Vec::new();
+        for r in rows {
+            files.push(r?);
+        }
+        Ok(files)
+    }
+
+    pub fn add_conflict(
+        &self,
+        folder_id: i64,
+        file_path: &str,
+        local_size: u64,
+        local_modified: &str,
+        remote_size: u64,
+        remote_modified: &str,
+        remote_device_name: &str,
+    ) -> Result<i64> {
+        let conn = self.state_conn.lock();
+        conn.execute(
+            "INSERT INTO conflicted_files (folder_id, file_path, local_size, local_modified, remote_size, remote_modified, remote_device_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            (
+                folder_id,
+                file_path,
+                local_size as i64,
+                local_modified,
+                remote_size as i64,
+                remote_modified,
+                remote_device_name,
+            ),
+        )?;
+        
+        // Also update folder status to conflict
+        conn.execute(
+            "UPDATE synced_folders SET status = 'conflict' WHERE id = ?",
+            [folder_id],
+        )?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn resolve_conflict(&self, conflict_id: i64) -> Result<()> {
+        let conn = self.state_conn.lock();
+        
+        // Get the folder_id of the conflict first
+        let folder_id: Option<i64> = conn
+            .query_row(
+                "SELECT folder_id FROM conflicted_files WHERE id = ?",
+                [conflict_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        conn.execute("DELETE FROM conflicted_files WHERE id = ?", [conflict_id])?;
+
+        // If no more conflicts exist for this folder, set status back to 'synced'
+        if let Some(fid) = folder_id {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM conflicted_files WHERE folder_id = ?",
+                [fid],
+                |row| row.get(0),
+            )?;
+            if count == 0 {
+                conn.execute(
+                    "UPDATE synced_folders SET status = 'synced' WHERE id = ?",
+                    [fid],
+                )?;
+            }
+        }
+
+        Ok(())
     }
 
     pub fn set_state(&self, key: &str, value: &str) -> Result<()> {

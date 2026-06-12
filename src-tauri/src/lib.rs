@@ -336,6 +336,71 @@ async fn pair_with_qr(payload: String) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+fn get_synced_folders() -> Result<Vec<cdus_common::SyncedFolder>, String> {
+    let msg = IpcMessage::GetSyncedFolders;
+    match send_ipc_message(msg)? {
+        IpcMessage::SyncedFoldersResponse(folders) => Ok(folders),
+        IpcMessage::Log(err) => Err(err),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+fn add_synced_folder(path: String, label: Option<String>) -> Result<String, String> {
+    let msg = IpcMessage::AddSyncedFolder { path, label };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => {
+            if msg.contains("Error") {
+                Err(msg)
+            } else {
+                Ok(msg)
+            }
+        }
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+fn remove_synced_folder(id: i64) -> Result<String, String> {
+    let msg = IpcMessage::RemoveSyncedFolder { id };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => {
+            if msg.contains("Error") {
+                Err(msg)
+            } else {
+                Ok(msg)
+            }
+        }
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+fn get_conflicted_files(folder_id: i64) -> Result<Vec<cdus_common::ConflictedFile>, String> {
+    let msg = IpcMessage::GetConflictedFiles { folder_id };
+    match send_ipc_message(msg)? {
+        IpcMessage::ConflictedFilesResponse(files) => Ok(files),
+        IpcMessage::Log(err) => Err(err),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+fn resolve_conflict(conflict_id: i64, choice: String) -> Result<String, String> {
+    let msg = IpcMessage::ResolveConflict { conflict_id, choice };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => {
+            if msg.contains("Error") {
+                Err(msg)
+            } else {
+                Ok(msg)
+            }
+        }
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -587,7 +652,12 @@ pub fn run() {
             get_qr_pairing_payload,
             pair_with_qr,
             read_system_clipboard,
-            broadcast_clipboard
+            broadcast_clipboard,
+            get_synced_folders,
+            add_synced_folder,
+            remove_synced_folder,
+            get_conflicted_files,
+            resolve_conflict
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

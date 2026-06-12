@@ -910,6 +910,16 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
 
 
 
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -933,6 +943,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_accept_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_fn_func_add_synced_folder(`path`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
     fun uniffi_cdus_ffi_fn_func_broadcast_clipboard(`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_cancel_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -953,6 +965,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_get_clipboard_history(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_cdus_ffi_fn_func_get_conflicted_files(`folderId`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_discovered_devices(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_file_transfer_history(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
@@ -962,6 +976,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_get_pairing_status(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_qr_pairing_payload(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_cdus_ffi_fn_func_get_synced_folders(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_greet_from_rust(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -976,6 +992,10 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_register_device(`nodeId`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,`port`: Short,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_reject_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_remove_synced_folder(`id`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_resolve_conflict(`conflictId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_resume_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1111,6 +1131,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_checksum_func_accept_file_transfer(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_add_synced_folder(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_broadcast_clipboard(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_cancel_file_transfer(
@@ -1131,6 +1153,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_clipboard_history(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_get_conflicted_files(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_get_discovered_devices(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_file_transfer_history(
@@ -1140,6 +1164,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_func_get_pairing_status(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_qr_pairing_payload(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_get_synced_folders(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_greet_from_rust(
     ): Short
@@ -1154,6 +1180,10 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_func_register_device(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_reject_file_transfer(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_remove_synced_folder(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_resolve_conflict(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_resume_file_transfer(
     ): Short
@@ -1225,6 +1255,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_accept_file_transfer() != 17241.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_add_synced_folder() != 44533.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_broadcast_clipboard() != 52173.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1255,6 +1288,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_get_clipboard_history() != 8152.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_get_conflicted_files() != 48368.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_get_discovered_devices() != 33769.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1268,6 +1304,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_get_qr_pairing_payload() != 63476.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_get_synced_folders() != 10870.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_greet_from_rust() != 12695.toShort()) {
@@ -1289,6 +1328,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_reject_file_transfer() != 25282.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_remove_synced_folder() != 30476.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_resolve_conflict() != 42867.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_resume_file_transfer() != 13935.toShort()) {
@@ -1658,6 +1703,62 @@ public object FfiConverterTypeClipboardHistoryItem: FfiConverterRustBuffer<Clipb
 
 
 
+data class ConflictedFileRecord (
+    var `id`: kotlin.Long, 
+    var `folderId`: kotlin.Long, 
+    var `filePath`: kotlin.String, 
+    var `localSize`: kotlin.ULong, 
+    var `localModified`: kotlin.String, 
+    var `remoteSize`: kotlin.ULong, 
+    var `remoteModified`: kotlin.String, 
+    var `remoteDeviceName`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeConflictedFileRecord: FfiConverterRustBuffer<ConflictedFileRecord> {
+    override fun read(buf: ByteBuffer): ConflictedFileRecord {
+        return ConflictedFileRecord(
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ConflictedFileRecord) = (
+            FfiConverterLong.allocationSize(value.`id`) +
+            FfiConverterLong.allocationSize(value.`folderId`) +
+            FfiConverterString.allocationSize(value.`filePath`) +
+            FfiConverterULong.allocationSize(value.`localSize`) +
+            FfiConverterString.allocationSize(value.`localModified`) +
+            FfiConverterULong.allocationSize(value.`remoteSize`) +
+            FfiConverterString.allocationSize(value.`remoteModified`) +
+            FfiConverterString.allocationSize(value.`remoteDeviceName`)
+    )
+
+    override fun write(value: ConflictedFileRecord, buf: ByteBuffer) {
+            FfiConverterLong.write(value.`id`, buf)
+            FfiConverterLong.write(value.`folderId`, buf)
+            FfiConverterString.write(value.`filePath`, buf)
+            FfiConverterULong.write(value.`localSize`, buf)
+            FfiConverterString.write(value.`localModified`, buf)
+            FfiConverterULong.write(value.`remoteSize`, buf)
+            FfiConverterString.write(value.`remoteModified`, buf)
+            FfiConverterString.write(value.`remoteDeviceName`, buf)
+    }
+}
+
+
+
 data class DiscoveredDevice (
     var `nodeId`: kotlin.String, 
     var `label`: kotlin.String, 
@@ -1845,6 +1946,46 @@ public object FfiConverterTypePairingStatus: FfiConverterRustBuffer<PairingStatu
             FfiConverterString.write(value.`remoteLabel`, buf)
             FfiConverterBoolean.write(value.`isInitiator`, buf)
             FfiConverterBoolean.write(value.`silent`, buf)
+    }
+}
+
+
+
+data class SyncedFolderRecord (
+    var `id`: kotlin.Long, 
+    var `path`: kotlin.String, 
+    var `label`: kotlin.String, 
+    var `status`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncedFolderRecord: FfiConverterRustBuffer<SyncedFolderRecord> {
+    override fun read(buf: ByteBuffer): SyncedFolderRecord {
+        return SyncedFolderRecord(
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SyncedFolderRecord) = (
+            FfiConverterLong.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`path`) +
+            FfiConverterString.allocationSize(value.`label`) +
+            FfiConverterString.allocationSize(value.`status`)
+    )
+
+    override fun write(value: SyncedFolderRecord, buf: ByteBuffer) {
+            FfiConverterLong.write(value.`id`, buf)
+            FfiConverterString.write(value.`path`, buf)
+            FfiConverterString.write(value.`label`, buf)
+            FfiConverterString.write(value.`status`, buf)
     }
 }
 
@@ -2325,6 +2466,34 @@ public object FfiConverterSequenceTypeClipboardHistoryItem: FfiConverterRustBuff
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeConflictedFileRecord: FfiConverterRustBuffer<List<ConflictedFileRecord>> {
+    override fun read(buf: ByteBuffer): List<ConflictedFileRecord> {
+        val len = buf.getInt()
+        return List<ConflictedFileRecord>(len) {
+            FfiConverterTypeConflictedFileRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ConflictedFileRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeConflictedFileRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ConflictedFileRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeConflictedFileRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeDiscoveredDevice: FfiConverterRustBuffer<List<DiscoveredDevice>> {
     override fun read(buf: ByteBuffer): List<DiscoveredDevice> {
         val len = buf.getInt()
@@ -2401,6 +2570,34 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
             FfiConverterTypePairedDevice.write(it, buf)
         }
     }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeSyncedFolderRecord: FfiConverterRustBuffer<List<SyncedFolderRecord>> {
+    override fun read(buf: ByteBuffer): List<SyncedFolderRecord> {
+        val len = buf.getInt()
+        return List<SyncedFolderRecord>(len) {
+            FfiConverterTypeSyncedFolderRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<SyncedFolderRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeSyncedFolderRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<SyncedFolderRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeSyncedFolderRecord.write(it, buf)
+        }
+    }
 } fun `acceptFileTransfer`(`transferId`: kotlin.String)
         = 
     uniffiRustCall() { _status ->
@@ -2408,6 +2605,15 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
         FfiConverterString.lower(`transferId`),_status)
 }
     
+    
+ fun `addSyncedFolder`(`path`: kotlin.String, `label`: kotlin.String?): kotlin.Long {
+            return FfiConverterLong.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_add_synced_folder(
+        FfiConverterString.lower(`path`),FfiConverterOptionalString.lower(`label`),_status)
+}
+    )
+    }
     
  fun `broadcastClipboard`(`content`: kotlin.String)
         = 
@@ -2490,6 +2696,15 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     )
     }
     
+ fun `getConflictedFiles`(`folderId`: kotlin.Long): List<ConflictedFileRecord> {
+            return FfiConverterSequenceTypeConflictedFileRecord.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_conflicted_files(
+        FfiConverterLong.lower(`folderId`),_status)
+}
+    )
+    }
+    
  fun `getDiscoveredDevices`(): List<DiscoveredDevice> {
             return FfiConverterSequenceTypeDiscoveredDevice.lift(
     uniffiRustCall() { _status ->
@@ -2530,6 +2745,15 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_qr_pairing_payload(
+        _status)
+}
+    )
+    }
+    
+ fun `getSyncedFolders`(): List<SyncedFolderRecord> {
+            return FfiConverterSequenceTypeSyncedFolderRecord.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_synced_folders(
         _status)
 }
     )
@@ -2590,6 +2814,22 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_reject_file_transfer(
         FfiConverterString.lower(`transferId`),_status)
+}
+    
+    
+ fun `removeSyncedFolder`(`id`: kotlin.Long)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_remove_synced_folder(
+        FfiConverterLong.lower(`id`),_status)
+}
+    
+    
+ fun `resolveConflict`(`conflictId`: kotlin.Long)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_resolve_conflict(
+        FfiConverterLong.lower(`conflictId`),_status)
 }
     
     

@@ -931,3 +931,90 @@ pub fn greet_from_rust(name: String) -> String {
         name
     )
 }
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct SyncedFolderRecord {
+    pub id: i64,
+    pub path: String,
+    pub label: String,
+    pub status: String,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct ConflictedFileRecord {
+    pub id: i64,
+    pub folder_id: i64,
+    pub file_path: String,
+    pub local_size: u64,
+    pub local_modified: String,
+    pub remote_size: u64,
+    pub remote_modified: String,
+    pub remote_device_name: String,
+}
+
+#[uniffi::export]
+pub fn get_synced_folders() -> Vec<SyncedFolderRecord> {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        match store.get_synced_folders() {
+            Ok(folders) => folders
+                .into_iter()
+                .map(|f| SyncedFolderRecord {
+                    id: f.id,
+                    path: f.path,
+                    label: f.label,
+                    status: f.status,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    }
+}
+
+#[uniffi::export]
+pub fn add_synced_folder(path: String, label: Option<String>) -> i64 {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        store.add_synced_folder(&path, label.as_deref()).unwrap_or(-1)
+    } else {
+        -1
+    }
+}
+
+#[uniffi::export]
+pub fn remove_synced_folder(id: i64) {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let _ = store.remove_synced_folder(id);
+    }
+}
+
+#[uniffi::export]
+pub fn get_conflicted_files(folder_id: i64) -> Vec<ConflictedFileRecord> {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        match store.get_conflicted_files(folder_id) {
+            Ok(files) => files
+                .into_iter()
+                .map(|f| ConflictedFileRecord {
+                    id: f.id,
+                    folder_id: f.folder_id,
+                    file_path: f.file_path,
+                    local_size: f.local_size,
+                    local_modified: f.local_modified,
+                    remote_size: f.remote_size,
+                    remote_modified: f.remote_modified,
+                    remote_device_name: f.remote_device_name,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    }
+}
+
+#[uniffi::export]
+pub fn resolve_conflict(conflict_id: i64) {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let _ = store.resolve_conflict(conflict_id);
+    }
+}
