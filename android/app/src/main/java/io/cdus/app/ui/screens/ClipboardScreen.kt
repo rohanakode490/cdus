@@ -30,6 +30,9 @@ import uniffi.cdus_ffi.getClipboardHistory
 import uniffi.cdus_ffi.deleteClipboardItem
 import uniffi.cdus_ffi.clearClipboardHistory
 import uniffi.cdus_ffi.ClipboardHistoryItem
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
 
 @Composable
 fun ClipboardScreen() {
@@ -188,13 +191,57 @@ fun ClipboardListItem(
     }
 
     val isSensitive = item.isSensitive
-    val displayText = if (isSensitive && !isVisible) "••••••••••••" else item.content
+
+    var isImage by remember { mutableStateOf(false) }
+    var isUrl by remember { mutableStateOf(false) }
+    var urlText by remember { mutableStateOf("") }
+    var urlTitle by remember { mutableStateOf("") }
+    var faviconBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var imageBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+    val rawContentToCopy = remember(item.content) {
+        if (isSensitive && !isVisible) {
+            item.content
+        } else {
+            try {
+                val json = org.json.JSONObject(item.content)
+                val type = json.optString("type")
+                if (type == "image") {
+                    isImage = true
+                    val dataUrl = json.optString("data")
+                    val b64 = dataUrl.substringAfter("base64,")
+                    val decodedBytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+                    val bmp = android.graphics.BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+                    imageBitmap = bmp
+                    item.content
+                } else if (type == "url") {
+                    isUrl = true
+                    urlText = json.optString("url")
+                    urlTitle = json.optString("title")
+                    val faviconUrl = json.optString("favicon")
+                    if (faviconUrl.isNotEmpty()) {
+                        val b64 = faviconUrl.substringAfter("base64,")
+                        val decodedBytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+                        val bmp = android.graphics.BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+                        faviconBitmap = bmp
+                    }
+                    urlText
+                } else {
+                    item.content
+                }
+            } catch (e: Exception) {
+                isImage = false
+                isUrl = false
+                item.content
+            }
+        }
+    }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable {
-                clipboardManager.setText(AnnotatedString(item.content))
+                clipboardManager.setText(AnnotatedString(rawContentToCopy))
                 Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
             },
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -207,13 +254,66 @@ fun ClipboardListItem(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Top
             ) {
-                Text(
-                    text = displayText,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = if (isSensitive && !isVisible) 1 else 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
+                Box(modifier = Modifier.weight(1f)) {
+                    if (isSensitive && !isVisible) {
+                        Text(
+                            text = "••••••••••••",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    } else if (isImage && imageBitmap != null) {
+                        androidx.compose.foundation.Image(
+                            bitmap = imageBitmap!!.asImageBitmap(),
+                            contentDescription = "Clipboard Image",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                        )
+                    } else if (isUrl) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (faviconBitmap != null) {
+                                androidx.compose.foundation.Image(
+                                    bitmap = faviconBitmap!!.asImageBitmap(),
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(RoundedCornerShape(4.dp))
+                                )
+                            } else {
+                                Text("🌐", style = MaterialTheme.typography.titleMedium)
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = urlTitle,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = urlText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = item.content,
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (isSensitive) {

@@ -967,6 +967,7 @@ dependencies = [
  "gethostname 0.4.3",
  "hex",
  "httpmock",
+ "image",
  "interprocess",
  "keepawake",
  "keyring",

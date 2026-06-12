@@ -24,6 +24,10 @@ import io.cdus.app.CoreInitializer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.Base64
+import java.io.ByteArrayOutputStream
 
 class SyncService : Service(), ClipboardListener, FileTransferListener {
 
@@ -55,24 +59,78 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         Logger.i("SyncService created and remote listeners added")
     }
 
+    private fun uriToBase64Png(uri: android.net.Uri): String? {
+        return try {
+            contentResolver.openInputStream(uri).use { inputStream ->
+                val bitmap = BitmapFactory.decodeStream(inputStream)
+                if (bitmap != null) {
+                    val outputStream = ByteArrayOutputStream()
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+                    val pngBytes = outputStream.toByteArray()
+                    Base64.encodeToString(pngBytes, Base64.NO_WRAP)
+                } else {
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Logger.e("Failed to convert URI to Base64 PNG: ${e.message}")
+            null
+        }
+    }
+
     private fun checkSystemClipboard() {
         try {
             if (clipboardManager.hasPrimaryClip()) {
                 val clipData = clipboardManager.primaryClip
                 if (clipData != null && clipData.itemCount > 0) {
-                    val content = clipData.getItemAt(0).coerceToText(this).toString()
-                    if (content.isNotEmpty() && content != lastClipboardContent) {
-                        val sharedPref = getSharedPreferences("cdus_settings", Context.MODE_PRIVATE)
-                        if (sharedPref.getBoolean("clipboard_sync", false)) {
-                            // Only broadcast if it's new
-                            val lastHash = sharedPref.getString("last_clip_hash", "")
-                            val currentHash = content.hashCode().toString()
-                            if (currentHash != lastHash) {
-                                sharedPref.edit().putString("last_clip_hash", currentHash).apply()
-                                lastClipboardContent = content
-                                Logger.i("New system clipboard content detected, broadcasting")
-                                CoroutineScope(Dispatchers.IO).launch {
-                                    uniffi.cdus_ffi.broadcastClipboard(content)
+                    val description = clipboardManager.primaryClipDescription
+                    val hasImage = description != null && (
+                        description.hasMimeType("image/*") || 
+                        description.hasMimeType("image/png") || 
+                        description.hasMimeType("image/jpeg")
+                    )
+
+                    if (hasImage) {
+                        val item = clipData.getItemAt(0)
+                        val uri = item.uri
+                        if (uri != null) {
+                            val sharedPref = getSharedPreferences("cdus_settings", Context.MODE_PRIVATE)
+                            if (sharedPref.getBoolean("clipboard_sync", false)) {
+                                val lastHash = sharedPref.getString("last_clip_hash", "")
+                                val base64Data = uriToBase64Png(uri)
+                                if (base64Data != null) {
+                                    val currentHash = "IMAGE:" + base64Data.hashCode().toString()
+                                    if (currentHash != lastHash) {
+                                        sharedPref.edit().putString("last_clip_hash", currentHash).apply()
+                                        
+                                        val payload = org.json.JSONObject().apply {
+                                            put("type", "image")
+                                            put("data", "data:image/png;base64,$base64Data")
+                                        }.toString()
+                                        
+                                        lastClipboardContent = payload
+                                        Logger.i("New system clipboard image detected, broadcasting")
+                                        CoroutineScope(Dispatchers.IO).launch {
+                                            uniffi.cdus_ffi.broadcastClipboard(payload)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        val content = clipData.getItemAt(0).coerceToText(this).toString()
+                        if (content.isNotEmpty() && content != lastClipboardContent) {
+                            val sharedPref = getSharedPreferences("cdus_settings", Context.MODE_PRIVATE)
+                            if (sharedPref.getBoolean("clipboard_sync", false)) {
+                                val lastHash = sharedPref.getString("last_clip_hash", "")
+                                val currentHash = content.hashCode().toString()
+                                if (currentHash != lastHash) {
+                                    sharedPref.edit().putString("last_clip_hash", currentHash).apply()
+                                    lastClipboardContent = content
+                                    Logger.i("New system clipboard content detected, broadcasting")
+                                    CoroutineScope(Dispatchers.IO).launch {
+                                        uniffi.cdus_ffi.broadcastClipboard(content)
+                                    }
                                 }
                             }
                         }
@@ -88,11 +146,24 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         Logger.i("Received remote clipboard update from $source: $content")
         if (content != lastClipboardContent) {
             lastClipboardContent = content
+
+            var textToSet = content
+            try {
+                val json = org.json.JSONObject(content)
+                val type = json.optString("type")
+                if (type == "image") {
+                    textToSet = "[Image Sync]"
+                } else if (type == "url") {
+                    textToSet = json.optString("url")
+                }
+            } catch (e: Exception) {
+                // Not JSON or parsing failed, use as is
+            }
             
-            // Save hash to preferences to prevent self-echo when MainActivity gains focus
+            // Save hash to preferences to prevent self-echo when MainActivity gains focus or listener fires
             try {
                 val sharedPref = getSharedPreferences("cdus_settings", Context.MODE_PRIVATE)
-                val currentHash = content.hashCode().toString()
+                val currentHash = textToSet.hashCode().toString()
                 sharedPref.edit().putString("last_clip_hash", currentHash).apply()
             } catch (e: Exception) {
                 Logger.e("Failed to update last_clip_hash in preferences: ${e.message}")
@@ -100,7 +171,7 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
 
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 try {
-                    val clip = android.content.ClipData.newPlainText("CDUS Remote", content)
+                    val clip = android.content.ClipData.newPlainText("CDUS Remote", textToSet)
                     clipboardManager.setPrimaryClip(clip)
                     Logger.d("Successfully set system clipboard from remote source")
                 } catch (e: Exception) {

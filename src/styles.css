@@ -1155,3 +1155,68 @@ input[type="text"] {
   font-weight: bold;
 }
 
+/* Rich Clipboard Elements */
+.clipboard-image {
+  max-width: 100%;
+  max-height: 200px;
+  border-radius: 6px;
+  display: block;
+  margin-top: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  background: #f0f0f0;
+}
+
+.url-metadata-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--card-bg-hover, rgba(0, 0, 0, 0.02));
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+}
+
+.favicon-icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.favicon-fallback {
+  font-size: 20px;
+}
+
+.url-metadata-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.url-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-color, #333);
+}
+
+.url-link {
+  font-size: 0.8rem;
+  color: var(--primary-color, #1a73e8);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.url-link:hover {
+  text-decoration: underline;
+}
+
+@media (prefers-color-scheme: dark) {
+  .url-metadata-container {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+  .url-title {
+    color: #eee;
+  }
+}
+

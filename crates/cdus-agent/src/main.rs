@@ -967,45 +967,108 @@ fn clipboard_watcher(
             tracing::warn!("Failed to initialize clipboard on startup, will retry in background");
         }
 
-        // Initialize last_content from state DB
+        // Initialize last_content_hash from state DB content
         let db_content = store.get_state("last_clipboard_content").ok().flatten();
-        let mut last_content = db_content.unwrap_or_default();
+        let mut last_content_hash = String::new();
+        if let Some(ref val) = db_content {
+            last_content_hash = blake3::hash(val.as_bytes()).to_hex().to_string();
+        }
 
         loop {
             if let Some(ref mut clipboard) = clipboard_opt {
-                if let Ok(current_content) = clipboard.get_text() {
-                    if !current_content.trim().is_empty() && current_content != last_content {
+                // 1. Try reading image first
+                if let Ok(image) = clipboard.get_image() {
+                    let img_hash = blake3::hash(&image.bytes).to_hex().to_string();
+                    if img_hash != last_content_hash {
                         let mut lw = last_written.lock();
                         if let Some(ref val) = *lw {
-                            if val.trim() == current_content.trim() {
-                                info!("Ignoring clipboard change (self-triggered)");
-                                last_content = current_content;
+                            let expected_hash = format!("CDUS_IMAGE_HASH:{}", img_hash);
+                            if val == &expected_hash {
+                                info!("Ignoring image clipboard change (self/remote-triggered)");
+                                last_content_hash = img_hash;
                                 *lw = None;
                                 continue;
                             }
                         }
 
-                        info!("Clipboard change detected");
-                        last_content = current_content.clone();
-                        let _ = tx.send(IpcMessage::ClipboardChanged {
-                            content: current_content,
-                            timestamp: now_ms(),
-                        });
+                        info!("Image clipboard change detected");
+                        if let Ok(png_bytes) = encode_image_to_png(&image) {
+                            use base64::Engine;
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+                            let data_url = format!("data:image/png;base64,{}", b64);
+                            let payload = serde_json::json!({
+                                "type": "image",
+                                "data": data_url
+                            }).to_string();
+
+                            last_content_hash = img_hash;
+                            let _ = tx.send(IpcMessage::ClipboardChanged {
+                                content: payload,
+                                timestamp: now_ms(),
+                            });
+                        }
+                    }
+                }
+                // 2. Try reading text if no image
+                else if let Ok(current_content) = clipboard.get_text() {
+                    if !current_content.trim().is_empty() {
+                        let text_hash = blake3::hash(current_content.as_bytes()).to_hex().to_string();
+                        if text_hash != last_content_hash {
+                            let mut lw = last_written.lock();
+                            if let Some(ref val) = *lw {
+                                if val == &current_content {
+                                    info!("Ignoring text clipboard change (self/remote-triggered)");
+                                    last_content_hash = text_hash;
+                                    *lw = None;
+                                    continue;
+                                }
+                            }
+
+                            last_content_hash = text_hash;
+
+                            // Check if it is a URL
+                            let is_url = (current_content.trim().starts_with("http://") || current_content.trim().starts_with("https://")) 
+                                && url::Url::parse(current_content.trim()).is_ok();
+                            
+                            if is_url {
+                                info!("URL clipboard change detected: {}", current_content);
+                                let tx_clone = tx.clone();
+                                let url_str = current_content.trim().to_string();
+                                thread::spawn(move || {
+                                    let resolved = cdus_agent::utils::resolve_url_metadata(&url_str);
+                                    let content = if let Some((title, favicon)) = resolved {
+                                        serde_json::json!({
+                                            "type": "url",
+                                            "url": url_str,
+                                            "title": title,
+                                            "favicon": favicon
+                                        }).to_string()
+                                    } else {
+                                        url_str
+                                    };
+                                    let _ = tx_clone.send(IpcMessage::ClipboardChanged {
+                                        content,
+                                        timestamp: now_ms(),
+                                    });
+                                });
+                            } else {
+                                info!("Text clipboard change detected");
+                                let _ = tx.send(IpcMessage::ClipboardChanged {
+                                    content: current_content,
+                                    timestamp: now_ms(),
+                                });
+                            }
+                        }
                     }
                 }
             } else {
                 // Retry initializing clipboard
                 match Clipboard::new() {
-                    Ok(mut c) => {
+                    Ok(c) => {
                         info!("Clipboard watcher successfully initialized on retry");
-                        if last_content.is_empty() {
-                            last_content = c.get_text().unwrap_or_default();
-                        }
                         clipboard_opt = Some(c);
                     }
-                    Err(_) => {
-                        // Silently retry next time
-                    }
+                    Err(_) => {}
                 }
             }
             thread::sleep(Duration::from_secs(2));
@@ -1016,6 +1079,24 @@ fn clipboard_watcher(
         info!("Clipboard watcher not implemented for Android yet");
     }
 }
+
+#[cfg(not(target_os = "android"))]
+fn encode_image_to_png(image: &arboard::ImageData) -> Result<Vec<u8>, anyhow::Error> {
+    use image::{ImageBuffer, Rgba};
+    use std::io::Cursor;
+    
+    let width = image.width as u32;
+    let height = image.height as u32;
+    let raw_pixels = image.bytes.to_vec();
+    
+    let img_buffer = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(width, height, raw_pixels)
+        .ok_or_else(|| anyhow::anyhow!("Failed to create ImageBuffer from raw pixels"))?;
+        
+    let mut png_bytes = Vec::new();
+    img_buffer.write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)?;
+    Ok(png_bytes)
+}
+
 
 fn install_service() {
     info!("Installing CDUS Agent as systemd user service...");

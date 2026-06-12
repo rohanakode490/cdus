@@ -73,14 +73,54 @@ function filterAndRenderClipboard() {
     const isSensitive = item.is_sensitive;
     const isVisible = visibleSensitiveIds.has(item.id);
     
-    const displayContent = (isSensitive && !isVisible) ? "••••••••••••" : item.content;
     const eyeIcon = isVisible ? "🙈" : "👁️";
     const sensitiveToggle = isSensitive 
       ? `<button class="action-btn toggle-sensitive-btn" title="${isVisible ? 'Hide password' : 'Show password'}">${eyeIcon}</button>` 
       : "";
 
+    let displayHtml = "";
+    let isRich = false;
+    
+    if (isSensitive && !isVisible) {
+      displayHtml = `<div class="clipboard-content sensitive-text">••••••••••••</div>`;
+    } else {
+      try {
+        const parsed = JSON.parse(item.content);
+        if (parsed && parsed.type === "image") {
+          isRich = true;
+          displayHtml = `
+            <div class="clipboard-content rich-content image-content">
+              <img src="${parsed.data}" class="clipboard-image" alt="Clipboard Image" />
+            </div>
+          `;
+        } else if (parsed && parsed.type === "url") {
+          isRich = true;
+          const faviconHtml = parsed.favicon 
+            ? `<img src="${parsed.favicon}" class="favicon-icon" alt="" />`
+            : `<span class="favicon-fallback">🌐</span>`;
+          displayHtml = `
+            <div class="clipboard-content rich-content url-content">
+              <div class="url-metadata-container">
+                ${faviconHtml}
+                <div class="url-metadata-text">
+                  <div class="url-title">${parsed.title}</div>
+                  <a href="${parsed.url}" target="_blank" class="url-link" onclick="event.stopPropagation()">${parsed.url}</a>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+      } catch (e) {
+        // Not JSON or parsing failed, render as plain text
+      }
+      
+      if (!isRich) {
+        displayHtml = `<div class="clipboard-content">${item.content}</div>`;
+      }
+    }
+
     itemEl.innerHTML = `
-      <div class="clipboard-content ${isSensitive && !isVisible ? 'sensitive-text' : ''}">${displayContent}</div>
+      ${displayHtml}
       <div class="clipboard-meta">
         <span class="device-badge">${item.source}</span>
         <span class="timestamp">${item.timestamp}</span>
