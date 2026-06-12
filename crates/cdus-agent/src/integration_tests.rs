@@ -954,4 +954,87 @@ mod tests {
             _ => panic!("Expected StalePairing, got {:?}", msg),
         }
     }
+
+    #[test]
+    fn test_local_only_clipboard_filtering() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::init(dir.path()).unwrap());
+        let (tx, rx) = flume::unbounded();
+        let lw = Arc::new(Mutex::new(None));
+        let dd = Arc::new(Mutex::new(Vec::new()));
+        let ap = Arc::new(Mutex::new(None));
+        let sm = Arc::new(SyncManager::new());
+        let tm = Arc::new(TurnManager::new().unwrap());
+        let peer_map = Arc::new(Mutex::new(HashMap::new()));
+
+        let (p_tx, _p_rx) = flume::unbounded();
+        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
+        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
+
+        let (relay, _) = RelayManager::new(
+            "test".to_string(),
+            "http://localhost".to_string(),
+            tx.clone(),
+        );
+        let pm = Arc::new(PairingManager::new(
+            Arc::clone(&store),
+            tx.clone(),
+            "test".to_string(),
+            vec![],
+            0,
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::new(relay),
+            tm,
+            lm.clone(),
+        ));
+        let lpt = Arc::new(Mutex::new(0u64));
+
+        // 1. Append a clipboard item and toggle it as local_only = true
+        let payload = "Private Password".to_string();
+        let _ = store.append_event(payload.as_bytes(), "Local").unwrap();
+        
+        let history = store.get_recent_events(1).unwrap();
+        assert_eq!(history.len(), 1);
+        let item_id = history[0].id;
+        assert_eq!(history[0].content, payload);
+        assert!(!history[0].local_only); // initially false
+
+        // Toggle it to local_only
+        store.set_local_only(item_id, true).unwrap();
+        let history = store.get_recent_events(1).unwrap();
+        assert!(history[0].local_only); // now true
+
+        // 2. Test incoming SetClipboard prevention when local is local-only
+        let (tx3, rx3) = flume::unbounded();
+        tx3.send(IpcMessage::SetClipboard {
+            content: "Remote Override".to_string(),
+            timestamp: 3000u64,
+            source: "Remote".to_string(),
+        })
+        .unwrap();
+
+        // Run daemon loop
+        daemon_loop(
+            tx.clone(),
+            rx3,
+            Some(5),
+            Arc::clone(&store),
+            Arc::clone(&lw),
+            Arc::clone(&dd),
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::clone(&pm),
+            Arc::clone(&lpt),
+            peer_map.clone(),
+            None,
+            lm.clone(),
+        );
+
+        // Verify that since our current item ("Private Password") is local-only,
+        // the SetClipboard request from Remote was IGNORED (i.e. not written to clipboard or database).
+        let history = store.get_recent_events(5).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].content, "Private Password");
+    }
 }

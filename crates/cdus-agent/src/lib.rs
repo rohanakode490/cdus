@@ -73,6 +73,15 @@ pub fn daemon_loop(
                 IpcMessage::Ping => {
                     let _ = tx.send(IpcMessage::Pong);
                 }
+                IpcMessage::ToggleLocalOnly { id, local_only } => {
+                    info!("Toggling local_only to {} for event {}", local_only, id);
+                    if let Err(e) = store.set_local_only(id, local_only) {
+                        error!("Failed to toggle local_only: {}", e);
+                    }
+                    if let Ok(history) = store.get_recent_events(50) {
+                        broadcast_event(IpcMessage::HistoryResponse(history));
+                    }
+                }
                 IpcMessage::ClipboardChanged { content, timestamp } => {
                     if content.trim().is_empty() {
                         continue;
@@ -87,11 +96,18 @@ pub fn daemon_loop(
                         if let Err(e) = store.append_event(content.as_bytes(), "Local") {
                             error!("Failed to store clipboard event: {}", e);
                         }
-                        // Broadcast to peers
-                        sync_manager.broadcast(SyncMessage::ClipboardUpdate {
-                            content: content.clone(),
-                            timestamp,
-                        });
+
+                        let is_local = store.is_content_local_only(&content).unwrap_or(false);
+                        if !is_local {
+                            // Broadcast to peers
+                            sync_manager.broadcast(SyncMessage::ClipboardUpdate {
+                                content: content.clone(),
+                                timestamp,
+                            });
+                        } else {
+                            info!("Skipping remote sync: content is marked local-only");
+                        }
+
                         broadcast_event(IpcMessage::ClipboardChanged { content, timestamp });
                     } else {
                         info!("Ignoring outdated clipboard change");
@@ -105,6 +121,16 @@ pub fn daemon_loop(
                     if content.trim().is_empty() {
                         continue;
                     }
+
+                    if store.is_current_local_only().unwrap_or(false) {
+                        info!("Ignoring remote clipboard update: current local clipboard item is marked local-only");
+                        continue;
+                    }
+                    if store.is_content_local_only(&content).unwrap_or(false) {
+                        info!("Ignoring remote clipboard update: incoming content is marked local-only");
+                        continue;
+                    }
+
                     let mut last_ts = last_processed_timestamp.lock();
                     if timestamp > *last_ts {
                         *last_ts = timestamp;

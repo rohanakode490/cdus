@@ -1,7 +1,9 @@
 package io.cdus.app.ui.screens
 
 import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -10,6 +12,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,6 +34,7 @@ import uniffi.cdus_ffi.getClipboardHistory
 import uniffi.cdus_ffi.deleteClipboardItem
 import uniffi.cdus_ffi.clearClipboardHistory
 import uniffi.cdus_ffi.ClipboardHistoryItem
+import uniffi.cdus_ffi.setClipboardItemLocalOnly
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -159,6 +164,15 @@ fun ClipboardScreen() {
                                         clipboardHistory = freshHistory
                                     }
                                 }
+                            },
+                            onToggleLocalOnly = {
+                                scope.launch(Dispatchers.IO) {
+                                    setClipboardItemLocalOnly(item.id, !item.localOnly)
+                                    val freshHistory = getClipboardHistory(50u)
+                                    withContext(Dispatchers.Main) {
+                                        clipboardHistory = freshHistory
+                                    }
+                                }
                             }
                         )
                     }
@@ -168,12 +182,14 @@ fun ClipboardScreen() {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ClipboardListItem(
     item: ClipboardHistoryItem,
     isVisible: Boolean,
     onToggleVisibility: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onToggleLocalOnly: () -> Unit
 ) {
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
@@ -240,10 +256,17 @@ fun ClipboardListItem(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable {
-                clipboardManager.setText(AnnotatedString(rawContentToCopy))
-                Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
-            },
+            .combinedClickable(
+                onClick = {
+                    clipboardManager.setText(AnnotatedString(rawContentToCopy))
+                    Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                },
+                onLongClick = {
+                    onToggleLocalOnly()
+                    val statusText = if (!item.localOnly) "Locked to this device" else "Shared sync enabled"
+                    Toast.makeText(context, statusText, Toast.LENGTH_SHORT).show()
+                }
+            ),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
@@ -316,6 +339,18 @@ fun ClipboardListItem(
                 }
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = onToggleLocalOnly,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (item.localOnly) Icons.Default.Lock else Icons.Default.LockOpen,
+                            contentDescription = if (item.localOnly) "Shared sync disabled" else "Keep on this device only",
+                            tint = if (item.localOnly) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
                     if (isSensitive) {
                         IconButton(
                             onClick = onToggleVisibility,

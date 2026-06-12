@@ -119,6 +119,12 @@ function filterAndRenderClipboard() {
       }
     }
 
+    const localOnlyToggle = `
+      <button class="action-btn toggle-local-btn ${item.local_only ? 'active' : ''}" title="${item.local_only ? 'Shared sync disabled' : 'Keep on this device only'}">
+        ${item.local_only ? '🔒' : '🔓'}
+      </button>
+    `;
+
     itemEl.innerHTML = `
       ${displayHtml}
       <div class="clipboard-meta">
@@ -126,6 +132,7 @@ function filterAndRenderClipboard() {
         <span class="timestamp">${item.timestamp}</span>
       </div>
       <div class="clipboard-actions">
+        ${localOnlyToggle}
         ${sensitiveToggle}
         <button class="action-btn delete-btn" title="Delete from history">🗑️</button>
       </div>
@@ -144,6 +151,19 @@ function filterAndRenderClipboard() {
       }).catch((err) => {
         console.error("Failed to copy to clipboard:", err);
       });
+    });
+
+    const toggleLocalBtn = itemEl.querySelector(".toggle-local-btn");
+    toggleLocalBtn?.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const newLocalOnly = !item.local_only;
+      try {
+        await invoke("toggle_local_only", { id: item.id, localOnly: newLocalOnly });
+        item.local_only = newLocalOnly;
+        filterAndRenderClipboard();
+      } catch (err) {
+        console.error("Failed to toggle local only status:", err);
+      }
     });
 
     if (isSensitive) {

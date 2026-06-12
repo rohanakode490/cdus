@@ -35,6 +35,7 @@ pub struct ClipboardHistoryItem {
     pub source: String,
     pub timestamp: String,
     pub is_sensitive: bool,
+    pub local_only: bool,
 }
 
 #[uniffi::export(callback_interface)]
@@ -550,12 +551,20 @@ pub fn get_clipboard_history(limit: u32) -> Vec<ClipboardHistoryItem> {
                     source: e.source,
                     timestamp: e.timestamp,
                     is_sensitive: e.is_sensitive,
+                    local_only: e.local_only,
                 })
                 .collect(),
             Err(_) => Vec::new(),
         }
     } else {
         Vec::new()
+    }
+}
+
+#[uniffi::export]
+pub fn set_clipboard_item_local_only(id: i64, local_only: bool) {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let _ = store.set_local_only(id, local_only);
     }
 }
 

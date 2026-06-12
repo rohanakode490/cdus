@@ -762,6 +762,27 @@ fn main() {
                                                 }
                                             }
                                         }
+                                        IpcMessage::ToggleLocalOnly { id, local_only } => {
+                                            match store_clone.set_local_only(id, local_only) {
+                                                Ok(_) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log("Clipboard local_only toggled".to_string()),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!(
+                                                            "Error toggling local_only: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
                                         IpcMessage::ClearHistory => {
                                             match store_clone.clear_events() {
                                                 Ok(_) => {

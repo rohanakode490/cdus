@@ -904,6 +904,12 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
 
 
 
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -933,6 +939,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_cancel_pairing(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_fn_func_clear_clipboard_history(uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_cdus_ffi_fn_func_clear_discovered_devices(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_clear_finished_transfers(uniffi_out_err: UniffiRustCallStatus, 
@@ -940,6 +948,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_confirm_pairing(`accepted`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_connect_relay(uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_delete_clipboard_item(`id`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_get_clipboard_history(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -970,6 +980,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_resume_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_send_file(`nodeId`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_set_clipboard_item_local_only(`id`: Long,`localOnly`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_set_clipboard_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1105,6 +1117,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_cancel_pairing(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_clear_clipboard_history(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_clear_discovered_devices(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_clear_finished_transfers(
@@ -1112,6 +1126,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_func_confirm_pairing(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_connect_relay(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_delete_clipboard_item(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_clipboard_history(
     ): Short
@@ -1142,6 +1158,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_func_resume_file_transfer(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_send_file(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_set_clipboard_item_local_only(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_set_clipboard_listener(
     ): Short
@@ -1216,6 +1234,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_cancel_pairing() != 27523.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_clear_clipboard_history() != 32392.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_clear_discovered_devices() != 26911.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1226,6 +1247,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_connect_relay() != 23245.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_delete_clipboard_item() != 35163.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_get_clipboard_history() != 8152.toShort()) {
@@ -1271,6 +1295,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_send_file() != 7051.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_set_clipboard_item_local_only() != 1021.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_set_clipboard_listener() != 63714.toShort()) {
@@ -1587,7 +1614,9 @@ data class ClipboardHistoryItem (
     var `id`: kotlin.Long, 
     var `content`: kotlin.String, 
     var `source`: kotlin.String, 
-    var `timestamp`: kotlin.String
+    var `timestamp`: kotlin.String, 
+    var `isSensitive`: kotlin.Boolean, 
+    var `localOnly`: kotlin.Boolean
 ) {
     
     companion object
@@ -1603,6 +1632,8 @@ public object FfiConverterTypeClipboardHistoryItem: FfiConverterRustBuffer<Clipb
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -1610,7 +1641,9 @@ public object FfiConverterTypeClipboardHistoryItem: FfiConverterRustBuffer<Clipb
             FfiConverterLong.allocationSize(value.`id`) +
             FfiConverterString.allocationSize(value.`content`) +
             FfiConverterString.allocationSize(value.`source`) +
-            FfiConverterString.allocationSize(value.`timestamp`)
+            FfiConverterString.allocationSize(value.`timestamp`) +
+            FfiConverterBoolean.allocationSize(value.`isSensitive`) +
+            FfiConverterBoolean.allocationSize(value.`localOnly`)
     )
 
     override fun write(value: ClipboardHistoryItem, buf: ByteBuffer) {
@@ -1618,6 +1651,8 @@ public object FfiConverterTypeClipboardHistoryItem: FfiConverterRustBuffer<Clipb
             FfiConverterString.write(value.`content`, buf)
             FfiConverterString.write(value.`source`, buf)
             FfiConverterString.write(value.`timestamp`, buf)
+            FfiConverterBoolean.write(value.`isSensitive`, buf)
+            FfiConverterBoolean.write(value.`localOnly`, buf)
     }
 }
 
@@ -2398,6 +2433,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
 }
     
     
+ fun `clearClipboardHistory`()
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_clear_clipboard_history(
+        _status)
+}
+    
+    
  fun `clearDiscoveredDevices`()
         = 
     uniffiRustCall() { _status ->
@@ -2427,6 +2470,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_connect_relay(
         _status)
+}
+    
+    
+ fun `deleteClipboardItem`(`id`: kotlin.Long)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_delete_clipboard_item(
+        FfiConverterLong.lower(`id`),_status)
 }
     
     
@@ -2555,6 +2606,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_send_file(
         FfiConverterString.lower(`nodeId`),FfiConverterString.lower(`path`),_status)
+}
+    
+    
+ fun `setClipboardItemLocalOnly`(`id`: kotlin.Long, `localOnly`: kotlin.Boolean)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_set_clipboard_item_local_only(
+        FfiConverterLong.lower(`id`),FfiConverterBoolean.lower(`localOnly`),_status)
 }
     
     

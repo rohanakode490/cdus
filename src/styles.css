@@ -1102,7 +1102,22 @@ input[type="text"] {
 
 .clipboard-item {
   position: relative;
-  padding-right: 90px !important; /* Make room for absolute actions */
+  padding-right: 120px !important; /* Make room for absolute actions */
+}
+
+.action-btn.toggle-local-btn.active {
+  color: #00acc1;
+}
+.action-btn.toggle-local-btn.active:hover {
+  background-color: #e0f7fa;
+}
+@media (prefers-color-scheme: dark) {
+  .action-btn.toggle-local-btn.active {
+    color: #4dd0e1;
+  }
+  .action-btn.toggle-local-btn.active:hover {
+    background-color: #006064;
+  }
 }
 
 .clipboard-actions {

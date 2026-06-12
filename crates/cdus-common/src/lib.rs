@@ -7,6 +7,7 @@ pub struct ClipboardEvent {
     pub source: String, // "Local" or remote device name
     pub timestamp: String,
     pub is_sensitive: bool,
+    pub local_only: bool,
 }
 
 pub fn is_sensitive_content(text: &str) -> bool {
@@ -55,6 +56,10 @@ pub enum IpcMessage {
     HistoryResponse(Vec<ClipboardEvent>),
     DeleteHistoryItem {
         id: i64,
+    },
+    ToggleLocalOnly {
+        id: i64,
+        local_only: bool,
     },
     ClearHistory,
     GetState {

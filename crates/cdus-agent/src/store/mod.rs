@@ -56,7 +56,8 @@ impl Store {
                 payload BLOB NOT NULL,
                 source TEXT NOT NULL,
                 hash TEXT NOT NULL,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                local_only INTEGER NOT NULL DEFAULT 0
             )",
             [],
         )?;
@@ -74,6 +75,23 @@ impl Store {
             info!("Migrating events table: adding 'source' column...");
             events_conn.execute(
                 "ALTER TABLE events ADD COLUMN source TEXT NOT NULL DEFAULT 'Unknown'",
+                [],
+            )?;
+        }
+
+        // Migration: Add 'local_only' column if it doesn't exist
+        let has_local_only: bool = events_conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('events') WHERE name='local_only'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+
+        if !has_local_only {
+            info!("Migrating events table: adding 'local_only' column...");
+            events_conn.execute(
+                "ALTER TABLE events ADD COLUMN local_only INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
         }
@@ -581,7 +599,7 @@ impl Store {
         let conn = self.events_conn.lock();
 
         let mut stmt = conn.prepare(
-            "SELECT id, payload, source, timestamp FROM events WHERE length(payload) > 0 ORDER BY id DESC LIMIT ?",
+            "SELECT id, payload, source, timestamp, local_only FROM events WHERE length(payload) > 0 ORDER BY id DESC LIMIT ?",
         )?;
 
         let event_iter = stmt.query_map([limit], |row| {
@@ -589,12 +607,14 @@ impl Store {
             let content = String::from_utf8(payload)
                 .unwrap_or_else(|_| "[invalid utf8]".to_string());
             let is_sensitive = cdus_common::is_sensitive_content(&content);
+            let local_only: bool = row.get(4)?;
             Ok(ClipboardEvent {
                 id: row.get(0)?,
                 content,
                 source: row.get(2)?,
                 timestamp: row.get(3)?,
                 is_sensitive,
+                local_only,
             })
         })?;
 
@@ -603,6 +623,46 @@ impl Store {
             events.push(event?);
         }
         Ok(events)
+    }
+
+    pub fn set_local_only(&self, id: i64, local_only: bool) -> Result<()> {
+        let conn = self.events_conn.lock();
+        conn.execute(
+            "UPDATE events SET local_only = ?1 WHERE id = ?2",
+            (local_only as i32, id),
+        )?;
+        Ok(())
+    }
+
+    pub fn is_content_local_only(&self, content: &str) -> Result<bool> {
+        let conn = self.events_conn.lock();
+        let mut stmt = conn.prepare("SELECT local_only, payload FROM events")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, bool>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+
+        let trimmed_target = content.trim();
+        for r in rows {
+            if let Ok((local_only, db_payload)) = r {
+                let db_str = String::from_utf8_lossy(&db_payload);
+                if db_str.trim() == trimmed_target && local_only {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    pub fn is_current_local_only(&self) -> Result<bool> {
+        let conn = self.events_conn.lock();
+        let local_only: Option<bool> = conn
+            .query_row(
+                "SELECT local_only FROM events ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(local_only.unwrap_or(false))
     }
 
     pub fn set_state(&self, key: &str, value: &str) -> Result<()> {

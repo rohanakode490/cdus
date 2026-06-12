@@ -140,6 +140,15 @@ fn clear_clipboard_history() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn toggle_local_only(id: i64, local_only: bool) -> Result<String, String> {
+    let msg = IpcMessage::ToggleLocalOnly { id, local_only };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
 fn get_state(key: String) -> Result<Option<String>, String> {
     let msg = IpcMessage::GetState { key };
     match send_ipc_message(msg)? {
@@ -556,6 +565,7 @@ pub fn run() {
             set_clipboard,
             get_clipboard_history,
             delete_clipboard_item,
+            toggle_local_only,
             clear_clipboard_history,
             get_state,
             set_state,
