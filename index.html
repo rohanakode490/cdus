@@ -147,33 +147,6 @@
         </div>
       </div>
 
-      <!-- Folder Label Modal -->
-      <div id="folder-label-modal" class="modal hidden">
-        <div class="modal-content">
-          <h3>Name Synced Folder</h3>
-          <p style="margin-bottom: 15px;">Give a friendly label for this synced folder:</p>
-          <input type="text" id="folder-label-input" placeholder="e.g. Documents, Pictures" style="width: 100%; box-sizing: border-box; margin-bottom: 20px;" />
-          <div class="modal-actions">
-            <button id="folder-label-cancel-btn" class="secondary-btn" style="margin-top: 0;">Cancel</button>
-            <button id="folder-label-confirm-btn" class="primary-btn">Add Folder</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Conflict Resolution Modal -->
-      <div id="conflict-modal" class="modal hidden">
-        <div class="modal-content" style="max-height: 85vh; width: 600px; max-width: 90%; overflow-y: auto;">
-          <h3>Conflict Resolution</h3>
-          <p style="margin-bottom: 20px;">The following files have conflicting modifications. Choose which version to keep.</p>
-          <div id="conflicts-list" style="width: 100%;">
-            <!-- Side-by-side comparison cards will go here -->
-          </div>
-          <div class="modal-actions" style="margin-top: 20px; width: 100%;">
-            <button id="close-conflict-modal-btn" class="secondary-btn" style="margin-top: 0; width: 100%;">Close</button>
-          </div>
-        </div>
-      </div>
-
       <!-- Transfer Progress Toast -->
       <div id="transfer-progress-toast" class="toast hidden">
         <div class="toast-content">
@@ -295,16 +268,6 @@
               </button>
             </div>
             <p id="set-clipboard-status" class="setting-hint"></p>
-          </div>
-
-          <div class="settings-group">
-            <h3>Folder Synchronization</h3>
-            <p class="setting-hint">Select specific folders to sync across your devices.</p>
-            <div style="margin-top: 10px; margin-bottom: 15px;">
-              <button id="add-folder-btn" class="secondary-btn" style="margin-top: 0;">Add Folder to Sync</button>
-            </div>
-            <div id="synced-folders-list" class="folders-list"></div>
-            <p id="folders-empty" class="empty-state">No folders synced yet.</p>
           </div>
 
           <button id="save-settings-btn" class="primary-btn">

@@ -40,21 +40,6 @@ let pairingModal: Element | null = null;
 let cancelPairingBtn: Element | null = null;
 let confirmPairingBtn: HTMLButtonElement | null = null;
 
-// Folder Sync UI Elements
-let folderLabelModal: Element | null = null;
-let folderLabelInput: HTMLInputElement | null = null;
-let folderLabelCancelBtn: Element | null = null;
-let folderLabelConfirmBtn: Element | null = null;
-let conflictModal: Element | null = null;
-let conflictsList: Element | null = null;
-let closeConflictModalBtn: Element | null = null;
-let syncedFoldersList: Element | null = null;
-let foldersEmpty: Element | null = null;
-let addFolderBtn: Element | null = null;
-
-let selectedFolderPath = "";
-let activeConflictFolderId: number | null = null;
-
 // --- Helper Functions ---
 
 let clipboardHistory: any[] = [];
@@ -655,70 +640,7 @@ window.addEventListener("DOMContentLoaded", () => {
   cancelPairingBtn = document.querySelector("#pairing-cancel-btn");
   confirmPairingBtn = document.querySelector("#pairing-confirm-btn") as HTMLButtonElement;
 
-  // Folder Sync UI Selections
-  folderLabelModal = document.querySelector("#folder-label-modal");
-  folderLabelInput = document.querySelector("#folder-label-input") as HTMLInputElement;
-  folderLabelCancelBtn = document.querySelector("#folder-label-cancel-btn");
-  folderLabelConfirmBtn = document.querySelector("#folder-label-confirm-btn");
-  conflictModal = document.querySelector("#conflict-modal");
-  conflictsList = document.querySelector("#conflicts-list");
-  closeConflictModalBtn = document.querySelector("#close-conflict-modal-btn");
-  syncedFoldersList = document.querySelector("#synced-folders-list");
-  foldersEmpty = document.querySelector("#folders-empty");
-  addFolderBtn = document.querySelector("#add-folder-btn");
-
-  // Folder Sync Event Listeners
-  addFolderBtn?.addEventListener("click", async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        directory: true,
-      });
-      if (selected) {
-        selectedFolderPath = selected as string;
-        if (folderLabelInput) folderLabelInput.value = "";
-        folderLabelModal?.classList.remove("hidden");
-        folderLabelInput?.focus();
-      }
-    } catch (err) {
-      console.error("Failed to open folder picker:", err);
-      alert("Failed to open native directory picker.");
-    }
-  });
-
-  folderLabelCancelBtn?.addEventListener("click", () => {
-    folderLabelModal?.classList.add("hidden");
-    selectedFolderPath = "";
-  });
-
-  async function handleAddFolderConfirm() {
-    const label = folderLabelInput?.value.trim() || "Synced Folder";
-    try {
-      await invoke("add_synced_folder", { path: selectedFolderPath, label: label });
-      folderLabelModal?.classList.add("hidden");
-      selectedFolderPath = "";
-      loadSyncedFolders();
-    } catch (err) {
-      console.error("Failed to add synced folder:", err);
-      alert("Failed to add synced folder.");
-    }
-  }
-
-  folderLabelConfirmBtn?.addEventListener("click", handleAddFolderConfirm);
-  folderLabelInput?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      handleAddFolderConfirm();
-    }
-  });
-
-  closeConflictModalBtn?.addEventListener("click", () => {
-    conflictModal?.classList.add("hidden");
-    activeConflictFolderId = null;
-    loadSyncedFolders();
-  });
-
   loadSettings();
-  loadSyncedFolders();
   loadFileHistory();
 
   const searchInput = document.querySelector("#clipboard-search") as HTMLInputElement;
@@ -803,9 +725,6 @@ window.addEventListener("DOMContentLoaded", () => {
         renderPairedDevices();
       } else if (targetViewId === "files") {
         renderFiles();
-      } else if (targetViewId === "settings") {
-        loadSettings();
-        loadSyncedFolders();
       }
     });
   });
@@ -817,9 +736,6 @@ window.addEventListener("DOMContentLoaded", () => {
     renderPairedDevices();
   } else if (activeView?.id === "view-files") {
     renderFiles();
-  } else if (activeView?.id === "view-settings") {
-    loadSettings();
-    loadSyncedFolders();
   }
 
   const limitSlider = document.querySelector("#clipboard-limit") as HTMLInputElement;
@@ -1257,170 +1173,5 @@ window.addEventListener("DOMContentLoaded", () => {
     if (clipboardView?.classList.contains("active")) {
       renderClipboard();
     }
-
-    const settingsView = document.querySelector("#view-settings");
-    if (settingsView?.classList.contains("active")) {
-      loadSyncedFolders();
-    }
   }, 5000);
 });
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 Bytes";
-  const k = 1024;
-  const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-}
-
-async function loadSyncedFolders() {
-  if (!syncedFoldersList) return;
-  try {
-    const folders: any[] = await invoke("get_synced_folders");
-    syncedFoldersList.innerHTML = "";
-    if (folders.length === 0) {
-      foldersEmpty?.classList.remove("hidden");
-      return;
-    }
-    foldersEmpty?.classList.add("hidden");
-    folders.forEach((folder) => {
-      const row = document.createElement("div");
-      row.className = "folder-row";
-      
-      const badgeClass = folder.status.toLowerCase(); // synced, syncing, conflict
-      const badgeText = folder.status;
-
-      row.innerHTML = `
-        <div class="folder-info">
-          <span class="folder-label-name">${folder.label}</span>
-          <span class="folder-path-text">${folder.path}</span>
-        </div>
-        <div class="folder-actions">
-          <span class="status-badge ${badgeClass}">${badgeText}</span>
-          ${folder.status.toLowerCase() === "conflict" ? `<button class="tertiary-btn resolve-conflict-btn" data-id="${folder.id}">Resolve</button>` : ""}
-          <button class="action-btn delete-folder-btn" data-id="${folder.id}" title="Remove Folder">🗑️</button>
-        </div>
-      `;
-
-      row.querySelector(".delete-folder-btn")?.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        if (confirm(`Stop syncing "${folder.label}"? Local files will not be deleted.`)) {
-          try {
-            await invoke("remove_synced_folder", { id: folder.id });
-            loadSyncedFolders();
-          } catch (err) {
-            console.error("Failed to remove folder:", err);
-            alert("Failed to remove folder.");
-          }
-        }
-      });
-
-      row.querySelector(".resolve-conflict-btn")?.addEventListener("click", (e) => {
-        e.stopPropagation();
-        activeConflictFolderId = folder.id;
-        showConflictModal();
-      });
-
-      syncedFoldersList?.appendChild(row);
-    });
-  } catch (err) {
-    console.error("Failed to load synced folders:", err);
-  }
-}
-
-async function showConflictModal() {
-  if (!conflictModal || activeConflictFolderId === null) return;
-  conflictModal.classList.remove("hidden");
-  loadConflictedFiles();
-}
-
-async function loadConflictedFiles() {
-  if (!conflictsList || activeConflictFolderId === null) return;
-  try {
-    const conflicts: any[] = await invoke("get_conflicted_files", { folderId: activeConflictFolderId });
-    conflictsList.innerHTML = "";
-    if (conflicts.length === 0) {
-      // No conflicts remaining, auto-close
-      conflictModal?.classList.add("hidden");
-      activeConflictFolderId = null;
-      loadSyncedFolders();
-      return;
-    }
-
-    conflicts.forEach((conflict) => {
-      const item = document.createElement("div");
-      item.className = "conflict-file-item";
-      
-      item.innerHTML = `
-        <div class="conflict-file-path">${conflict.file_path}</div>
-        <div class="conflict-cards-container">
-          <div class="conflict-card local">
-            <span class="conflict-card-title">Local Version</span>
-            <div class="conflict-meta-row">
-              <span class="conflict-meta-label">Size:</span>
-              <span>${formatBytes(conflict.local_size)}</span>
-            </div>
-            <div class="conflict-meta-row">
-              <span class="conflict-meta-label">Modified:</span>
-              <span>${conflict.local_modified}</span>
-            </div>
-            <button class="primary-btn keep-local-btn" style="margin-top: 12px; font-size: 0.8rem; padding: 6px 12px;">Keep Local</button>
-          </div>
-          <div class="conflict-card remote">
-            <span class="conflict-card-title">Remote Version</span>
-            <div class="conflict-meta-row">
-              <span class="conflict-meta-label">Source Device:</span>
-              <span>${conflict.remote_device_name}</span>
-            </div>
-            <div class="conflict-meta-row">
-              <span class="conflict-meta-label">Size:</span>
-              <span>${formatBytes(conflict.remote_size)}</span>
-            </div>
-            <div class="conflict-meta-row">
-              <span class="conflict-meta-label">Modified:</span>
-              <span>${conflict.remote_modified}</span>
-            </div>
-            <button class="primary-btn keep-remote-btn" style="margin-top: 12px; font-size: 0.8rem; padding: 6px 12px; background-color: #ef6c00;">Keep Remote</button>
-          </div>
-        </div>
-        <div class="conflict-actions-row">
-          <button class="secondary-btn keep-both-btn" style="margin-top: 0; width: 100%;">Keep Both (Rename remote version)</button>
-        </div>
-      `;
-
-      item.querySelector(".keep-local-btn")?.addEventListener("click", async () => {
-        try {
-          await invoke("resolve_conflict", { conflictId: conflict.id, choice: "local" });
-          loadConflictedFiles();
-        } catch (err) {
-          console.error("Failed to resolve conflict:", err);
-          alert("Error resolving conflict.");
-        }
-      });
-
-      item.querySelector(".keep-remote-btn")?.addEventListener("click", async () => {
-        try {
-          await invoke("resolve_conflict", { conflictId: conflict.id, choice: "remote" });
-          loadConflictedFiles();
-        } catch (err) {
-          console.error("Failed to resolve conflict:", err);
-          alert("Error resolving conflict.");
-        }
-      });
-
-      item.querySelector(".keep-both-btn")?.addEventListener("click", async () => {
-        try {
-          await invoke("resolve_conflict", { conflictId: conflict.id, choice: "both" });
-          loadConflictedFiles();
-        } catch (err) {
-          console.error("Failed to resolve conflict:", err);
-          alert("Error resolving conflict.");
-        }
-      });
-
-      conflictsList?.appendChild(item);
-    });
-  } catch (err) {
-    console.error("Failed to load conflicted files:", err);
-  }
-}

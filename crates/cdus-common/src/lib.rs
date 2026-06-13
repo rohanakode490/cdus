@@ -194,24 +194,6 @@ pub enum IpcMessage {
     TestLibp2pRequest {
         peer_id: String,
     },
-    // Folder Sync IPC
-    GetSyncedFolders,
-    SyncedFoldersResponse(Vec<SyncedFolder>),
-    AddSyncedFolder {
-        path: String,
-        label: Option<String>,
-    },
-    RemoveSyncedFolder {
-        id: i64,
-    },
-    GetConflictedFiles {
-        folder_id: i64,
-    },
-    ConflictedFilesResponse(Vec<ConflictedFile>),
-    ResolveConflict {
-        conflict_id: i64,
-        choice: String, // "local" | "remote" | "both"
-    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -335,26 +317,6 @@ pub struct TransferProgress {
     pub node_id: String,
     pub completed_hashes: std::collections::HashSet<String>,
     pub accepted: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-pub struct SyncedFolder {
-    pub id: i64,
-    pub path: String,
-    pub label: String,
-    pub status: String, // "synced" | "syncing" | "conflict"
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-pub struct ConflictedFile {
-    pub id: i64,
-    pub folder_id: i64,
-    pub file_path: String,
-    pub local_size: u64,
-    pub local_modified: String,
-    pub remote_size: u64,
-    pub remote_modified: String,
-    pub remote_device_name: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
