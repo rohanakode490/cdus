@@ -282,6 +282,15 @@ async fn reject_file_transfer(transfer_id: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn cancel_file_transfer(transfer_id: String) -> Result<String, String> {
+    let msg = IpcMessage::CancelFileTransfer { transfer_id };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
 async fn get_file_transfer_history(limit: u32) -> Result<Vec<cdus_common::FileTransferRecord>, String> {
     let msg = IpcMessage::GetFileTransferHistory { limit };
     match send_ipc_message(msg)? {
@@ -294,7 +303,43 @@ async fn get_file_transfer_history(limit: u32) -> Result<Vec<cdus_common::FileTr
 async fn clear_finished_transfers() -> Result<String, String> {
     let msg = IpcMessage::ClearFinishedTransfers;
     match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
+        IpcMessage::Log(msg) => {
+            if msg.starts_with("Error") {
+                Err(msg)
+            } else {
+                Ok(msg)
+            }
+        }
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn delete_file_transfer(transfer_id: String) -> Result<String, String> {
+    let msg = IpcMessage::DeleteFileTransfer { transfer_id };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => {
+            if msg.starts_with("Error") {
+                Err(msg)
+            } else {
+                Ok(msg)
+            }
+        }
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn delete_file_permanently(transfer_id: String) -> Result<String, String> {
+    let msg = IpcMessage::DeleteFilePermanently { transfer_id };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => {
+            if msg.starts_with("Error") {
+                Err(msg)
+            } else {
+                Ok(msg)
+            }
+        }
         _ => Err("Unexpected response from agent".to_string()),
     }
 }
@@ -581,8 +626,11 @@ pub fn run() {
             send_file,
             accept_file_transfer,
             reject_file_transfer,
+            cancel_file_transfer,
             get_file_transfer_history,
             clear_finished_transfers,
+            delete_file_transfer,
+            delete_file_permanently,
             start_benchmark,
             get_qr_pairing_payload,
             pair_with_qr,

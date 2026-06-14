@@ -237,6 +237,10 @@ async function loadFileHistory() {
       let status = record.status;
       if (status === "in_progress" || status === "paused" || status === "awaiting_acceptance") {
         status = "paused";
+      } else if (status === "failed") {
+        status = "error";
+      } else if (status === "declined") {
+        status = "rejected";
       }
 
       transfers.set(record.transfer_id, {
@@ -318,6 +322,7 @@ function renderFiles() {
         <div class="options-dropdown hidden" id="dropdown-${transfer.transferId}">
           ${isFinished ? `
             <button class="dismiss-btn dropdown-option" data-id="${transfer.transferId}">Dismiss</button>
+            <button class="delete-file-btn danger-option dropdown-option" data-id="${transfer.transferId}">Delete Permanently</button>
           ` : `
             <button class="cancel-btn danger-option dropdown-option" data-id="${transfer.transferId}">Cancel</button>
           `}
@@ -339,12 +344,32 @@ function renderFiles() {
     });
 
     if (isFinished) {
-      itemEl.querySelector(".dismiss-btn")?.addEventListener("click", () => {
+      itemEl.querySelector(".dismiss-btn")?.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        try {
+          await invoke("delete_file_transfer", { transferId: transfer.transferId });
+        } catch (err) {
+          console.error("Failed to delete file transfer:", err);
+        }
         transfers.delete(transfer.transferId);
         renderFiles();
       });
+
+      itemEl.querySelector(".delete-file-btn")?.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (confirm("Are you sure you want to permanently delete this file from your disk?")) {
+          try {
+            await invoke("delete_file_permanently", { transferId: transfer.transferId });
+          } catch (err) {
+            console.error("Failed to delete file permanently:", err);
+          }
+          transfers.delete(transfer.transferId);
+          renderFiles();
+        }
+      });
     } else {
-      itemEl.querySelector(".cancel-btn")?.addEventListener("click", async () => {
+      itemEl.querySelector(".cancel-btn")?.addEventListener("click", async (e) => {
+        e.stopPropagation();
         const id = transfer.transferId;
         try {
           await invoke("cancel_file_transfer", { transferId: id });
@@ -661,13 +686,34 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  document.querySelector("#clear-finished-btn")?.addEventListener("click", () => {
+  document.querySelector("#clear-finished-btn")?.addEventListener("click", async () => {
+    try {
+      await invoke("clear_finished_transfers");
+    } catch (err) {
+      console.error("Failed to clear finished transfers:", err);
+    }
     transfers.forEach((transfer, hash) => {
-      if (transfer.status === "complete" || transfer.status === "error") {
+      if (transfer.status === "complete" || transfer.status === "error" || transfer.status === "rejected") {
         transfers.delete(hash);
       }
     });
     renderFiles();
+  });
+
+  document.querySelector("#clear-file-history-btn")?.addEventListener("click", async () => {
+    if (confirm("Are you sure you want to clear all file transfer history?")) {
+      try {
+        await invoke("clear_finished_transfers");
+        transfers.forEach((transfer, hash) => {
+          if (transfer.status === "complete" || transfer.status === "error" || transfer.status === "rejected") {
+            transfers.delete(hash);
+          }
+        });
+        renderFiles();
+      } catch (err) {
+        console.error("Failed to clear file transfer history:", err);
+      }
+    }
   });
 
   const sortTrigger = document.querySelector("#files-sort-trigger");
@@ -969,7 +1015,7 @@ window.addEventListener("DOMContentLoaded", () => {
       try {
         const status: [string | null, boolean, boolean, string, boolean] = await invoke("get_pairing_status");
         const [pin, active, isInitiator, remoteLabel, silent] = status;
-        if (active && (pin || silent)) {
+        if (active && pin && !silent) {
           showPairingModal({ id: "remote", name: remoteLabel, os: "Unknown" }, isInitiator, silent);
           if (pin) {
             const digits = document.querySelectorAll(".pin-digit");
