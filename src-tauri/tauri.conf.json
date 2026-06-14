@@ -25,6 +25,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -32,5 +33,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "pubkey": "dW51c2VkX2Zvcl9ub3dfYnV0X3JlcXVpcmVkX2J5X3NjaGVtYV9zaWduZXI=",
+      "endpoints": [
+        "https://raw.githubusercontent.com/rohanakode/cdus/main/updater.json"
+      ]
+    }
   }
 }
+

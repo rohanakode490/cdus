@@ -1190,6 +1190,122 @@ fn encode_image_to_png(image: &arboard::ImageData) -> Result<Vec<u8>, anyhow::Er
 }
 
 
+#[cfg(target_os = "macos")]
+fn install_service() {
+    info!("Installing CDUS Agent as macOS launchd agent...");
+
+    let exe_path = std::env::current_exe().expect("Failed to get current executable path");
+    let home = std::env::var("HOME").expect("Failed to get HOME environment variable");
+    let plist_dir = std::path::PathBuf::from(home).join("Library/LaunchAgents");
+    let plist_path = plist_dir.join("com.cdus.agent.plist");
+
+    let service_content = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cdus.agent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{}</string>
+    </array>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/cdus-agent.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/cdus-agent.err.log</string>
+</dict>
+</plist>
+"#,
+        exe_path.display()
+    );
+
+    std::fs::create_dir_all(&plist_dir).expect("Failed to create LaunchAgents directory");
+    std::fs::write(&plist_path, service_content).expect("Failed to write launchd plist file");
+    info!("Launchd plist written to {}", plist_path.display());
+
+    run_command("launchctl", &["load", "-w", plist_path.to_str().unwrap()]);
+    run_command("launchctl", &["start", "com.cdus.agent"]);
+
+    info!("CDUS Agent service installed and started.");
+}
+
+#[cfg(target_os = "macos")]
+fn uninstall_service() {
+    info!("Uninstalling CDUS Agent macOS launchd agent...");
+
+    let home = std::env::var("HOME").expect("Failed to get HOME environment variable");
+    let plist_path = std::path::PathBuf::from(home)
+        .join("Library/LaunchAgents/com.cdus.agent.plist");
+
+    if plist_path.exists() {
+        run_command("launchctl", &["unload", "-w", plist_path.to_str().unwrap()]);
+        std::fs::remove_file(&plist_path).expect("Failed to remove launchd plist file");
+        info!("Launchd plist file removed.");
+    }
+
+    info!("CDUS Agent service uninstalled.");
+}
+
+#[cfg(target_os = "windows")]
+fn install_service() {
+    info!("Installing CDUS Agent as Windows startup program...");
+
+    let exe_path = std::env::current_exe().expect("Failed to get current executable path");
+    let exe_str = exe_path.to_str().expect("Failed to convert exe path to string");
+
+    // Add to HKCU Registry Run key using reg.exe command line
+    run_command(
+        "reg",
+        &[
+            "add",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            "/v",
+            "CDUSAgent",
+            "/t",
+            "REG_SZ",
+            "/d",
+            exe_str,
+            "/f",
+        ],
+    );
+
+    // Spawn the daemon process now in the background
+    let _ = std::process::Command::new(&exe_path)
+        .spawn()
+        .expect("Failed to start CDUS Agent process");
+
+    info!("CDUS Agent registry run key installed and daemon started.");
+}
+
+#[cfg(target_os = "windows")]
+fn uninstall_service() {
+    info!("Uninstalling CDUS Agent Windows startup program...");
+
+    run_command(
+        "reg",
+        &[
+            "delete",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            "/v",
+            "CDUSAgent",
+            "/f",
+        ],
+    );
+
+    // Best-effort termination of running agent processes
+    let _ = std::process::Command::new("taskkill")
+        .args(&["/IM", "cdus-agent.exe", "/F"])
+        .status();
+
+    info!("CDUS Agent registry run key deleted and processes terminated.");
+}
+
+#[cfg(target_os = "linux")]
 fn install_service() {
     info!("Installing CDUS Agent as systemd user service...");
 
@@ -1230,6 +1346,7 @@ WantedBy=default.target
     info!("CDUS Agent service installed and started.");
 }
 
+#[cfg(target_os = "linux")]
 fn uninstall_service() {
     info!("Uninstalling CDUS Agent systemd user service...");
 
@@ -1253,6 +1370,17 @@ fn uninstall_service() {
     run_command("systemctl", &["--user", "daemon-reload"]);
     info!("CDUS Agent service uninstalled.");
 }
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn install_service() {
+    info!("Service installation not supported on this platform.");
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn uninstall_service() {
+    info!("Service uninstallation not supported on this platform.");
+}
+
 
 fn run_command(cmd: &str, args: &[&str]) {
     let status = std::process::Command::new(cmd)

@@ -1,8 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import QRCode from "qrcode";
 import { Html5Qrcode } from "html5-qrcode";
+
 
 // --- State Management ---
 let pairedDeviceIds: string[] = [];
@@ -1220,4 +1223,50 @@ window.addEventListener("DOMContentLoaded", () => {
       renderClipboard();
     }
   }, 5000);
+
+
+  // Check for updates on startup
+  checkForUpdates();
+
+  document.querySelector("#check-update-btn")?.addEventListener("click", async () => {
+    const statusEl = document.querySelector("#update-status");
+    if (statusEl) statusEl.textContent = "Checking for updates...";
+    try {
+      const update = await check();
+      if (update) {
+        if (statusEl) statusEl.textContent = `Update available: version ${update.version}`;
+        if (confirm(`A new version ${update.version} is available. Would you like to install it now and restart?`)) {
+          if (statusEl) statusEl.textContent = "Downloading and installing...";
+          await update.downloadAndInstall();
+          await relaunch();
+        }
+      } else {
+        if (statusEl) statusEl.textContent = "Application is up to date.";
+      }
+    } catch (err) {
+      console.error("Failed to check for updates:", err);
+      if (statusEl) statusEl.textContent = "Failed to check for updates.";
+    }
+  });
 });
+
+async function checkForUpdates() {
+  try {
+    console.log("Checking for updates...");
+    const update = await check();
+    if (update) {
+      console.log(`Update found: version ${update.version} (current: ${update.currentVersion})`);
+      if (confirm(`A new version ${update.version} is available. Would you like to install it now and restart?`)) {
+        console.log("Downloading and installing update...");
+        await update.downloadAndInstall();
+        console.log("Update installed, relaunching application...");
+        await relaunch();
+      }
+    } else {
+      console.log("No updates found.");
+    }
+  } catch (err) {
+    console.error("Failed to check for updates:", err);
+  }
+}
+

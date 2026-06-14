@@ -16,9 +16,39 @@ A local-first system for syncing clipboards and transferring files between Linux
 ### Build and Run the Agent
 The agent must be running for the UI to work.
 ```bash
-# Build and run the background daemon
+# Build and run the background daemon in interactive mode
 cargo run -p cdus-agent
 ```
+
+### Running as a Background Daemon/Service
+You can install the agent to run automatically in the background on startup:
+
+* **Linux (systemd user service):**
+  ```bash
+  # Install and start the service
+  cargo run -p cdus-agent -- install
+
+  # Stop and uninstall the service
+  cargo run -p cdus-agent -- uninstall
+  ```
+
+* **macOS (launchd User Agent):**
+  ```bash
+  # Install and register the launchd plist (runs in user's graphical session)
+  cargo run -p cdus-agent -- install
+
+  # Unload and remove the launchd plist
+  cargo run -p cdus-agent -- uninstall
+  ```
+
+* **Windows (Registry Startup Run Key):**
+  ```bash
+  # Install registry run key and spawn the daemon in user session
+  cargo run -p cdus-agent -- install
+
+  # Delete registry run key and terminate running processes
+  cargo run -p cdus-agent -- uninstall
+  ```
 
 ### Run the Desktop UI (Tauri)
 ```bash
