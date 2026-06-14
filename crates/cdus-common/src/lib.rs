@@ -188,6 +188,12 @@ pub enum IpcMessage {
     },
     FileTransferHistoryResponse(Vec<FileTransferRecord>),
     ClearFinishedTransfers,
+    DeleteFileTransfer {
+        transfer_id: String,
+    },
+    DeleteFilePermanently {
+        transfer_id: String,
+    },
     // New File Transfer IPC
     FileProgress(ProgressEvent),
     // Testing

@@ -357,15 +357,18 @@ impl Libp2pManager {
                                     // TODO: Get real session key
                                     let session_key = crate::file_transfer::SessionKey([0u8; 32]);
 
-                                    let download_dir = if let Some(custom) = download_dir_custom_clone {
-                                        custom
-                                    } else if let Some(user_dirs) = directories::UserDirs::new() {
-                                        user_dirs.download_dir()
-                                            .map(|d| d.to_path_buf())
-                                            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-                                    } else {
-                                        std::env::current_dir().unwrap_or_default()
-                                    };
+                                     let download_dir = if let Some(custom) = download_dir_custom_clone {
+                                         custom
+                                     } else if let Some(user_dirs) = directories::UserDirs::new() {
+                                         user_dirs.download_dir()
+                                             .map(|d| d.join("cdus"))
+                                             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("cdus"))
+                                     } else {
+                                         std::env::current_dir().unwrap_or_default().join("cdus")
+                                     };
+                                     if let Err(e) = std::fs::create_dir_all(&download_dir) {
+                                         error!("Failed to create download directory {:?}: {}", download_dir, e);
+                                     }
                                     let (p_tx, p_rx) = flume::unbounded();
                                     let tx_for_progress = tx_clone.clone();
                                     thread::spawn(move || {

@@ -650,7 +650,26 @@ pub fn get_file_transfer_history(limit: u32) -> Vec<FileTransfer> {
 #[uniffi::export]
 pub fn clear_finished_transfers() {
     if let Some(store) = STORE.lock().unwrap().as_ref() {
-        let _ = store.clear_finished_transfers();
+        if let Err(e) = store.clear_finished_transfers() {
+            error!("clear_finished_transfers: failed to clear from database: {:?}", e);
+        } else {
+            info!("clear_finished_transfers: successfully cleared finished transfers");
+        }
+    } else {
+        error!("clear_finished_transfers: STORE is None!");
+    }
+}
+
+#[uniffi::export]
+pub fn delete_file_transfer(transfer_id: String) {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        if let Err(e) = store.delete_transfer(&transfer_id) {
+            error!("delete_file_transfer: failed to delete {} from database: {:?}", transfer_id, e);
+        } else {
+            info!("delete_file_transfer: successfully deleted {} from database", transfer_id);
+        }
+    } else {
+        error!("delete_file_transfer: STORE is None!");
     }
 }
 

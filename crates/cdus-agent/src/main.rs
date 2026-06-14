@@ -347,6 +347,98 @@ fn main() {
                                                 }
                                             }
                                         }
+                                        IpcMessage::ClearFinishedTransfers => {
+                                            info!("IPC: ClearFinishedTransfers requested");
+                                            match store_clone.clear_finished_transfers() {
+                                                Ok(_) => {
+                                                    let resp_bytes =
+                                                        serde_json::to_vec(&IpcMessage::Log(
+                                                            "Finished transfers cleared"
+                                                                .to_string(),
+                                                        ))
+                                                        .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    error!("IPC: Failed to clear finished transfers: {}", e);
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!(
+                                                            "Error clearing transfers: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
+                                        IpcMessage::DeleteFileTransfer { transfer_id } => {
+                                            info!("IPC: DeleteFileTransfer requested for ID: {}", transfer_id);
+                                            match store_clone.delete_transfer(&transfer_id) {
+                                                Ok(_) => {
+                                                    let resp_bytes =
+                                                        serde_json::to_vec(&IpcMessage::Log(
+                                                            "Transfer deleted"
+                                                                .to_string(),
+                                                        ))
+                                                        .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    error!("IPC: Failed to delete transfer {}: {}", transfer_id, e);
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!(
+                                                            "Error deleting transfer: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
+                                        IpcMessage::DeleteFilePermanently { transfer_id } => {
+                                            info!("IPC: DeleteFilePermanently requested for ID: {}", transfer_id);
+                                            let mut file_deleted = false;
+                                            let mut file_path_str = String::new();
+                                            if let Ok(Some(transfer)) = store_clone.get_transfer(&transfer_id) {
+                                                file_path_str = transfer.file_path.clone();
+                                                let path = std::path::Path::new(&transfer.file_path);
+                                                if path.exists() {
+                                                    if let Err(e) = std::fs::remove_file(path) {
+                                                        error!("Failed to delete physical file {:?}: {:?}", path, e);
+                                                    } else {
+                                                        file_deleted = true;
+                                                        info!("Successfully deleted physical file {:?}", path);
+                                                    }
+                                                }
+                                            }
+
+                                            match store_clone.delete_transfer(&transfer_id) {
+                                                Ok(_) => {
+                                                    let msg = if file_deleted {
+                                                        format!("Transfer and physical file deleted: {}", file_path_str)
+                                                    } else {
+                                                        format!("Transfer deleted (physical file not found or failed to delete): {}", file_path_str)
+                                                    };
+                                                    let resp_bytes =
+                                                        serde_json::to_vec(&IpcMessage::Log(msg))
+                                                        .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    error!("IPC: Failed to delete transfer {} from DB: {}", transfer_id, e);
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!(
+                                                            "Error deleting transfer from DB: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
                                         IpcMessage::PairWithQr { payload } => {
                                             match pm_clone.parse_qr_payload(&payload) {
                                                 Ok((node_id, secret, label, port, ips)) => {
@@ -603,9 +695,10 @@ fn main() {
                                             let ap = active_pairing_clone.lock();
                                             let resp = match *ap {
                                                 Some(ref state) => {
+                                                    let active = !state.is_reconnect;
                                                     IpcMessage::PairingStatusResponse {
                                                         pin: Some(state.pin.clone()),
-                                                        active: true,
+                                                        active,
                                                         is_initiator: state.is_initiator,
                                                         remote_label: state.remote_label.clone(),
                                                         silent: state.silent,
@@ -930,29 +1023,7 @@ fn main() {
                                                 }
                                             }
                                         }
-                                        IpcMessage::ClearFinishedTransfers => {
-                                            match store_clone.clear_finished_transfers() {
-                                                Ok(_) => {
-                                                    let resp_bytes =
-                                                        serde_json::to_vec(&IpcMessage::Log(
-                                                            "Finished transfers cleared"
-                                                                .to_string(),
-                                                        ))
-                                                        .unwrap();
-                                                    let _ = stream.write_all(&resp_bytes);
-                                                }
-                                                Err(e) => {
-                                                    let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log(format!(
-                                                            "Error clearing transfers: {}",
-                                                            e
-                                                        )),
-                                                    )
-                                                    .unwrap();
-                                                    let _ = stream.write_all(&resp_bytes);
-                                                }
-                                            }
-                                        }
+
                                         _ => {
                                             let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
                                                 "Message received".to_string(),

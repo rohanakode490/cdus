@@ -150,7 +150,15 @@ impl FileTransferManager {
     pub fn simulate_crash(&self, transfer_id: &str) {
         info!("FileTransferManager: SIMULATING HARD CRASH for {}", transfer_id);
         // In a real system we'd just return an error, but for testing auto-resume after process death:
+        #[cfg(not(test))]
         std::process::exit(42);
+        #[cfg(test)]
+        {
+            let mut tokens = self.crash_tokens.lock();
+            if let Some(tx) = tokens.remove(transfer_id) {
+                let _ = tx.send(());
+            }
+        }
     }
 
     pub fn set_crash_trigger(&self, transfer_id: String, offset: u64) {

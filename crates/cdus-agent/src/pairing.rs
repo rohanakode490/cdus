@@ -50,6 +50,7 @@ pub struct ActivePairingState {
     pub confirmed: Arc<Mutex<Option<bool>>>,
     pub handshake: Arc<Mutex<Option<HandshakeState>>>,
     pub silent: bool,
+    pub is_reconnect: bool,
 }
 
 pub struct SyncManager {
@@ -352,6 +353,7 @@ impl PairingManager {
                                 confirmed: Arc::new(Mutex::new(None)),
                                 handshake: Arc::new(Mutex::new(Some(noise))),
                                 silent: is_paired || use_ik || has_active_oob,
+                                is_reconnect: is_paired || use_ik,
                             });
 
                             if is_paired || use_ik {
@@ -850,6 +852,7 @@ impl PairingManager {
                     confirmed: Arc::new(Mutex::new(None)),
                     handshake: Arc::new(Mutex::new(Some(noise))),
                     silent: use_ik || has_oob,
+                    is_reconnect: use_ik,
                 });
 
                 if use_ik || has_oob {
@@ -947,6 +950,7 @@ impl PairingManager {
                     confirmed: Arc::new(Mutex::new(Some(true))), // Auto-confirmed
                     handshake: Arc::new(Mutex::new(Some(noise))),
                     silent: true,
+                    is_reconnect: true,
                 });
 
                 self.monitor_relay_pairing(target_uuid);
@@ -1605,6 +1609,7 @@ fn handle_incoming_connection_inner(
                     confirmed: Arc::clone(&confirmed),
                     handshake: Arc::new(Mutex::new(None)),
                     silent: false, // Always show modal for first-time pairing
+                    is_reconnect: false,
                 });
             }
 
@@ -1973,6 +1978,7 @@ fn handle_outgoing_connection_inner(
                     confirmed: Arc::clone(&confirmed),
                     handshake: Arc::new(Mutex::new(None)),
                     silent: false, // Always show modal for first-time pairing
+                    is_reconnect: false,
                 });
             }
 

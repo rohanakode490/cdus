@@ -245,8 +245,9 @@ impl Store {
 
     pub fn delete_transfer(&self, transfer_id: &str) -> Result<()> {
         let conn = self.state_conn.lock();
-        conn.execute("DELETE FROM file_chunks WHERE transfer_id = ?1", [transfer_id])?;
-        conn.execute("DELETE FROM file_transfers WHERE transfer_id = ?1", [transfer_id])?;
+        let chunks_deleted = conn.execute("DELETE FROM file_chunks WHERE transfer_id = ?1", [transfer_id])?;
+        let transfers_deleted = conn.execute("DELETE FROM file_transfers WHERE transfer_id = ?1", [transfer_id])?;
+        info!("delete_transfer: ID='{}' -> chunks_deleted={}, transfers_deleted={}", transfer_id, chunks_deleted, transfers_deleted);
         Ok(())
     }
 
@@ -461,9 +462,14 @@ impl Store {
     pub fn clear_finished_transfers(&self) -> Result<()> {
         let conn = self.state_conn.lock();
         conn.execute(
+            "DELETE FROM file_chunks WHERE transfer_id IN (SELECT transfer_id FROM file_transfers WHERE status IN ('complete', 'failed', 'declined'))",
+            [],
+        )?;
+        let deleted = conn.execute(
             "DELETE FROM file_transfers WHERE status IN ('complete', 'failed', 'declined')",
             [],
         )?;
+        info!("clear_finished_transfers: deleted {} finished transfers", deleted);
         Ok(())
     }
 
@@ -935,4 +941,31 @@ mod tests {
         assert_eq!(events[0].content, "same_content ");
         assert_eq!(events[1].content, "different_content");
     }
+
+    #[test]
+    fn test_delete_transfer() {
+        let dir = tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+
+        let transfer_id = "test-transfer-id";
+        store.create_transfer(
+            transfer_id,
+            "outgoing",
+            "peer-1",
+            "path/to/file",
+            "file.txt",
+            100,
+            10,
+            "hash"
+        ).unwrap();
+
+        let history = store.get_transfer_history(10).unwrap();
+        assert_eq!(history.len(), 1);
+
+        store.delete_transfer(transfer_id).unwrap();
+
+        let history = store.get_transfer_history(10).unwrap();
+        assert_eq!(history.len(), 0);
+    }
 }
+
