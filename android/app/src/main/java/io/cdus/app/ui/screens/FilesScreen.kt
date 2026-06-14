@@ -227,6 +227,13 @@ fun TransferItem(transfer: FileTransferInfo) {
                                         FileTransferManager.removeTransfer(transfer.transferId)
                                     }
                                 )
+                                DropdownMenuItem(
+                                    text = { Text("Delete Permanently", color = MaterialTheme.colorScheme.error) },
+                                    onClick = {
+                                        showMenu = false
+                                        FileTransferManager.deleteTransferPermanently(context, transfer.transferId)
+                                    }
+                                )
                             }
                         }
                     }

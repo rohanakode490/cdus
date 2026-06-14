@@ -376,7 +376,16 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         if (info != null) {
             val internalFile = java.io.File(destPath)
             if (internalFile.exists()) {
-                FileUtils.saveFileToDownloads(this, internalFile)
+                val savedUri = FileUtils.saveFileToDownloads(this, internalFile)
+                if (savedUri != null) {
+                    if (internalFile.delete()) {
+                        Logger.i("Successfully deleted internal cached file: $destPath")
+                    } else {
+                        Logger.w("Failed to delete internal cached file: $destPath")
+                    }
+                } else {
+                    Logger.e("Failed to copy internal cached file to Downloads: $destPath")
+                }
             }
         }
 

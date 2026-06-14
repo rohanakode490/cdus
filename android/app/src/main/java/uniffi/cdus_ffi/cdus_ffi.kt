@@ -910,6 +910,8 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -950,6 +952,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_connect_relay(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_delete_clipboard_item(`id`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_delete_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_get_clipboard_history(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1129,6 +1133,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_delete_clipboard_item(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_delete_file_transfer(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_get_clipboard_history(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_discovered_devices(
@@ -1250,6 +1256,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_delete_clipboard_item() != 35163.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_delete_file_transfer() != 11099.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_get_clipboard_history() != 8152.toShort()) {
@@ -2478,6 +2487,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_delete_clipboard_item(
         FfiConverterLong.lower(`id`),_status)
+}
+    
+    
+ fun `deleteFileTransfer`(`transferId`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_delete_file_transfer(
+        FfiConverterString.lower(`transferId`),_status)
 }
     
     

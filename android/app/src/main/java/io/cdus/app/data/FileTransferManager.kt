@@ -1,6 +1,9 @@
 package io.cdus.app.data
 
 import androidx.compose.runtime.mutableStateMapOf
+import io.cdus.app.utils.Logger
+import android.content.Context
+import io.cdus.app.utils.FileUtils
 
 enum class TransferStatus {
     INCOMING, OUTGOING, DOWNLOADING, COMPLETE, ERROR, REJECTED, HASHING
@@ -57,11 +60,44 @@ object FileTransferManager {
 
     fun removeTransfer(transferId: String) {
         transfers.remove(transferId)
+        try {
+            uniffi.cdus_ffi.deleteFileTransfer(transferId)
+        } catch (e: Exception) {
+            Logger.e("Failed to delete file transfer $transferId from DB: ${e.message}", e)
+        }
+    }
+
+    fun deleteTransferPermanently(context: Context, transferId: String) {
+        val info = transfers[transferId]
+        if (info != null) {
+            transfers.remove(transferId)
+            try {
+                val deleted = FileUtils.deleteFileFromDownloads(context, info.fileName)
+                if (deleted) {
+                    Logger.i("Successfully deleted physical file from downloads: ${info.fileName}")
+                } else {
+                    Logger.w("Could not delete physical file from downloads: ${info.fileName}")
+                }
+            } catch (e: Exception) {
+                Logger.e("Error deleting physical file: ${e.message}", e)
+            }
+        }
+        
+        try {
+            uniffi.cdus_ffi.deleteFileTransfer(transferId)
+        } catch (e: Exception) {
+            Logger.e("Failed to delete file transfer $transferId from DB: ${e.message}", e)
+        }
     }
 
     fun clearFinished() {
         val toRemove = transfers.filter { it.value.status == TransferStatus.COMPLETE || it.value.status == TransferStatus.ERROR || it.value.status == TransferStatus.REJECTED }.keys
         toRemove.forEach { transfers.remove(it) }
+        try {
+            uniffi.cdus_ffi.clearFinishedTransfers()
+        } catch (e: Exception) {
+            Logger.e("Failed to clear finished transfers from DB: ${e.message}", e)
+        }
     }
 
     fun loadHistory() {
