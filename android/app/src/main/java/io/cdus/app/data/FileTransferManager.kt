@@ -128,7 +128,8 @@ object FileTransferManager {
                 transfers[record.transferId] = info
             }
         } catch (e: Exception) {
-            // Log error
+            Logger.e("Failed to load file history: ${e.message}", e)
+            throw e
         }
     }
 }

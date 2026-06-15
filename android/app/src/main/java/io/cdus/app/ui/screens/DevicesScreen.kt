@@ -69,6 +69,8 @@ fun DevicesScreen() {
     var isDeveloperMode by remember { mutableStateOf(false) }
     var showQrDialog by remember { mutableStateOf(false) }
     var showScannerDialog by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(true) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
 
@@ -116,11 +118,18 @@ fun DevicesScreen() {
 
     LaunchedEffect(Unit) {
         while (isActive) {
-            pairingStatus = getPairingStatus()
-            val devices = getPairedDevices()
-            pairedDevices = devices
-            isDeveloperMode = sharedPref.getBoolean("developer_mode", false)
-            io.cdus.app.data.DeviceManager.updateLabels(devices)
+            try {
+                pairingStatus = getPairingStatus()
+                val devices = getPairedDevices()
+                pairedDevices = devices
+                isDeveloperMode = sharedPref.getBoolean("developer_mode", false)
+                io.cdus.app.data.DeviceManager.updateLabels(devices)
+                errorMsg = null
+            } catch (e: Exception) {
+                errorMsg = e.message ?: "Failed to load paired devices"
+            } finally {
+                isLoading = false
+            }
             delay(1000)
         }
     }
@@ -177,9 +186,30 @@ fun DevicesScreen() {
             modifier = Modifier.padding(bottom = 8.dp)
         )
 
-        if (pairedDevices.isEmpty()) {
+        if (isLoading) {
+            Box(
+                modifier = Modifier.fillMaxWidth().height(80.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+            }
+        } else if (errorMsg != null) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(text = errorMsg!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(onClick = {
+                    isLoading = true
+                    errorMsg = null
+                }) {
+                    Text("Retry")
+                }
+            }
+        } else if (pairedDevices.isEmpty()) {
             Text(
-                text = "No devices paired yet.",
+                text = "No devices paired yet. Start scanning to connect your first device.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.padding(bottom = 16.dp)

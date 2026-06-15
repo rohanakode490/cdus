@@ -26,6 +26,8 @@ import io.cdus.app.ui.screens.ClipboardScreen
 import io.cdus.app.ui.screens.DevicesScreen
 import io.cdus.app.ui.screens.FilesScreen
 import io.cdus.app.ui.screens.SettingsScreen
+import io.cdus.app.ui.screens.OnboardingOverlay
+import io.cdus.app.ui.screens.AuditScreen
 import io.cdus.app.ui.theme.CdusandroidTheme
 
 import android.content.Intent
@@ -47,6 +49,7 @@ import io.cdus.app.ui.components.DevicePickerDialog
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -164,6 +167,18 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen(sharedFilePath: String?, onFileSent: () -> Unit) {
     val navController = rememberNavController()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val sharedPref = remember { context.getSharedPreferences("cdus_settings", Context.MODE_PRIVATE) }
+    var showOnboarding by remember { mutableStateOf(!sharedPref.getBoolean("onboarding_completed", false)) }
+
+    if (showOnboarding) {
+        OnboardingOverlay(
+            onDismiss = {
+                sharedPref.edit().putBoolean("onboarding_completed", true).apply()
+                showOnboarding = false
+            }
+        )
+    }
     
     if (sharedFilePath != null) {
         DevicePickerDialog(
@@ -207,6 +222,7 @@ fun MainScreen(sharedFilePath: String?, onFileSent: () -> Unit) {
             composable(Screen.Devices.route) { DevicesScreen() }
             composable(Screen.Clipboard.route) { ClipboardScreen() }
             composable(Screen.Files.route) { FilesScreen() }
+            composable(Screen.Audit.route) { AuditScreen() }
             composable(Screen.Settings.route) { SettingsScreen() }
         }
     }

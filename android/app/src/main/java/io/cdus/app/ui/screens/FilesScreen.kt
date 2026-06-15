@@ -9,6 +9,8 @@ import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,9 +19,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import android.app.NotificationManager
 import android.content.Context
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import io.cdus.app.data.FileTransferManager
 import io.cdus.app.data.FileTransferInfo
 import io.cdus.app.data.TransferStatus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class SortOption(val label: String) {
     NEWEST("Newest First"),
@@ -34,6 +41,30 @@ enum class SortOption(val label: String) {
 fun FilesScreen() {
     var currentSortOption by remember { mutableStateOf(SortOption.NEWEST) }
     var sortMenuExpanded by remember { mutableStateOf(false) }
+
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    fun refreshHistory() {
+        scope.launch {
+            isLoading = true
+            errorMsg = null
+            try {
+                withContext(Dispatchers.IO) {
+                    FileTransferManager.loadHistory()
+                }
+            } catch (e: Exception) {
+                errorMsg = e.message ?: "Failed to load file transfers"
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        refreshHistory()
+    }
 
     val rawTransfers = FileTransferManager.transfers.values.toList()
     val sortedTransfers = remember(rawTransfers, currentSortOption) {
@@ -56,6 +87,9 @@ fun FilesScreen() {
             Text(text = "File Transfers", style = MaterialTheme.typography.headlineMedium)
             
             Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { refreshHistory() }) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                }
                 Box {
                     TextButton(onClick = { sortMenuExpanded = true }) {
                         Text("Sort: ${currentSortOption.label}")
@@ -85,14 +119,70 @@ fun FilesScreen() {
         }
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (sortedTransfers.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(text = "No transfers yet.", color = MaterialTheme.colorScheme.outline)
-            }
-        } else {
-            LazyColumn {
-                items(sortedTransfers) { transfer ->
-                    TransferItem(transfer)
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (isLoading) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(text = "Loading file transfers...", color = MaterialTheme.colorScheme.outline)
+                }
+            } else if (errorMsg != null) {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Error",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = errorMsg!!,
+                        color = MaterialTheme.colorScheme.error,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 16.sp
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(onClick = { refreshHistory() }) {
+                        Text("Retry")
+                    }
+                }
+            } else if (sortedTransfers.isEmpty()) {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "No file transfers found.",
+                        color = MaterialTheme.colorScheme.outline,
+                        fontSize = 16.sp,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Use the Devices tab to send a file to a specific device.",
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
+                        fontSize = 14.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(onClick = { refreshHistory() }) {
+                        Text("Refresh")
+                    }
+                }
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(sortedTransfers) { transfer ->
+                        TransferItem(transfer)
+                    }
                 }
             }
         }
