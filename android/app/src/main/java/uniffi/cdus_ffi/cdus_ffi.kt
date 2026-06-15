@@ -912,6 +912,12 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
 
 
 
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -935,11 +941,15 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_accept_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_fn_func_append_audit_log(`eventType`: RustBuffer.ByValue,`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_cdus_ffi_fn_func_broadcast_clipboard(`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_cancel_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_cancel_pairing(uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_clear_audit_logs(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_clear_clipboard_history(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -955,6 +965,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_delete_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_fn_func_get_audit_logs(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_clipboard_history(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_discovered_devices(uniffi_out_err: UniffiRustCallStatus, 
@@ -1115,11 +1127,15 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_checksum_func_accept_file_transfer(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_append_audit_log(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_broadcast_clipboard(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_cancel_file_transfer(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_cancel_pairing(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_clear_audit_logs(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_clear_clipboard_history(
     ): Short
@@ -1134,6 +1150,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_func_delete_clipboard_item(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_delete_file_transfer(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_get_audit_logs(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_clipboard_history(
     ): Short
@@ -1231,6 +1249,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_accept_file_transfer() != 17241.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_append_audit_log() != 51282.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_broadcast_clipboard() != 52173.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1238,6 +1259,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_cancel_pairing() != 27523.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_clear_audit_logs() != 50264.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_clear_clipboard_history() != 32392.toShort()) {
@@ -1259,6 +1283,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_delete_file_transfer() != 11099.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_get_audit_logs() != 38904.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_get_clipboard_history() != 8152.toShort()) {
@@ -1614,6 +1641,46 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
         val byteBuf = toUtf8(value)
         buf.putInt(byteBuf.limit())
         buf.put(byteBuf)
+    }
+}
+
+
+
+data class AuditLogItem (
+    var `id`: kotlin.Long, 
+    var `eventType`: kotlin.String, 
+    var `content`: kotlin.String, 
+    var `timestamp`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAuditLogItem: FfiConverterRustBuffer<AuditLogItem> {
+    override fun read(buf: ByteBuffer): AuditLogItem {
+        return AuditLogItem(
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: AuditLogItem) = (
+            FfiConverterLong.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`eventType`) +
+            FfiConverterString.allocationSize(value.`content`) +
+            FfiConverterULong.allocationSize(value.`timestamp`)
+    )
+
+    override fun write(value: AuditLogItem, buf: ByteBuffer) {
+            FfiConverterLong.write(value.`id`, buf)
+            FfiConverterString.write(value.`eventType`, buf)
+            FfiConverterString.write(value.`content`, buf)
+            FfiConverterULong.write(value.`timestamp`, buf)
     }
 }
 
@@ -2306,6 +2373,34 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeAuditLogItem: FfiConverterRustBuffer<List<AuditLogItem>> {
+    override fun read(buf: ByteBuffer): List<AuditLogItem> {
+        val len = buf.getInt()
+        return List<AuditLogItem>(len) {
+            FfiConverterTypeAuditLogItem.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<AuditLogItem>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeAuditLogItem.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<AuditLogItem>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeAuditLogItem.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeClipboardHistoryItem: FfiConverterRustBuffer<List<ClipboardHistoryItem>> {
     override fun read(buf: ByteBuffer): List<ClipboardHistoryItem> {
         val len = buf.getInt()
@@ -2418,6 +2513,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
 }
     
     
+ fun `appendAuditLog`(`eventType`: kotlin.String, `content`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_append_audit_log(
+        FfiConverterString.lower(`eventType`),FfiConverterString.lower(`content`),_status)
+}
+    
+    
  fun `broadcastClipboard`(`content`: kotlin.String)
         = 
     uniffiRustCall() { _status ->
@@ -2438,6 +2541,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
         = 
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_cancel_pairing(
+        _status)
+}
+    
+    
+ fun `clearAuditLogs`()
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_clear_audit_logs(
         _status)
 }
     
@@ -2497,6 +2608,15 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
         FfiConverterString.lower(`transferId`),_status)
 }
     
+    
+ fun `getAuditLogs`(`limit`: kotlin.UInt): List<AuditLogItem> {
+            return FfiConverterSequenceTypeAuditLogItem.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_audit_logs(
+        FfiConverterUInt.lower(`limit`),_status)
+}
+    )
+    }
     
  fun `getClipboardHistory`(`limit`: kotlin.UInt): List<ClipboardHistoryItem> {
             return FfiConverterSequenceTypeClipboardHistoryItem.lift(

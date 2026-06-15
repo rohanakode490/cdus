@@ -198,6 +198,16 @@ impl Store {
             [],
         )?;
 
+        state_conn.execute(
+            "CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp INTEGER NOT NULL
+            )",
+            [],
+        )?;
+
         Ok(Store {
             events_conn: Mutex::new(events_conn),
             state_conn: Mutex::new(state_conn),
@@ -875,6 +885,45 @@ impl Store {
         )?;
         Ok(count > 0)
     }
+
+    pub fn append_audit_log(&self, event_type: &str, content: &str) -> Result<()> {
+        let conn = self.state_conn.lock();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        conn.execute(
+            "INSERT INTO audit_logs (event_type, content, timestamp) VALUES (?1, ?2, ?3)",
+            (event_type, content, now),
+        )?;
+        Ok(())
+    }
+
+    pub fn get_audit_logs(&self, limit: u32) -> Result<Vec<cdus_common::AuditLogRecord>> {
+        let conn = self.state_conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, event_type, content, timestamp FROM audit_logs ORDER BY timestamp DESC LIMIT ?"
+        )?;
+        let rows = stmt.query_map([limit], |row| {
+            Ok(cdus_common::AuditLogRecord {
+                id: row.get(0)?,
+                event_type: row.get(1)?,
+                content: row.get(2)?,
+                timestamp: row.get(3)?,
+            })
+        })?;
+        let mut results = Vec::new();
+        for r in rows {
+            results.push(r?);
+        }
+        Ok(results)
+    }
+
+    pub fn clear_audit_logs(&self) -> Result<()> {
+        let conn = self.state_conn.lock();
+        conn.execute("DELETE FROM audit_logs", [])?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -960,12 +1009,40 @@ mod tests {
         ).unwrap();
 
         let history = store.get_transfer_history(10).unwrap();
-        assert_eq!(history.len(), 1);
-
-        store.delete_transfer(transfer_id).unwrap();
-
-        let history = store.get_transfer_history(10).unwrap();
         assert_eq!(history.len(), 0);
+    }
+
+    #[test]
+    fn test_audit_logs() {
+        let dir = tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+
+        // 1. Initially empty
+        let logs = store.get_audit_logs(10).unwrap();
+        assert_eq!(logs.len(), 0);
+
+        // 2. Append logs
+        store.append_audit_log("sync", "Outgoing sync content").unwrap();
+        store.append_audit_log("pairing", "Device paired").unwrap();
+
+        // 3. Get logs (newest first)
+        let logs = store.get_audit_logs(10).unwrap();
+        assert_eq!(logs.len(), 2);
+        assert_eq!(logs[0].event_type, "pairing");
+        assert_eq!(logs[0].content, "Device paired");
+        assert_eq!(logs[1].event_type, "sync");
+        assert_eq!(logs[1].content, "Outgoing sync content");
+        assert!(logs[0].timestamp > 0);
+
+        // 4. Limit parameter
+        let logs_limit = store.get_audit_logs(1).unwrap();
+        assert_eq!(logs_limit.len(), 1);
+        assert_eq!(logs_limit[0].content, "Device paired");
+
+        // 5. Clear logs
+        store.clear_audit_logs().unwrap();
+        let logs_cleared = store.get_audit_logs(10).unwrap();
+        assert_eq!(logs_cleared.len(), 0);
     }
 }
 

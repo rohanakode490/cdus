@@ -10,6 +10,14 @@ pub struct ClipboardEvent {
     pub local_only: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+pub struct AuditLogRecord {
+    pub id: i64,
+    pub event_type: String,
+    pub content: String,
+    pub timestamp: u64, // unix timestamp ms
+}
+
 pub fn is_sensitive_content(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
@@ -199,6 +207,15 @@ pub enum IpcMessage {
     // Testing
     TestLibp2pRequest {
         peer_id: String,
+    },
+    GetAuditLogs {
+        limit: u32,
+    },
+    AuditLogsResponse(Vec<AuditLogRecord>),
+    ClearAuditLogs,
+    AppendAuditLog {
+        event_type: String,
+        content: String,
     },
 }
 

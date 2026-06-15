@@ -347,6 +347,54 @@ fn main() {
                                                 }
                                             }
                                         }
+                                        IpcMessage::GetAuditLogs { limit } => {
+                                            match store_clone.get_audit_logs(limit) {
+                                                Ok(logs) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::AuditLogsResponse(logs)
+                                                    ).unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!("Error fetching audit logs: {}", e))
+                                                    ).unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
+                                        IpcMessage::ClearAuditLogs => {
+                                            match store_clone.clear_audit_logs() {
+                                                Ok(_) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log("Audit logs cleared".to_string())
+                                                    ).unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!("Error clearing audit logs: {}", e))
+                                                    ).unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
+                                        IpcMessage::AppendAuditLog { event_type, content } => {
+                                            match store_clone.append_audit_log(&event_type, &content) {
+                                                Ok(_) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log("Audit log appended".to_string())
+                                                    ).unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!("Error appending audit log: {}", e))
+                                                    ).unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
                                         IpcMessage::ClearFinishedTransfers => {
                                             info!("IPC: ClearFinishedTransfers requested");
                                             match store_clone.clear_finished_transfers() {

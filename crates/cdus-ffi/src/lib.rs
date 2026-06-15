@@ -38,6 +38,14 @@ pub struct ClipboardHistoryItem {
     pub local_only: bool,
 }
 
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct AuditLogItem {
+    pub id: i64,
+    pub event_type: String,
+    pub content: String,
+    pub timestamp: u64,
+}
+
 #[uniffi::export(callback_interface)]
 pub trait ClipboardListener: Send + Sync {
     fn on_clipboard_update(&self, content: String, source: String);
@@ -949,4 +957,38 @@ pub fn greet_from_rust(name: String) -> String {
         "Hello, {}! This is CDUS core running on Android via Rust.",
         name
     )
+}
+
+#[uniffi::export]
+pub fn get_audit_logs(limit: u32) -> Vec<AuditLogItem> {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        match store.get_audit_logs(limit) {
+            Ok(logs) => logs
+                .into_iter()
+                .map(|e| AuditLogItem {
+                    id: e.id,
+                    event_type: e.event_type,
+                    content: e.content,
+                    timestamp: e.timestamp,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    }
+}
+
+#[uniffi::export]
+pub fn clear_audit_logs() {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let _ = store.clear_audit_logs();
+    }
+}
+
+#[uniffi::export]
+pub fn append_audit_log(event_type: String, content: String) {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let _ = store.append_audit_log(&event_type, &content);
+    }
 }

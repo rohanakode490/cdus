@@ -97,6 +97,9 @@ pub fn daemon_loop(
                             error!("Failed to store clipboard event: {}", e);
                         }
 
+                        let display_len = std::cmp::min(20, content.len());
+                        let _ = store.append_audit_log("sync", &format!("Outgoing clipboard sync: {}...", &content[..display_len]));
+
                         let is_local = store.is_content_local_only(&content).unwrap_or(false);
                         if !is_local {
                             // Broadcast to peers
@@ -143,6 +146,9 @@ pub fn daemon_loop(
                         if let Err(e) = store.append_event(content.as_bytes(), &source) {
                             error!("Failed to store received clipboard event: {}", e);
                         }
+
+                        let display_len = std::cmp::min(20, content.len());
+                        let _ = store.append_audit_log("sync", &format!("Incoming clipboard sync from {}: {}...", source, &content[..display_len]));
 
                         #[cfg(not(target_os = "android"))]
                         {
@@ -267,6 +273,9 @@ pub fn daemon_loop(
                         info!("Pairing successful with {} ({}). Removing from discovery list.", label, node_id);
                         let mut list = discovered_devices.lock();
                         list.retain(|(id, _, _, _, _)| id != &node_id);
+                        let _ = store.append_audit_log("pairing", &format!("Successfully paired with device '{}' (#{})", label, &node_id[..std::cmp::min(8, node_id.len())]));
+                    } else {
+                        let _ = store.append_audit_log("pairing", &format!("Pairing failed with device '{}' (#{})", label, &node_id[..std::cmp::min(8, node_id.len())]));
                     }
                     broadcast_event(IpcMessage::PairingResult { success, node_id, label });
                 }
