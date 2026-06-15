@@ -18,6 +18,137 @@ let isDeveloperMode = false;
 let currentIncomingTransferId = "";
 let html5QrCode: Html5Qrcode | null = null;
 
+let currentOnboardingStep = 1;
+
+
+
+async function addAuditLog(type: "sync" | "pairing" | "system", content: string) {
+  try {
+    await invoke("append_audit_log", { eventType: type, content });
+  } catch (err) {
+    console.error("Failed to append audit log:", err);
+  }
+  const auditView = document.querySelector("#view-audit");
+  if (auditView?.classList.contains("active")) {
+    renderAuditLogs();
+  }
+}
+
+async function renderAuditLogs() {
+  const listContainer = document.querySelector("#audit-list");
+  const emptyState = document.querySelector("#audit-empty");
+  const loadingEl = document.querySelector("#audit-loading");
+  const errorEl = document.querySelector("#audit-error");
+
+  if (!listContainer) return;
+
+  loadingEl?.classList.remove("hidden");
+  errorEl?.classList.add("hidden");
+  listContainer.classList.add("hidden");
+  emptyState?.classList.add("hidden");
+
+  try {
+    const logs: any[] = await invoke("get_audit_logs", { limit: 100 });
+    loadingEl?.classList.add("hidden");
+    
+    if (logs.length === 0) {
+      listContainer.innerHTML = "";
+      emptyState?.classList.remove("hidden");
+      return;
+    }
+
+    emptyState?.classList.add("hidden");
+    listContainer.classList.remove("hidden");
+    listContainer.innerHTML = "";
+
+    logs.forEach((log) => {
+      const itemEl = document.createElement("div");
+      itemEl.className = "audit-item";
+      
+      const timeStr = new Date(Number(log.timestamp)).toLocaleString();
+      itemEl.innerHTML = `
+        <span class="audit-badge ${log.event_type}">${log.event_type}</span>
+        <div class="audit-content">${log.content}</div>
+        <span class="audit-time">${timeStr}</span>
+      `;
+      
+      listContainer.appendChild(itemEl);
+    });
+  } catch (err) {
+    console.error("Failed to load audit logs:", err);
+    loadingEl?.classList.add("hidden");
+    errorEl?.classList.remove("hidden");
+    listContainer.classList.add("hidden");
+    emptyState?.classList.add("hidden");
+  }
+}
+
+async function initOnboarding() {
+  const overlay = document.querySelector("#onboarding-overlay");
+  if (!overlay) return;
+
+  try {
+    const completed = await invoke("get_state", { key: "onboarding_completed" });
+    if (completed === "true") {
+      overlay.classList.add("hidden");
+    } else {
+      overlay.classList.remove("hidden");
+      setupOnboardingFlow(overlay);
+    }
+  } catch (err) {
+    console.error("Failed to check onboarding state:", err);
+    overlay.classList.remove("hidden");
+    setupOnboardingFlow(overlay);
+  }
+}
+
+function setupOnboardingFlow(overlay: Element) {
+  currentOnboardingStep = 1;
+  showStep(1);
+
+  const nextBtns = overlay.querySelectorAll(".onboarding-next-btn");
+  nextBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (currentOnboardingStep < 3) {
+        currentOnboardingStep++;
+        showStep(currentOnboardingStep);
+      }
+    });
+  });
+
+  const finishBtn = overlay.querySelector("#onboarding-finish-btn");
+  finishBtn?.addEventListener("click", async () => {
+    try {
+      await invoke("set_state", { key: "onboarding_completed", value: "true" });
+      overlay.classList.add("hidden");
+      addAuditLog("system", "CDUS initialization completed successfully.");
+    } catch (err) {
+      console.error("Failed to save onboarding completion state:", err);
+      overlay.classList.add("hidden");
+    }
+  });
+}
+
+function showStep(stepNum: number) {
+  const steps = document.querySelectorAll(".onboarding-step");
+  steps.forEach((step, idx) => {
+    if (idx + 1 === stepNum) {
+      step.classList.add("active");
+    } else {
+      step.classList.remove("active");
+    }
+  });
+
+  const dots = document.querySelectorAll(".progress-dot");
+  dots.forEach((dot, idx) => {
+    if (idx + 1 === stepNum) {
+      dot.classList.add("active");
+    } else {
+      dot.classList.remove("active");
+    }
+  });
+}
+
 // --- UI Elements (initialized in DOMContentLoaded) ---
 let fileTransferModal: Element | null = null;
 let fileAcceptBtn: Element | null = null;
@@ -29,7 +160,6 @@ let progressLabel: Element | null = null;
 let progressFilename: Element | null = null;
 let closeProgressBtn: Element | null = null;
 let pairedList: Element | null = null;
-let devicesEmpty: Element | null = null;
 let discoveryList: Element | null = null;
 let discoverySection: Element | null = null;
 let scanBtn: Element | null = null;
@@ -201,12 +331,28 @@ function filterAndRenderClipboard() {
 }
 
 async function renderClipboard() {
+  const loadingEl = document.querySelector("#clipboard-loading");
+  const errorEl = document.querySelector("#clipboard-error");
+  const listEl = document.querySelector("#clipboard-list");
+  const emptyEl = document.querySelector("#clipboard-empty");
+
+  loadingEl?.classList.remove("hidden");
+  errorEl?.classList.add("hidden");
+  listEl?.classList.add("hidden");
+  emptyEl?.classList.add("hidden");
+
   try {
     const history: any[] = await invoke("get_clipboard_history", { limit: 50 });
     clipboardHistory = history;
+    loadingEl?.classList.add("hidden");
+    listEl?.classList.remove("hidden");
     filterAndRenderClipboard();
   } catch (err) {
     console.error("Failed to fetch history:", err);
+    loadingEl?.classList.add("hidden");
+    errorEl?.classList.remove("hidden");
+    listEl?.classList.add("hidden");
+    emptyEl?.classList.add("hidden");
   }
 }
 
@@ -215,6 +361,16 @@ async function loadSettings() {
   const syncEnabledInput = document.querySelector("#sync-enabled") as HTMLInputElement;
   const limitSlider = document.querySelector("#clipboard-limit") as HTMLInputElement;
   const limitValue = document.querySelector("#limit-value");
+
+  const loadingEl = document.querySelector("#settings-loading");
+  const errorEl = document.querySelector("#settings-error");
+  const settingsContainer = document.querySelector(".settings-container");
+  const saveBtn = document.querySelector("#save-settings-btn");
+
+  loadingEl?.classList.remove("hidden");
+  errorEl?.classList.add("hidden");
+  settingsContainer?.classList.add("hidden");
+  saveBtn?.classList.add("hidden");
 
   try {
     const deviceName: string | null = await invoke("get_state", { key: "device_name" });
@@ -227,15 +383,32 @@ async function loadSettings() {
       limitSlider.value = limit;
       if (limitValue) limitValue.textContent = `${limit} items`;
     }
+
+    loadingEl?.classList.add("hidden");
+    settingsContainer?.classList.remove("hidden");
+    saveBtn?.classList.remove("hidden");
   } catch (err) {
     console.error("Failed to load settings:", err);
+    loadingEl?.classList.add("hidden");
+    errorEl?.classList.remove("hidden");
+    settingsContainer?.classList.add("hidden");
+    saveBtn?.classList.add("hidden");
   }
 }
 
 
 async function loadFileHistory() {
+  const loadingEl = document.querySelector("#files-loading");
+  const errorEl = document.querySelector("#files-error");
+  const listEl = document.querySelector("#files-list-container");
+
+  loadingEl?.classList.remove("hidden");
+  errorEl?.classList.add("hidden");
+  listEl?.classList.add("hidden");
+
   try {
     const history: any[] = await invoke("get_file_transfer_history", { limit: 50 });
+    transfers.clear();
     history.forEach((record) => {
       let status = record.status;
       if (status === "in_progress" || status === "paused" || status === "awaiting_acceptance") {
@@ -257,9 +430,14 @@ async function loadFileHistory() {
         totalBytes: Number(record.total_bytes)
       });
     });
+    loadingEl?.classList.add("hidden");
+    listEl?.classList.remove("hidden");
     renderFiles();
   } catch (err) {
     console.error("Failed to load file history:", err);
+    loadingEl?.classList.add("hidden");
+    errorEl?.classList.remove("hidden");
+    listEl?.classList.add("hidden");
   }
 }
 
@@ -416,6 +594,15 @@ function hideProgressToast() {
 async function renderPairedDevices() {
   if (!pairedList) return;
   
+  const loadingEl = document.querySelector("#devices-loading");
+  const errorEl = document.querySelector("#devices-error");
+  const emptyEl = document.querySelector("#devices-empty");
+
+  loadingEl?.classList.remove("hidden");
+  errorEl?.classList.add("hidden");
+  pairedList.classList.add("hidden");
+  emptyEl?.classList.add("hidden");
+
   try {
     const devices: [string, string, string | null][] = await invoke("get_paired_devices");
     pairedDeviceIds = devices.map(([id]) => id);
@@ -425,13 +612,14 @@ async function renderPairedDevices() {
     devices.forEach(([id, label]) => deviceLabels.set(id, label));
     
     pairedList.innerHTML = "";
+    loadingEl?.classList.add("hidden");
     
     if (devices.length === 0) {
-      devicesEmpty?.classList.remove("hidden");
+      emptyEl?.classList.remove("hidden");
       return;
     }
 
-    devicesEmpty?.classList.add("hidden");
+    pairedList.classList.remove("hidden");
     devices.forEach(([id, name, transport]) => {
       const row = document.createElement("div");
       row.className = "device-row";
@@ -489,6 +677,10 @@ async function renderPairedDevices() {
     });
   } catch (err) {
     console.error("Failed to render paired devices:", err);
+    loadingEl?.classList.add("hidden");
+    errorEl?.classList.remove("hidden");
+    pairedList.classList.add("hidden");
+    emptyEl?.classList.add("hidden");
   }
 }
 
@@ -654,7 +846,6 @@ window.addEventListener("DOMContentLoaded", () => {
   pairedList = document.querySelector("#paired-list");
 
   closeProgressBtn?.addEventListener("click", hideProgressToast);
-  devicesEmpty = document.querySelector("#devices-empty");
   discoveryList = document.querySelector("#discovery-list");
   discoverySection = document.querySelector("#discovery-section");
   scanBtn = document.querySelector("#scan-btn");
@@ -670,6 +861,25 @@ window.addEventListener("DOMContentLoaded", () => {
 
   loadSettings();
   loadFileHistory();
+  initOnboarding();
+
+  document.querySelector("#clear-audit-btn")?.addEventListener("click", async () => {
+    if (confirm("Are you sure you want to clear all audit logs?")) {
+      try {
+        await invoke("clear_audit_logs");
+        renderAuditLogs();
+      } catch (err) {
+        console.error("Failed to clear audit logs:", err);
+      }
+    }
+  });
+
+  // Wire Retry buttons
+  document.querySelector("#retry-devices-btn")?.addEventListener("click", () => renderPairedDevices());
+  document.querySelector("#retry-clipboard-btn")?.addEventListener("click", () => renderClipboard());
+  document.querySelector("#retry-files-btn")?.addEventListener("click", () => loadFileHistory());
+  document.querySelector("#retry-settings-btn")?.addEventListener("click", () => loadSettings());
+  document.querySelector("#retry-audit-btn")?.addEventListener("click", () => renderAuditLogs());
 
   const searchInput = document.querySelector("#clipboard-search") as HTMLInputElement;
   searchInput?.addEventListener("input", (e) => {
@@ -774,6 +984,8 @@ window.addEventListener("DOMContentLoaded", () => {
         renderPairedDevices();
       } else if (targetViewId === "files") {
         renderFiles();
+      } else if (targetViewId === "audit") {
+        renderAuditLogs();
       }
     });
   });
@@ -785,6 +997,8 @@ window.addEventListener("DOMContentLoaded", () => {
     renderPairedDevices();
   } else if (activeView?.id === "view-files") {
     renderFiles();
+  } else if (activeView?.id === "view-audit") {
+    renderAuditLogs();
   }
 
   const limitSlider = document.querySelector("#clipboard-limit") as HTMLInputElement;

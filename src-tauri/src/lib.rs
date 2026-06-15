@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 struct AppState {
     last_synced: Mutex<Option<SystemTime>>,
+    history_items: Mutex<Vec<String>>,
 }
 
 fn now_ms() -> u64 {
@@ -133,6 +134,33 @@ fn delete_clipboard_item(id: i64) -> Result<String, String> {
 #[tauri::command]
 fn clear_clipboard_history() -> Result<String, String> {
     let msg = IpcMessage::ClearHistory;
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn get_audit_logs(limit: u32) -> Result<Vec<cdus_common::AuditLogRecord>, String> {
+    let msg = IpcMessage::GetAuditLogs { limit };
+    match send_ipc_message(msg)? {
+        IpcMessage::AuditLogsResponse(logs) => Ok(logs),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn clear_audit_logs() -> Result<String, String> {
+    let msg = IpcMessage::ClearAuditLogs;
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn append_audit_log(event_type: String, content: String) -> Result<String, String> {
+    let msg = IpcMessage::AppendAuditLog { event_type, content };
     match send_ipc_message(msg)? {
         IpcMessage::Log(msg) => Ok(msg),
         _ => Err("Unexpected response from agent".to_string()),
@@ -381,11 +409,99 @@ async fn pair_with_qr(payload: String) -> Result<String, String> {
     }
 }
 
+fn update_tray_menu(app: &tauri::AppHandle) -> Result<(), String> {
+    let history = match send_ipc_message(IpcMessage::GetHistory { limit: 5 }) {
+        Ok(IpcMessage::HistoryResponse(h)) => h,
+        _ => return Err("Failed to get clipboard history from agent".to_string()),
+    };
+
+    let state = app.state::<AppState>();
+    let mut history_contents = Vec::new();
+    for item in &history {
+        history_contents.push(item.content.clone());
+    }
+    {
+        let mut items = state.history_items.lock().unwrap();
+        *items = history_contents;
+    }
+
+    let tray = match app.tray_by_id("main") {
+        Some(t) => t,
+        None => return Err("Tray icon not found".to_string()),
+    };
+
+    let mut menu_items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
+
+    let online = check_agent_online();
+    let status_label = if online {
+        "Status: Online (LAN)"
+    } else {
+        "Status: Offline"
+    };
+    let status_i = MenuItem::with_id(app, "status", status_label, false, None::<&str>).map_err(|e| e.to_string())?;
+    menu_items.push(Box::new(status_i));
+
+    let separator1 = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
+    menu_items.push(Box::new(separator1));
+
+    if history.is_empty() {
+        let empty_i = MenuItem::with_id(app, "empty_history", "Clipboard history is empty", false, None::<&str>).map_err(|e| e.to_string())?;
+        menu_items.push(Box::new(empty_i));
+    } else {
+        for (idx, item) in history.iter().enumerate() {
+            let mut display_text = item.content.replace("\n", " ");
+            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&item.content) {
+                if let Some(typ) = json_val.get("type").and_then(|v| v.as_str()) {
+                    match typ {
+                        "image" => {
+                            display_text = "[Image Clipboard]".to_string();
+                        }
+                        "url" => {
+                            if let Some(url_val) = json_val.get("url").and_then(|v| v.as_str()) {
+                                display_text = format!("🌐 {}", url_val);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if display_text.len() > 30 {
+                display_text = format!("{}...", &display_text[..30]);
+            }
+            let history_i = MenuItem::with_id(
+                app,
+                format!("history_{}", idx),
+                display_text,
+                true,
+                None::<&str>,
+            ).map_err(|e| e.to_string())?;
+            menu_items.push(Box::new(history_i));
+        }
+    }
+
+    let separator2 = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
+    menu_items.push(Box::new(separator2));
+
+    let show_i = MenuItem::with_id(app, "show_main", "Show Main Window", true, None::<&str>).map_err(|e| e.to_string())?;
+    menu_items.push(Box::new(show_i));
+
+    let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>).map_err(|e| e.to_string())?;
+    menu_items.push(Box::new(quit_i));
+
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = menu_items.iter().map(|item| item.as_ref()).collect();
+    let new_menu = Menu::with_items(app, &refs).map_err(|e| e.to_string())?;
+
+    tray.set_menu(Some(new_menu)).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState {
             last_synced: Mutex::new(None),
+            history_items: Mutex::new(Vec::new()),
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -428,27 +544,55 @@ pub fn run() {
                         }
                     }
                 })
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "quit" => {
+                .on_menu_event(|app, event| {
+                    let id = event.id.as_ref();
+                    if id == "quit" {
                         app.exit(0);
+                    } else if id == "show_main" {
+                        if let Some(window) = app.get_webview_window("main") {
+                            #[cfg(target_os = "macos")]
+                            let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    } else if id.starts_with("history_") {
+                        if let Ok(idx) = id.strip_prefix("history_").unwrap().parse::<usize>() {
+                            let state = app.state::<AppState>();
+                            let items = state.history_items.lock().unwrap();
+                            if idx < items.len() {
+                                let content = items[idx].clone();
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    use arboard::Clipboard;
+                                    if let Ok(mut cb) = Clipboard::new() {
+                                        let mut text_to_copy = content.clone();
+                                        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
+                                            if let Some(typ) = json_val.get("type").and_then(|v| v.as_str()) {
+                                                match typ {
+                                                    "url" => {
+                                                        if let Some(url_val) = json_val.get("url").and_then(|v| v.as_str()) {
+                                                            text_to_copy = url_val.to_string();
+                                                        }
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
+                                        let _ = cb.set_text(text_to_copy);
+                                    }
+                                }
+                            }
+                        }
                     }
-                    _ => {}
                 })
                 .build(app)?;
 
             // Status and Tooltip update thread
-            let status_handle = status_i.clone();
             let tray_handle = tray.clone();
             let app_handle = app.handle().clone();
 
             thread::spawn(move || loop {
-                let online = check_agent_online();
-                let label = if online {
-                    "Status: Online (LAN)"
-                } else {
-                    "Status: Offline (Agent Disconnected)"
-                };
-                let _ = status_handle.set_text(label);
+                let _ = update_tray_menu(&app_handle);
 
                 // Update tooltip
                 let state = app_handle.state::<AppState>();
@@ -581,6 +725,7 @@ pub fn run() {
                                             | IpcMessage::SetClipboard { content, .. } => {
                                                 let _ = app_handle_events
                                                     .emit("clipboard-updated", content);
+                                                let _ = update_tray_menu(&app_handle_events);
                                             }
                                             IpcMessage::PeerDisconnected { node_id } => {
                                                 let _ = app_handle_events
@@ -615,6 +760,9 @@ pub fn run() {
             delete_clipboard_item,
             toggle_local_only,
             clear_clipboard_history,
+            get_audit_logs,
+            clear_audit_logs,
+            append_audit_log,
             get_state,
             set_state,
             start_scan,

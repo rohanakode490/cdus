@@ -19,6 +19,7 @@
         <button class="nav-item active" data-view="devices">Devices</button>
         <button class="nav-item" data-view="clipboard">Clipboard</button>
         <button class="nav-item" data-view="files">Files</button>
+        <button class="nav-item" data-view="audit">Audit Log</button>
         <button class="nav-item" data-view="settings">Settings</button>
       </nav>
     </aside>
@@ -65,8 +66,16 @@
 
         <div id="paired-section">
           <h3>Your Devices</h3>
+          <div id="devices-loading" class="loading-state-container hidden">
+            <div class="spinner"></div>
+            <p>Loading paired devices...</p>
+          </div>
+          <div id="devices-error" class="error-state-container hidden">
+            <p class="error-message">Failed to load paired devices.</p>
+            <button id="retry-devices-btn" class="secondary-btn">Retry</button>
+          </div>
           <div id="paired-list"></div>
-          <div id="devices-empty" class="empty-state-container">
+          <div id="devices-empty" class="empty-state-container hidden">
             <p class="empty-state">
               No devices paired yet. Start scanning to connect your first
               device.
@@ -180,6 +189,14 @@
           <input type="text" id="clipboard-search" placeholder="Search clipboard contents or devices..." />
         </div>
 
+        <div id="clipboard-loading" class="loading-state-container hidden">
+          <div class="spinner"></div>
+          <p>Loading clipboard history...</p>
+        </div>
+        <div id="clipboard-error" class="error-state-container hidden">
+          <p class="error-message">Failed to load clipboard history.</p>
+          <button id="retry-clipboard-btn" class="secondary-btn">Retry</button>
+        </div>
         <div id="clipboard-list"></div>
         <p class="empty-state hidden" id="clipboard-empty">
           Clipboard history is empty.
@@ -217,9 +234,17 @@
           </div>
         </div>
 
+        <div id="files-loading" class="loading-state-container hidden">
+          <div class="spinner"></div>
+          <p>Loading file transfers...</p>
+        </div>
+        <div id="files-error" class="error-state-container hidden">
+          <p class="error-message">Failed to load file transfers.</p>
+          <button id="retry-files-btn" class="secondary-btn">Retry</button>
+        </div>
         <div id="files-list-container">
           <div id="files-list"></div>
-          <div id="files-empty" class="empty-state-container">
+          <div id="files-empty" class="empty-state-container hidden">
             <p class="empty-state">
               No recent file transfers. Use the <b>Devices</b> tab to send a
               file to a specific device.
@@ -229,6 +254,14 @@
       </div>
       <div id="view-settings" class="view">
         <h2>Settings</h2>
+        <div id="settings-loading" class="loading-state-container hidden">
+          <div class="spinner"></div>
+          <p>Loading settings...</p>
+        </div>
+        <div id="settings-error" class="error-state-container hidden">
+          <p class="error-message">Failed to load settings.</p>
+          <button id="retry-settings-btn" class="secondary-btn">Retry</button>
+        </div>
         <div class="settings-container">
           <div class="settings-group">
             <label for="device-name">Device Name</label>
@@ -293,7 +326,124 @@
           </div>
         </div>
       </div>
+
+      <div id="view-audit" class="view">
+        <div class="header-with-action">
+          <div class="header-main">
+            <h2>Audit Log</h2>
+            <p class="setting-hint">Historical record of sync events, pairing operations, and system events.</p>
+          </div>
+          <div class="header-actions">
+            <button id="clear-audit-btn" class="danger-btn">Clear Logs</button>
+          </div>
+        </div>
+
+        <div id="audit-loading" class="loading-state-container hidden">
+          <div class="spinner"></div>
+          <p>Loading audit logs...</p>
+        </div>
+        <div id="audit-error" class="error-state-container hidden">
+          <p class="error-message">Failed to load audit logs.</p>
+          <button id="retry-audit-btn" class="secondary-btn">Retry</button>
+        </div>
+        <div id="audit-list"></div>
+        <p class="empty-state hidden" id="audit-empty">
+          No audit log entries found.
+        </p>
+      </div>
     </main>
+  </div>
+
+  <!-- Onboarding Modal/Overlay -->
+  <div id="onboarding-overlay" class="modal hidden">
+    <div class="onboarding-card">
+      <div class="onboarding-progress">
+        <div class="progress-dot active" data-step="1"></div>
+        <div class="progress-dot" data-step="2"></div>
+        <div class="progress-dot" data-step="3"></div>
+      </div>
+      
+      <!-- Step 1: Welcome -->
+      <div class="onboarding-step active" id="onboarding-step-1">
+        <div class="step-illustration">
+          <svg class="illustration-svg" viewBox="0 0 200 200" width="120" height="120">
+            <defs>
+              <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" style="stop-color:#24c8db;stop-opacity:1" />
+                <stop offset="100%" style="stop-color:#00838f;stop-opacity:1" />
+              </linearGradient>
+            </defs>
+            <circle cx="100" cy="100" r="45" fill="none" stroke="url(#grad1)" stroke-width="4" />
+            <circle cx="100" cy="100" r="60" fill="none" stroke="url(#grad1)" stroke-width="2" stroke-dasharray="8,8" />
+            <rect x="85" y="80" width="30" height="40" rx="4" fill="url(#grad1)" />
+            <circle cx="130" cy="120" r="15" fill="#4dd0e1" />
+          </svg>
+        </div>
+        <h2>Welcome to CDUS</h2>
+        <p class="onboarding-desc">Your secure, peer-to-peer system that unifies all your personal devices into a single logical environment.</p>
+        <button class="primary-btn onboarding-next-btn">Get Started</button>
+      </div>
+
+      <!-- Step 2: How pairing works -->
+      <div class="onboarding-step" id="onboarding-step-2">
+        <div class="step-illustration">
+          <svg class="illustration-svg" viewBox="0 0 200 200" width="120" height="120">
+            <defs>
+              <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" style="stop-color:#4dd0e1;stop-opacity:1" />
+                <stop offset="100%" style="stop-color:#004d40;stop-opacity:1" />
+              </linearGradient>
+            </defs>
+            <circle cx="60" cy="100" r="30" fill="url(#grad2)" opacity="0.8" />
+            <circle cx="140" cy="100" r="30" fill="url(#grad2)" />
+            <path d="M 90 100 L 110 100" stroke="white" stroke-width="3" stroke-linecap="round" />
+            <path d="M 105 95 L 110 100 L 105 105" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" />
+          </svg>
+        </div>
+        <h2>Connect Your Devices</h2>
+        <p class="onboarding-desc">Sync occurs directly between your devices over local networks (or fallback secure relay) using encrypted connections.</p>
+        <div class="pairing-instruction-hint">
+          <span>Go to the <b>Devices</b> tab, click <b>Scan for Devices</b>, or scan a <b>QR code</b> to connect your laptop, desktop, or mobile phone.</span>
+        </div>
+        <button class="primary-btn onboarding-next-btn">Continue</button>
+      </div>
+
+      <!-- Step 3: Features & Permissions -->
+      <div class="onboarding-step" id="onboarding-step-3">
+        <h2>Features &amp; Settings</h2>
+        <p class="onboarding-desc">CDUS starts up silently and monitors your clipboard automatically.</p>
+        
+        <div class="onboarding-features-list">
+          <div class="feature-row">
+            <span class="feature-icon">📋</span>
+            <div class="feature-text">
+              <span class="feature-title">Clipboard Synchronization</span>
+              <span class="feature-detail">Automatically syncs text and images securely across devices.</span>
+            </div>
+          </div>
+          <div class="feature-row">
+            <span class="feature-icon">📁</span>
+            <div class="feature-text">
+              <span class="feature-title">P2P File Transfer</span>
+              <span class="feature-detail">Send files of any size directly, with resume support.</span>
+            </div>
+          </div>
+          <div class="feature-row">
+            <span class="feature-icon">🔒</span>
+            <div class="feature-text">
+              <span class="feature-title">End-to-End Encryption</span>
+              <span class="feature-detail">Your data is secured using the Noise Protocol before it leaves.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="permission-notice">
+          <p>On the next screen, you will be in the CDUS workspace. Please ensure clipboard permissions are enabled to start syncing.</p>
+        </div>
+
+        <button class="primary-btn" id="onboarding-finish-btn">Finish &amp; Open CDUS</button>
+      </div>
+    </div>
   </div>
 </body>
 
