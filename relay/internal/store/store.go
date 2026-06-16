@@ -23,4 +23,8 @@ type Store interface {
 
 	// Metrics
 	CountDevices(ctx context.Context) (int, error)
+
+	// Feedback & Telemetry
+	SaveFeedback(ctx context.Context, deviceUUID string, content string, logs string) error
+	SaveTelemetry(ctx context.Context, deviceUUID string, payload string) error
 }

@@ -61,6 +61,14 @@ func (m *mockStore) CountDevices(ctx context.Context) (int, error) {
 
 func (m *mockStore) Close() error { return nil }
 
+func (m *mockStore) SaveFeedback(ctx context.Context, deviceUUID string, content string, logs string) error {
+	return nil
+}
+
+func (m *mockStore) SaveTelemetry(ctx context.Context, deviceUUID string, payload string) error {
+	return nil
+}
+
 func TestHandleRegister(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -358,3 +366,55 @@ func TestHandleRevoke(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleFeedback(t *testing.T) {
+	ms := newMockStore()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	h := hub.NewHub(ms, logger)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go h.Run(ctx)
+	srv := NewServer(ms, h, logger)
+
+	reqBody := feedbackRequest{
+		DeviceUUID: "device-1",
+		Content:    "great app!",
+		Logs:       "some logs",
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req, _ := http.NewRequest("POST", "/v1/feedback", bytes.NewBuffer(body))
+	rr := httptest.NewRecorder()
+
+	srv.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+}
+
+func TestHandleTelemetry(t *testing.T) {
+	ms := newMockStore()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	h := hub.NewHub(ms, logger)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go h.Run(ctx)
+	srv := NewServer(ms, h, logger)
+
+	reqBody := telemetryRequest{
+		DeviceUUID: "device-1",
+		Payload:    `{"sync_events": 5}`,
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req, _ := http.NewRequest("POST", "/v1/telemetry", bytes.NewBuffer(body))
+	rr := httptest.NewRecorder()
+
+	srv.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+}
+

@@ -92,6 +92,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/signaling", s.handleSignaling)
 	mux.HandleFunc("GET /v1/turn", s.handleGetTurnCredentials)
 	mux.HandleFunc("GET /stats", s.handleStats)
+	mux.HandleFunc("POST /v1/feedback", s.handleFeedback)
+	mux.HandleFunc("POST /v1/telemetry", s.handleTelemetry)
 	return mux
 }
 
@@ -294,3 +296,57 @@ func (s *Server) handleGetTurnCredentials(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
+
+type feedbackRequest struct {
+	DeviceUUID string `json:"device_uuid"`
+	Content    string `json:"content"`
+	Logs       string `json:"logs"`
+}
+
+func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
+	var req feedbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if req.DeviceUUID == "" || req.Content == "" {
+		http.Error(w, "missing device_uuid or content", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.SaveFeedback(r.Context(), req.DeviceUUID, req.Content, req.Logs); err != nil {
+		s.logger.Error("failed to save feedback", "error", err, "device_uuid", req.DeviceUUID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+type telemetryRequest struct {
+	DeviceUUID string `json:"device_uuid"`
+	Payload    string `json:"payload"`
+}
+
+func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
+	var req telemetryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if req.DeviceUUID == "" || req.Payload == "" {
+		http.Error(w, "missing device_uuid or payload", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.SaveTelemetry(r.Context(), req.DeviceUUID, req.Payload); err != nil {
+		s.logger.Error("failed to save telemetry", "error", err, "device_uuid", req.DeviceUUID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+

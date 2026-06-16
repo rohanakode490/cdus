@@ -24,6 +24,8 @@ func (m *mockStore) IsDeviceRevoked(ctx context.Context, uuid string) (bool, err
 func (m *mockStore) Close() error                                  { return nil }
 func (m *mockStore) Ping(ctx context.Context) error                { return nil }
 func (m *mockStore) CountDevices(ctx context.Context) (int, error) { return 0, nil }
+func (m *mockStore) SaveFeedback(ctx context.Context, deviceUUID string, content string, logs string) error { return nil }
+func (m *mockStore) SaveTelemetry(ctx context.Context, deviceUUID string, payload string) error { return nil }
 
 func TestHub_Run(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))

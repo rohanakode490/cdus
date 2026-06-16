@@ -74,4 +74,14 @@ func TestSQLiteStore(t *testing.T) {
 	if !revoked {
 		t.Error("expected device-1 to be revoked")
 	}
+
+	// Test SaveFeedback
+	if err := s.SaveFeedback(ctx, "device-1", "this is feedback content", "some anonymized logs"); err != nil {
+		t.Errorf("failed to save feedback: %v", err)
+	}
+
+	// Test SaveTelemetry
+	if err := s.SaveTelemetry(ctx, "device-1", `{"crashes": 0, "sync_events": 12}`); err != nil {
+		t.Errorf("failed to save telemetry: %v", err)
+	}
 }

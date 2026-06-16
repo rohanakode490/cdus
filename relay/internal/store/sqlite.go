@@ -45,6 +45,19 @@ func (s *SQLiteStore) init() error {
 		uuid TEXT PRIMARY KEY,
 		revoked_at DATETIME NOT NULL
 	);
+	CREATE TABLE IF NOT EXISTS feedback (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		device_uuid TEXT NOT NULL,
+		content TEXT NOT NULL,
+		logs TEXT,
+		created_at DATETIME NOT NULL
+	);
+	CREATE TABLE IF NOT EXISTS telemetry (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		device_uuid TEXT NOT NULL,
+		payload TEXT NOT NULL,
+		created_at DATETIME NOT NULL
+	);
 	`
 	_, err := s.db.Exec(query)
 	return err
@@ -99,4 +112,16 @@ func (s *SQLiteStore) CountDevices(ctx context.Context) (int, error) {
 	var count int
 	err := s.db.QueryRowContext(ctx, query).Scan(&count)
 	return count, err
+}
+
+func (s *SQLiteStore) SaveFeedback(ctx context.Context, deviceUUID string, content string, logs string) error {
+	query := `INSERT INTO feedback (device_uuid, content, logs, created_at) VALUES (?, ?, ?, ?)`
+	_, err := s.db.ExecContext(ctx, query, deviceUUID, content, logs, time.Now())
+	return err
+}
+
+func (s *SQLiteStore) SaveTelemetry(ctx context.Context, deviceUUID string, payload string) error {
+	query := `INSERT INTO telemetry (device_uuid, payload, created_at) VALUES (?, ?, ?)`
+	_, err := s.db.ExecContext(ctx, query, deviceUUID, payload, time.Now())
+	return err
 }
