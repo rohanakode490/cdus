@@ -992,3 +992,129 @@ pub fn append_audit_log(event_type: String, content: String) {
         let _ = store.append_audit_log(&event_type, &content);
     }
 }
+
+#[derive(uniffi::Record)]
+pub struct FfiSearchResult {
+    pub id: String,
+    pub item_type: String, // "clipboard" | "file" | "device"
+    pub title: String,
+    pub subtitle: String,
+    pub timestamp: u64,
+}
+
+#[uniffi::export]
+pub fn search(query: String) -> Vec<FfiSearchResult> {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        match store.search(&query) {
+            Ok(results) => results
+                .into_iter()
+                .map(|r| FfiSearchResult {
+                    id: r.id,
+                    item_type: r.item_type,
+                    title: r.title,
+                    subtitle: r.subtitle,
+                    timestamp: r.timestamp,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    }
+}
+
+#[uniffi::export]
+pub fn submit_feedback(text: String, attach_logs: bool) {
+    let (node_id, relay_url) = {
+        if let Some(rm) = RELAY_MANAGER.lock().unwrap().as_ref() {
+            (rm.node_id().to_string(), rm.relay_url().to_string())
+        } else {
+            return;
+        }
+    };
+
+    let logs_str = if attach_logs {
+        if let Some(store) = STORE.lock().unwrap().as_ref() {
+            match store.get_audit_logs(100) {
+                Ok(logs) => logs
+                    .into_iter()
+                    .map(|l| format!("[{}] {}: {}", l.timestamp, l.event_type, l.content))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                Err(_) => "".to_string(),
+            }
+        } else {
+            "".to_string()
+        }
+    } else {
+        "".to_string()
+    };
+
+    let store_cb = {
+        if let Some(_) = STORE.lock().unwrap().as_ref() {
+            true
+        } else {
+            false
+        }
+    };
+
+    if !store_cb {
+        return;
+    }
+
+    std::thread::spawn(move || {
+        let payload = serde_json::json!({
+            "device_uuid": node_id,
+            "content": text,
+            "logs": logs_str,
+        });
+
+        let url = format!("{}/v1/feedback", relay_url);
+        info!("FFI: Uploading user feedback to {}...", url);
+
+        let agent = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(5))
+            .build();
+
+        match agent.post(&url).send_json(payload) {
+            Ok(resp) if resp.status() == 200 => {
+                info!("FFI: Feedback uploaded successfully.");
+                if let Some(store) = STORE.lock().unwrap().as_ref() {
+                    let _ = store.append_audit_log("system", "User feedback uploaded successfully to relay");
+                }
+            }
+            Ok(resp) => {
+                error!("FFI: Failed to upload feedback: status {}", resp.status());
+                if let Some(store) = STORE.lock().unwrap().as_ref() {
+                    let _ = store.append_audit_log("system", &format!("Failed to upload feedback: status {}", resp.status()));
+                }
+            }
+            Err(e) => {
+                error!("FFI: Error uploading feedback: {}", e);
+                if let Some(store) = STORE.lock().unwrap().as_ref() {
+                    let _ = store.append_audit_log("system", &format!("Error uploading feedback: {}", e));
+                }
+            }
+        }
+    });
+}
+
+#[uniffi::export]
+pub fn set_telemetry_opt_in(opt_in: bool) {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let val = if opt_in { "true" } else { "false" };
+        let _ = store.set_state("telemetry_opt_in", val);
+    }
+}
+
+#[uniffi::export]
+pub fn get_telemetry_opt_in() -> bool {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        store.get_state("telemetry_opt_in")
+            .unwrap_or(None)
+            .map(|val| val == "true")
+            .unwrap_or(false)
+    } else {
+        false
+    }
+}

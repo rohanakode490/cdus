@@ -11,6 +11,9 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -29,6 +32,7 @@ import io.cdus.app.ui.screens.SettingsScreen
 import io.cdus.app.ui.screens.OnboardingOverlay
 import io.cdus.app.ui.screens.AuditScreen
 import io.cdus.app.ui.theme.CdusandroidTheme
+import io.cdus.app.ui.components.SearchBottomSheet
 
 import android.content.Intent
 import android.os.Build
@@ -170,6 +174,7 @@ fun MainScreen(sharedFilePath: String?, onFileSent: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val sharedPref = remember { context.getSharedPreferences("cdus_settings", Context.MODE_PRIVATE) }
     var showOnboarding by remember { mutableStateOf(!sharedPref.getBoolean("onboarding_completed", false)) }
+    var showSearchSheet by remember { mutableStateOf(false) }
 
     if (showOnboarding) {
         OnboardingOverlay(
@@ -187,6 +192,21 @@ fun MainScreen(sharedFilePath: String?, onFileSent: () -> Unit) {
                 onFileSent()
             },
             onDismiss = onFileSent
+        )
+    }
+
+    if (showSearchSheet) {
+        SearchBottomSheet(
+            onDismiss = { showSearchSheet = false },
+            onNavigateToDevices = {
+                navController.navigate(Screen.Devices.route) {
+                    popUpTo(navController.graph.findStartDestination().id) {
+                        saveState = true
+                    }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
         )
     }
 
@@ -211,6 +231,14 @@ fun MainScreen(sharedFilePath: String?, onFileSent: () -> Unit) {
                         }
                     )
                 }
+            }
+        },
+        floatingActionButton = {
+            FloatingActionButton(onClick = { showSearchSheet = true }) {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Search Everything"
+                )
             }
         }
     ) { innerPadding ->

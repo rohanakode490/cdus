@@ -918,6 +918,14 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
 
 
 
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -979,6 +987,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_qr_pairing_payload(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_cdus_ffi_fn_func_get_telemetry_opt_in(uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     fun uniffi_cdus_ffi_fn_func_greet_from_rust(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_init_core(`dataDir`: RustBuffer.ByValue,`deviceName`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -995,6 +1005,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_resume_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_fn_func_search(`query`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_send_file(`nodeId`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_set_clipboard_item_local_only(`id`: Long,`localOnly`: Byte,uniffi_out_err: UniffiRustCallStatus, 
@@ -1003,6 +1015,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_set_file_transfer_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_fn_func_set_telemetry_opt_in(`optIn`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_cdus_ffi_fn_func_simulate_crash(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_start_benchmark(`nodeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1010,6 +1024,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_start_discovery(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_stop_discovery(uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_submit_feedback(`text`: RustBuffer.ByValue,`attachLogs`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_unpair_device(`nodeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1165,6 +1181,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_qr_pairing_payload(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_get_telemetry_opt_in(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_greet_from_rust(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_init_core(
@@ -1181,6 +1199,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_resume_file_transfer(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_search(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_send_file(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_set_clipboard_item_local_only(
@@ -1189,6 +1209,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_set_file_transfer_listener(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_set_telemetry_opt_in(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_simulate_crash(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_start_benchmark(
@@ -1196,6 +1218,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_func_start_discovery(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_stop_discovery(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_submit_feedback(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_unpair_device(
     ): Short
@@ -1306,6 +1330,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_get_qr_pairing_payload() != 63476.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_get_telemetry_opt_in() != 16765.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_greet_from_rust() != 12695.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1330,6 +1357,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_resume_file_transfer() != 13935.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_search() != 35355.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_send_file() != 7051.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1342,6 +1372,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_set_file_transfer_listener() != 44860.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_set_telemetry_opt_in() != 18079.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_simulate_crash() != 46614.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1352,6 +1385,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_stop_discovery() != 49802.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_submit_feedback() != 11913.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_unpair_device() != 29091.toShort()) {
@@ -1773,6 +1809,50 @@ public object FfiConverterTypeDiscoveredDevice: FfiConverterRustBuffer<Discovere
             FfiConverterString.write(value.`os`, buf)
             FfiConverterSequenceString.write(value.`ips`, buf)
             FfiConverterUShort.write(value.`port`, buf)
+    }
+}
+
+
+
+data class FfiSearchResult (
+    var `id`: kotlin.String, 
+    var `itemType`: kotlin.String, 
+    var `title`: kotlin.String, 
+    var `subtitle`: kotlin.String, 
+    var `timestamp`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiSearchResult: FfiConverterRustBuffer<FfiSearchResult> {
+    override fun read(buf: ByteBuffer): FfiSearchResult {
+        return FfiSearchResult(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiSearchResult) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`itemType`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterString.allocationSize(value.`subtitle`) +
+            FfiConverterULong.allocationSize(value.`timestamp`)
+    )
+
+    override fun write(value: FfiSearchResult, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`itemType`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterString.write(value.`subtitle`, buf)
+            FfiConverterULong.write(value.`timestamp`, buf)
     }
 }
 
@@ -2457,6 +2537,34 @@ public object FfiConverterSequenceTypeDiscoveredDevice: FfiConverterRustBuffer<L
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeFfiSearchResult: FfiConverterRustBuffer<List<FfiSearchResult>> {
+    override fun read(buf: ByteBuffer): List<FfiSearchResult> {
+        val len = buf.getInt()
+        return List<FfiSearchResult>(len) {
+            FfiConverterTypeFfiSearchResult.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiSearchResult>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiSearchResult.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiSearchResult>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiSearchResult.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeFileTransfer: FfiConverterRustBuffer<List<FileTransfer>> {
     override fun read(buf: ByteBuffer): List<FileTransfer> {
         val len = buf.getInt()
@@ -2672,6 +2780,15 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     )
     }
     
+ fun `getTelemetryOptIn`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_telemetry_opt_in(
+        _status)
+}
+    )
+    }
+    
  fun `greetFromRust`(`name`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
@@ -2738,6 +2855,15 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
 }
     
     
+ fun `search`(`query`: kotlin.String): List<FfiSearchResult> {
+            return FfiConverterSequenceTypeFfiSearchResult.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_search(
+        FfiConverterString.lower(`query`),_status)
+}
+    )
+    }
+    
  fun `sendFile`(`nodeId`: kotlin.String, `path`: kotlin.String)
         = 
     uniffiRustCall() { _status ->
@@ -2770,6 +2896,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
 }
     
     
+ fun `setTelemetryOptIn`(`optIn`: kotlin.Boolean)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_set_telemetry_opt_in(
+        FfiConverterBoolean.lower(`optIn`),_status)
+}
+    
+    
  fun `simulateCrash`(`transferId`: kotlin.String)
         = 
     uniffiRustCall() { _status ->
@@ -2799,6 +2933,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_stop_discovery(
         _status)
+}
+    
+    
+ fun `submitFeedback`(`text`: kotlin.String, `attachLogs`: kotlin.Boolean)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_submit_feedback(
+        FfiConverterString.lower(`text`),FfiConverterBoolean.lower(`attachLogs`),_status)
 }
     
     

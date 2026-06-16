@@ -1028,10 +1028,12 @@ dependencies = [
  "libp2p",
  "once_cell",
  "parking_lot",
+ "serde_json",
  "tracing",
  "tracing-android",
  "tracing-subscriber",
  "uniffi",
+ "ureq",
  "uuid",
 ]
 
