@@ -217,6 +217,28 @@ pub enum IpcMessage {
         event_type: String,
         content: String,
     },
+    Search {
+        query: String,
+    },
+    SearchResponse(Vec<SearchResult>),
+    SubmitFeedback {
+        text: String,
+        attach_logs: bool,
+    },
+    SetTelemetryOptIn {
+        opt_in: bool,
+    },
+    GetTelemetryOptIn,
+    TelemetryOptInResponse(bool),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SearchResult {
+    pub id: String,
+    pub item_type: String, // "clipboard" | "file" | "device"
+    pub title: String,
+    pub subtitle: String,
+    pub timestamp: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

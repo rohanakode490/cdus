@@ -7,6 +7,7 @@ use tracing::info;
 pub struct Store {
     pub events_conn: Mutex<Connection>,
     pub state_conn: Mutex<Connection>,
+    pub search_conn: Mutex<Connection>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,15 +40,18 @@ impl Store {
     pub fn init(data_dir: &Path) -> Result<Self> {
         let events_path = data_dir.join("events.db");
         let state_path = data_dir.join("state.db");
+        let search_path = data_dir.join("search_index.db");
 
         info!("Initializing databases at {}...", data_dir.display());
 
         let events_conn = Connection::open(events_path)?;
         let state_conn = Connection::open(state_path)?;
+        let search_conn = Connection::open(search_path)?;
 
         // Enable WAL mode
         events_conn.pragma_update(None, "journal_mode", "WAL")?;
         state_conn.pragma_update(None, "journal_mode", "WAL")?;
+        search_conn.pragma_update(None, "journal_mode", "WAL")?;
 
         // Initialize tables
         events_conn.execute(
@@ -208,9 +212,163 @@ impl Store {
             [],
         )?;
 
+        search_conn.execute(
+            "CREATE TABLE IF NOT EXISTS search_index (
+                id TEXT PRIMARY KEY,
+                item_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                subtitle TEXT NOT NULL,
+                content TEXT,
+                timestamp INTEGER NOT NULL
+            )",
+            [],
+        )?;
+
+        search_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_search_type ON search_index(item_type)",
+            [],
+        )?;
+
+        search_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_search_timestamp ON search_index(timestamp)",
+            [],
+        )?;
+
+        // Populate search index if empty
+        let is_empty: bool = search_conn
+            .query_row(
+                "SELECT count(*) FROM search_index",
+                [],
+                |row| {
+                    let count: i64 = row.get(0)?;
+                    Ok(count == 0)
+                },
+            )
+            .unwrap_or(true);
+
+        if is_empty {
+            info!("Search index is empty, performing initial population...");
+            // Re-index devices
+            let mut stmt = state_conn.prepare("SELECT node_id, label FROM paired_devices WHERE node_id != 'unknown'")?;
+            let dev_rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for dev in dev_rows {
+                if let Ok((node_id, label)) = dev {
+                    let title = label.to_string();
+                    let subtitle = format!("Device ID: {} • Paired", node_id);
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64;
+                    let content = format!("{} {} device", label, node_id);
+                    let _ = search_conn.execute(
+                        "INSERT OR REPLACE INTO search_index (id, item_type, title, subtitle, content, timestamp) VALUES (?1, 'device', ?2, ?3, ?4, ?5)",
+                        (node_id, &title, &subtitle, &content, now),
+                    );
+                }
+            }
+
+            // Re-index clipboard events
+            let mut stmt = events_conn.prepare("SELECT hash, payload, source FROM events")?;
+            let event_rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?, row.get::<_, String>(2)?))
+            })?;
+            for ev in event_rows {
+                if let Ok((hash, payload, source)) = ev {
+                    let text = String::from_utf8_lossy(&payload).to_string();
+                    let (title, is_url, url_to_parse) = Self::parse_clipboard_payload(&text);
+                    if title.is_empty() {
+                        continue;
+                    }
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64;
+                    let subtitle = if let Some(ref u) = url_to_parse {
+                        let mut truncated_url = u.chars().take(60).collect::<String>();
+                        if u.chars().count() > 60 {
+                            truncated_url.push_str("...");
+                        }
+                        format!("{} • synced from {}", truncated_url, source)
+                    } else {
+                        format!("synced from {} • clipboard history", source)
+                    };
+                    let mut content = format!("{} {} {}", title, source, if is_url { "url" } else { "text" });
+                    if let Some(ref u) = url_to_parse {
+                        if let Ok(url) = url::Url::parse(u) {
+                            if let Some(host) = url.host_str() {
+                                content = format!("{} {} {} {} {}", title, u, host, source, "url");
+                            }
+                        }
+                    }
+                    let _ = search_conn.execute(
+                        "INSERT OR REPLACE INTO search_index (id, item_type, title, subtitle, content, timestamp) VALUES (?1, 'clipboard', ?2, ?3, ?4, ?5)",
+                        (&hash, &title, &subtitle, &content, now),
+                    );
+                }
+            }
+
+            // Re-index file transfers
+            let mut stmt = state_conn.prepare("SELECT transfer_id, direction, peer_node_id, file_name, total_bytes, status FROM file_transfers")?;
+            let trans_rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)? as u64,
+                    row.get::<_, String>(5)?,
+                ))
+            })?;
+            for trans in trans_rows {
+                if let Ok((transfer_id, direction, peer_node_id, file_name, total_bytes, status)) = trans {
+                    let peer_label: String = state_conn
+                        .query_row(
+                            "SELECT label FROM paired_devices WHERE node_id = ?",
+                            [&peer_node_id],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or_else(|_| {
+                            peer_node_id[..std::cmp::min(8, peer_node_id.len())].to_string()
+                        });
+                    let size_str = {
+                        const KB: u64 = 1024;
+                        const MB: u64 = 1024 * 1024;
+                        const GB: u64 = 1024 * 1024 * 1024;
+                        if total_bytes >= GB {
+                            format!("{:.2} GB", total_bytes as f64 / GB as f64)
+                        } else if total_bytes >= MB {
+                            format!("{:.2} MB", total_bytes as f64 / MB as f64)
+                        } else if total_bytes >= KB {
+                            format!("{:.2} KB", total_bytes as f64 / KB as f64)
+                        } else {
+                            format!("{} B", total_bytes)
+                        }
+                    };
+                    let title = file_name.to_string();
+                    let subtitle = if direction == "outgoing" {
+                        format!("Size: {} • sent to {} ({})", size_str, peer_label, status)
+                    } else {
+                        format!("Size: {} • received from {} ({})", size_str, peer_label, status)
+                    };
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64;
+                    let content = format!("{} {} {} file", file_name, peer_label, direction);
+                    let _ = search_conn.execute(
+                        "INSERT OR REPLACE INTO search_index (id, item_type, title, subtitle, content, timestamp) VALUES (?1, 'file', ?2, ?3, ?4, ?5)",
+                        (&transfer_id, &title, &subtitle, &content, now),
+                    );
+                }
+            }
+        }
+
         Ok(Store {
             events_conn: Mutex::new(events_conn),
             state_conn: Mutex::new(state_conn),
+            search_conn: Mutex::new(search_conn),
         })
     }
 
@@ -250,6 +408,53 @@ impl Store {
                 now,
             ),
         )?;
+
+        // Append audit log for transfer initiation
+        let peer_label: String = conn
+            .query_row(
+                "SELECT label FROM paired_devices WHERE node_id = ?",
+                [peer_node_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| {
+                peer_node_id[..std::cmp::min(8, peer_node_id.len())].to_string()
+            });
+
+        let size_str = {
+            const KB: u64 = 1024;
+            const MB: u64 = 1024 * 1024;
+            const GB: u64 = 1024 * 1024 * 1024;
+            if total_bytes >= GB {
+                format!("{:.2} GB", total_bytes as f64 / GB as f64)
+            } else if total_bytes >= MB {
+                format!("{:.2} MB", total_bytes as f64 / MB as f64)
+            } else if total_bytes >= KB {
+                format!("{:.2} KB", total_bytes as f64 / KB as f64)
+            } else {
+                format!("{} B", total_bytes)
+            }
+        };
+
+        let log_content = if direction == "outgoing" {
+            format!(
+                "Outgoing file transfer initiated: {} ({}) to {}",
+                file_name, size_str, peer_label
+            )
+        } else {
+            format!(
+                "Incoming file transfer request: {} ({}) from {}",
+                file_name, size_str, peer_label
+            )
+        };
+
+        conn.execute(
+            "INSERT INTO audit_logs (event_type, content, timestamp) VALUES (?1, ?2, ?3)",
+            ("sync", &log_content, now),
+        )?;
+
+        // Index the file transfer
+        let _ = self.index_file_transfer(transfer_id, direction, &peer_label, file_name, total_bytes, "pending");
+
         Ok(())
     }
 
@@ -258,6 +463,11 @@ impl Store {
         let chunks_deleted = conn.execute("DELETE FROM file_chunks WHERE transfer_id = ?1", [transfer_id])?;
         let transfers_deleted = conn.execute("DELETE FROM file_transfers WHERE transfer_id = ?1", [transfer_id])?;
         info!("delete_transfer: ID='{}' -> chunks_deleted={}, transfers_deleted={}", transfer_id, chunks_deleted, transfers_deleted);
+
+        // Remove from search index
+        let search_conn = self.search_conn.lock();
+        let _ = search_conn.execute("DELETE FROM search_index WHERE id = ?", [transfer_id]);
+
         Ok(())
     }
 
@@ -268,10 +478,121 @@ impl Store {
             .unwrap()
             .as_millis() as i64;
 
+        // Query transfer details before update to log status change
+        let transfer_info = conn
+            .query_row(
+                "SELECT direction, peer_node_id, file_name, total_bytes, status FROM file_transfers WHERE transfer_id = ?",
+                [transfer_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)? as u64,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+
         conn.execute(
             "UPDATE file_transfers SET status = ?1, updated_at = ?2 WHERE transfer_id = ?3",
             (status, now, transfer_id),
         )?;
+
+        if let Some((direction, peer_node_id, file_name, total_bytes, old_status)) = transfer_info {
+            let peer_label: String = conn
+                .query_row(
+                    "SELECT label FROM paired_devices WHERE node_id = ?",
+                    [&peer_node_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or_else(|_| {
+                    peer_node_id[..std::cmp::min(8, peer_node_id.len())].to_string()
+                });
+
+            if old_status != status {
+                let size_str = {
+                    const KB: u64 = 1024;
+                    const MB: u64 = 1024 * 1024;
+                    const GB: u64 = 1024 * 1024 * 1024;
+                    if total_bytes >= GB {
+                        format!("{:.2} GB", total_bytes as f64 / GB as f64)
+                    } else if total_bytes >= MB {
+                        format!("{:.2} MB", total_bytes as f64 / MB as f64)
+                    } else if total_bytes >= KB {
+                        format!("{:.2} KB", total_bytes as f64 / KB as f64)
+                    } else {
+                        format!("{} B", total_bytes)
+                    }
+                };
+
+                let log_content = match status {
+                    "in_progress" => Some(if direction == "outgoing" {
+                        format!(
+                            "Outgoing file transfer started: {} ({}) to {}",
+                            file_name, size_str, peer_label
+                        )
+                    } else {
+                        format!(
+                            "Incoming file transfer started: {} ({}) from {}",
+                            file_name, size_str, peer_label
+                        )
+                    }),
+                    "complete" => Some(if direction == "outgoing" {
+                        format!(
+                            "Outgoing file transfer completed: {} ({}) to {}",
+                            file_name, size_str, peer_label
+                        )
+                    } else {
+                        format!(
+                            "Incoming file transfer completed: {} ({}) from {}",
+                            file_name, size_str, peer_label
+                        )
+                    }),
+                    "declined" => Some(if direction == "outgoing" {
+                        format!(
+                            "Outgoing file transfer declined: {} ({}) by {}",
+                            file_name, size_str, peer_label
+                        )
+                    } else {
+                        format!(
+                            "Incoming file transfer request declined: {} ({}) from {}",
+                            file_name, size_str, peer_label
+                        )
+                    }),
+                    "failed" => Some(if direction == "outgoing" {
+                        format!(
+                            "Outgoing file transfer failed: {} ({}) to {}",
+                            file_name, size_str, peer_label
+                        )
+                    } else {
+                        format!(
+                            "Incoming file transfer failed: {} ({}) from {}",
+                            file_name, size_str, peer_label
+                        )
+                    }),
+                    "paused" => Some(format!(
+                        "File transfer paused: {} ({}) with {}",
+                        file_name, size_str, peer_label
+                    )),
+                    "awaiting_acceptance" => Some(format!(
+                        "File transfer awaiting acceptance: {} ({}) with {}",
+                        file_name, size_str, peer_label
+                    )),
+                    _ => None,
+                };
+
+                if let Some(content) = log_content {
+                    conn.execute(
+                        "INSERT INTO audit_logs (event_type, content, timestamp) VALUES (?1, ?2, ?3)",
+                        ("sync", &content, now),
+                    )?;
+                }
+            }
+            let _ = self.index_file_transfer(transfer_id, &direction, &peer_label, &file_name, total_bytes, status);
+        }
+
         Ok(())
     }
 
@@ -282,10 +603,75 @@ impl Store {
             .unwrap()
             .as_millis() as i64;
 
+        // Query transfer details before update to log status change
+        let transfer_info = conn
+            .query_row(
+                "SELECT direction, peer_node_id, file_name, total_bytes, status FROM file_transfers WHERE transfer_id = ?",
+                [transfer_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)? as u64,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+
         conn.execute(
             "UPDATE file_transfers SET status = 'failed', error_message = ?1, updated_at = ?2 WHERE transfer_id = ?3",
             (error, now, transfer_id),
         )?;
+
+        if let Some((direction, peer_node_id, file_name, total_bytes, old_status)) = transfer_info {
+            let peer_label: String = conn
+                .query_row(
+                    "SELECT label FROM paired_devices WHERE node_id = ?",
+                    [&peer_node_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or_else(|_| {
+                    peer_node_id[..std::cmp::min(8, peer_node_id.len())].to_string()
+                });
+
+            if old_status != "failed" {
+                let size_str = {
+                    const KB: u64 = 1024;
+                    const MB: u64 = 1024 * 1024;
+                    const GB: u64 = 1024 * 1024 * 1024;
+                    if total_bytes >= GB {
+                        format!("{:.2} GB", total_bytes as f64 / GB as f64)
+                    } else if total_bytes >= MB {
+                        format!("{:.2} MB", total_bytes as f64 / MB as f64)
+                    } else if total_bytes >= KB {
+                        format!("{:.2} KB", total_bytes as f64 / KB as f64)
+                    } else {
+                        format!("{} B", total_bytes)
+                    }
+                };
+
+                let log_content = if direction == "outgoing" {
+                    format!(
+                        "Outgoing file transfer failed: {} ({}) to {} (Error: {})",
+                        file_name, size_str, peer_label, error
+                    )
+                } else {
+                    format!(
+                        "Incoming file transfer failed: {} ({}) from {} (Error: {})",
+                        file_name, size_str, peer_label, error
+                    )
+                };
+
+                conn.execute(
+                    "INSERT INTO audit_logs (event_type, content, timestamp) VALUES (?1, ?2, ?3)",
+                    ("sync", &log_content, now),
+                )?;
+            }
+            let _ = self.index_file_transfer(transfer_id, &direction, &peer_label, &file_name, total_bytes, "failed");
+        }
+
         Ok(())
     }
 
@@ -564,6 +950,9 @@ impl Store {
             hash
         };
 
+        // Index the clipboard item
+        let _ = self.index_clipboard_item(&new_hash, payload, source);
+
         // Prune events based on history limit and auto-expiry configurations
         let _ = self.prune_events();
 
@@ -572,6 +961,19 @@ impl Store {
 
     pub fn delete_event(&self, id: i64) -> Result<()> {
         let conn = self.events_conn.lock();
+        let hash: Option<String> = conn
+            .query_row(
+                "SELECT hash FROM events WHERE id = ?",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        
+        if let Some(hash_str) = hash {
+            let search_conn = self.search_conn.lock();
+            let _ = search_conn.execute("DELETE FROM search_index WHERE id = ?", [&hash_str]);
+        }
+
         conn.execute("DELETE FROM events WHERE id = ?", [id])?;
         Ok(())
     }
@@ -579,6 +981,9 @@ impl Store {
     pub fn clear_events(&self) -> Result<()> {
         let conn = self.events_conn.lock();
         conn.execute("DELETE FROM events", [])?;
+        
+        let search_conn = self.search_conn.lock();
+        let _ = search_conn.execute("DELETE FROM search_index WHERE item_type = 'clipboard'", []);
         Ok(())
     }
 
@@ -607,6 +1012,29 @@ impl Store {
             )",
             [limit],
         )?;
+
+        // Sync search index
+        let remaining_hashes: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT hash FROM events")?;
+            let hash_iter = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            let mut hashes = Vec::new();
+            for h in hash_iter {
+                if let Ok(h_str) = h {
+                    hashes.push(h_str);
+                }
+            }
+            hashes
+        };
+        
+        let search_conn = self.search_conn.lock();
+        if remaining_hashes.is_empty() {
+            let _ = search_conn.execute("DELETE FROM search_index WHERE item_type = 'clipboard'", []);
+        } else {
+            let vars = vec!["?"; remaining_hashes.len()].join(",");
+            let sql = format!("DELETE FROM search_index WHERE item_type = 'clipboard' AND id NOT IN ({})", vars);
+            let params = rusqlite::params_from_iter(remaining_hashes.iter());
+            let _ = search_conn.execute(&sql, params);
+        }
 
         Ok(())
     }
@@ -801,12 +1229,15 @@ impl Store {
              ON CONFLICT(node_id) DO UPDATE SET label = excluded.label, static_key = COALESCE(excluded.static_key, paired_devices.static_key)",
             (node_id, label, static_key),
         )?;
+        let _ = self.index_paired_device(node_id, label);
         Ok(())
     }
 
     pub fn remove_paired_device(&self, node_id: &str) -> Result<()> {
         let conn = self.state_conn.lock();
         conn.execute("DELETE FROM paired_devices WHERE node_id = ?", [node_id])?;
+        let search_conn = self.search_conn.lock();
+        let _ = search_conn.execute("DELETE FROM search_index WHERE id = ?", [node_id]);
         Ok(())
     }
 
@@ -924,6 +1355,296 @@ impl Store {
         conn.execute("DELETE FROM audit_logs", [])?;
         Ok(())
     }
+
+fn parse_clipboard_payload(payload_str: &str) -> (String, bool, Option<String>) {
+    let trimmed = payload_str.trim();
+    if trimmed.is_empty() {
+        return ("".to_string(), false, None);
+    }
+
+    // Try parsing payload as resolved URL metadata JSON.
+    let mut resolved_url: Option<(String, String)> = None; // (title, url)
+    if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if json_val["type"] == "url" {
+            let u = json_val["url"].as_str().unwrap_or("").to_string();
+            let t = json_val["title"].as_str().unwrap_or("").to_string();
+            let display_title = if t.trim().is_empty() {
+                u.clone()
+            } else {
+                t
+            };
+            resolved_url = Some((display_title, u));
+        }
+    }
+
+    if let Some((t, u)) = resolved_url {
+        (t, true, Some(u))
+    } else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        (trimmed.to_string(), true, Some(trimmed.to_string()))
+    } else {
+        let mut preview = trimmed.chars().take(50).collect::<String>();
+        if trimmed.chars().count() > 50 {
+            preview.push_str("...");
+        }
+        (preview, false, None)
+    }
+}
+
+    pub fn index_clipboard_item(&self, hash: &str, payload: &[u8], source: &str) -> Result<()> {
+        let text = String::from_utf8_lossy(payload).to_string();
+        let (title, is_url, url_to_parse) = Self::parse_clipboard_payload(&text);
+        if title.is_empty() {
+            return Ok(());
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        let subtitle = if let Some(ref u) = url_to_parse {
+            let mut truncated_url = u.chars().take(60).collect::<String>();
+            if u.chars().count() > 60 {
+                truncated_url.push_str("...");
+            }
+            format!("{} • synced from {}", truncated_url, source)
+        } else {
+            format!("synced from {} • clipboard history", source)
+        };
+
+        let mut content = format!("{} {} {}", title, source, if is_url { "url" } else { "text" });
+        if let Some(ref u) = url_to_parse {
+            if let Ok(url) = url::Url::parse(u) {
+                if let Some(host) = url.host_str() {
+                    content = format!("{} {} {} {} {}", title, u, host, source, "url");
+                }
+            }
+        }
+
+        let search_conn = self.search_conn.lock();
+        search_conn.execute(
+            "INSERT OR REPLACE INTO search_index (id, item_type, title, subtitle, content, timestamp) VALUES (?1, 'clipboard', ?2, ?3, ?4, ?5)",
+            (hash, &title, &subtitle, &content, now),
+        )?;
+
+        Ok(())
+    }
+
+    pub fn index_file_transfer(
+        &self,
+        transfer_id: &str,
+        direction: &str,
+        peer_label: &str,
+        file_name: &str,
+        total_bytes: u64,
+        status: &str,
+    ) -> Result<()> {
+
+        let size_str = {
+            const KB: u64 = 1024;
+            const MB: u64 = 1024 * 1024;
+            const GB: u64 = 1024 * 1024 * 1024;
+            if total_bytes >= GB {
+                format!("{:.2} GB", total_bytes as f64 / GB as f64)
+            } else if total_bytes >= MB {
+                format!("{:.2} MB", total_bytes as f64 / MB as f64)
+            } else if total_bytes >= KB {
+                format!("{:.2} KB", total_bytes as f64 / KB as f64)
+            } else {
+                format!("{} B", total_bytes)
+            }
+        };
+
+        let title = file_name.to_string();
+        let subtitle = if direction == "outgoing" {
+            format!("Size: {} • sent to {} ({})", size_str, peer_label, status)
+        } else {
+            format!("Size: {} • received from {} ({})", size_str, peer_label, status)
+        };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        let content = format!("{} {} {} file", file_name, peer_label, direction);
+
+        let search_conn = self.search_conn.lock();
+        search_conn.execute(
+            "INSERT OR REPLACE INTO search_index (id, item_type, title, subtitle, content, timestamp) VALUES (?1, 'file', ?2, ?3, ?4, ?5)",
+            (transfer_id, &title, &subtitle, &content, now),
+        )?;
+
+        Ok(())
+    }
+
+    pub fn index_paired_device(&self, node_id: &str, label: &str) -> Result<()> {
+        let title = label.to_string();
+        let subtitle = format!("Device ID: {} • Paired", node_id);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let content = format!("{} {} device", label, node_id);
+
+        let search_conn = self.search_conn.lock();
+        search_conn.execute(
+            "INSERT OR REPLACE INTO search_index (id, item_type, title, subtitle, content, timestamp) VALUES (?1, 'device', ?2, ?3, ?4, ?5)",
+            (node_id, &title, &subtitle, &content, now),
+        )?;
+
+        Ok(())
+    }
+
+    pub fn search(&self, query: &str) -> Result<Vec<cdus_common::SearchResult>> {
+        let trimmed_query = query.trim().to_lowercase();
+        let search_conn = self.search_conn.lock();
+
+        let mut stmt = search_conn.prepare(
+            "SELECT id, item_type, title, subtitle, content, timestamp FROM search_index"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        })?;
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        let local_device_name = self.get_state("device_name")
+            .unwrap_or(None)
+            .unwrap_or_else(|| "".to_string())
+            .to_lowercase();
+
+        let mut scored_results = Vec::new();
+
+        if trimmed_query.is_empty() {
+            for row in rows {
+                if let Ok((id, item_type, title, subtitle, _content, timestamp)) = row {
+                    scored_results.push((
+                        cdus_common::SearchResult {
+                            id,
+                            item_type,
+                            title,
+                            subtitle,
+                            timestamp: timestamp as u64,
+                        },
+                        timestamp as f64,
+                    ));
+                }
+            }
+            scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let results: Vec<cdus_common::SearchResult> = scored_results
+                .into_iter()
+                .take(50)
+                .map(|(r, _)| r)
+                .collect();
+            return Ok(results);
+        }
+
+        let query_terms: Vec<&str> = trimmed_query.split_whitespace().collect();
+
+        for row in rows {
+            if let Ok((id, item_type, title, subtitle, content, timestamp)) = row {
+                let content_str = content.unwrap_or_default();
+                
+                let mut relevance_score = 0.0;
+                let title_lower = title.to_lowercase();
+                let subtitle_lower = subtitle.to_lowercase();
+                let content_lower = content_str.to_lowercase();
+
+                let mut matched = false;
+                for term in &query_terms {
+                    let mut term_matched = false;
+                    if title_lower.contains(term) {
+                        term_matched = true;
+                        if title_lower.starts_with(term) {
+                            relevance_score += 25.0;
+                        } else {
+                            relevance_score += 15.0;
+                        }
+                        if title_lower == *term {
+                            relevance_score += 50.0;
+                        }
+                    }
+                    if content_lower.contains(term) {
+                        term_matched = true;
+                        relevance_score += 10.0;
+                    }
+                    if subtitle_lower.contains(term) {
+                        term_matched = true;
+                        relevance_score += 5.0;
+                    }
+
+                    if term_matched {
+                        matched = true;
+                    }
+                }
+
+                if !matched {
+                    continue;
+                }
+
+                if query_terms.len() > 1 {
+                    if title_lower.contains(&trimmed_query) {
+                        relevance_score += 40.0;
+                    }
+                    if content_lower.contains(&trimmed_query) {
+                        relevance_score += 20.0;
+                    }
+                }
+
+                let age_seconds = ((now_ms - timestamp) as f64 / 1000.0).max(0.0);
+                let recency_score = 30.0 / (1.0 + (age_seconds / 7200.0));
+
+                let mut proximity_score = 0.0;
+                let is_local = subtitle_lower.contains("local") 
+                    || content_lower.contains("local")
+                    || (!local_device_name.is_empty() && (
+                        subtitle_lower.contains(&local_device_name) 
+                        || content_lower.contains(&local_device_name)
+                    ));
+
+                if is_local {
+                    proximity_score += 15.0;
+                } else {
+                    proximity_score += 5.0;
+                }
+
+                let total_score = relevance_score + recency_score + proximity_score;
+
+                scored_results.push((
+                    cdus_common::SearchResult {
+                        id,
+                        item_type,
+                        title,
+                        subtitle,
+                        timestamp: timestamp as u64,
+                    },
+                    total_score,
+                ));
+            }
+        }
+
+        scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let results: Vec<cdus_common::SearchResult> = scored_results
+            .into_iter()
+            .take(50)
+            .map(|(r, _)| r)
+            .collect();
+
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
@@ -1009,6 +1730,11 @@ mod tests {
         ).unwrap();
 
         let history = store.get_transfer_history(10).unwrap();
+        assert_eq!(history.len(), 1);
+
+        store.delete_transfer(transfer_id).unwrap();
+
+        let history = store.get_transfer_history(10).unwrap();
         assert_eq!(history.len(), 0);
     }
 
@@ -1043,6 +1769,107 @@ mod tests {
         store.clear_audit_logs().unwrap();
         let logs_cleared = store.get_audit_logs(10).unwrap();
         assert_eq!(logs_cleared.len(), 0);
+    }
+
+    #[test]
+    fn test_search_index() {
+        let dir = tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+
+        // 1. Test indexing paired device
+        store.add_paired_device("node-1", "My Phone", None).unwrap();
+        let results = store.search("Phone").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].item_type, "device");
+        assert_eq!(results[0].title, "My Phone");
+
+        // 2. Test indexing clipboard item
+        let hash = store.append_event(b"Hello World from Antigravity!", "Local").unwrap();
+        let results = store.search("Antigravity").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].item_type, "clipboard");
+        assert_eq!(results[0].title, "Hello World from Antigravity!");
+        assert_eq!(results[0].id, hash);
+
+        // 3. Test indexing file transfer
+        store.create_transfer(
+            "transfer-123",
+            "incoming",
+            "node-1",
+            "path/to/somefile.txt",
+            "somefile.txt",
+            5000000,
+            256,
+            "somehash"
+        ).unwrap();
+        let results = store.search("somefile").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].item_type, "file");
+        assert_eq!(results[0].title, "somefile.txt");
+        assert!(results[0].subtitle.contains("4.77 MB"));
+
+        // 4. Test rank/score: fuzzy search relevance
+        let results = store.search("somefile").unwrap();
+        assert_eq!(results[0].title, "somefile.txt");
+
+        // Test delete paired device
+        store.remove_paired_device("node-1").unwrap();
+        let results = store.search("Phone").unwrap();
+        assert!(!results.iter().any(|r| r.item_type == "device"));
+
+        // Test delete transfer
+        store.delete_transfer("transfer-123").unwrap();
+        let results = store.search("somefile").unwrap();
+        assert_eq!(results.len(), 0);
+
+        // Test indexing resolved URL JSON metadata
+        let url_payload = serde_json::json!({
+            "type": "url",
+            "url": "https://google.com/search?q=antigravity",
+            "title": "Google Search - Antigravity",
+            "favicon": "data:image/png;base64,1234"
+        }).to_string();
+        let url_hash = store.append_event(url_payload.as_bytes(), "Remote").unwrap();
+        let results = store.search("Search").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].item_type, "clipboard");
+        assert_eq!(results[0].title, "Google Search - Antigravity");
+        assert_eq!(results[0].subtitle, "https://google.com/search?q=antigravity • synced from Remote");
+        assert_eq!(results[0].id, url_hash);
+
+        // Test searching by part of URL string
+        let results_by_url = store.search("google.com").unwrap();
+        assert_eq!(results_by_url.len(), 1);
+        assert_eq!(results_by_url[0].id, url_hash);
+    }
+
+    #[test]
+    fn test_telemetry_opt_in() {
+        let dir = tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+
+        // Default should be None / false
+        let opt_in = store.get_state("telemetry_opt_in")
+            .unwrap()
+            .map(|val| val == "true")
+            .unwrap_or(false);
+        assert!(!opt_in);
+
+        // Enable telemetry
+        store.set_state("telemetry_opt_in", "true").unwrap();
+        let opt_in = store.get_state("telemetry_opt_in")
+            .unwrap()
+            .map(|val| val == "true")
+            .unwrap_or(false);
+        assert!(opt_in);
+
+        // Disable telemetry
+        store.set_state("telemetry_opt_in", "false").unwrap();
+        let opt_in = store.get_state("telemetry_opt_in")
+            .unwrap()
+            .map(|val| val == "true")
+            .unwrap_or(false);
+        assert!(!opt_in);
     }
 }
 

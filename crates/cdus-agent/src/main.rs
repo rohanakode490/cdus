@@ -131,6 +131,55 @@ fn main() {
         error!("Failed to cleanup stale transfers: {}", e);
     }
 
+    // Spawns a background telemetry loop
+    let telemetry_store = Arc::clone(&store);
+    let telemetry_relay_url = cli.relay_url.clone();
+    let telemetry_node_id = node_id.clone();
+    thread::spawn(move || {
+        loop {
+            // Check opt-in
+            let opt_in = telemetry_store.get_state("telemetry_opt_in")
+                .unwrap_or(None)
+                .map(|val| val == "true")
+                .unwrap_or(false);
+
+            if opt_in {
+                // Gather anonymous metrics
+                let paired_count = telemetry_store.get_paired_devices().map(|d| d.len()).unwrap_or(0);
+                let recent_events_count = telemetry_store.get_recent_events(100).map(|e| e.len()).unwrap_or(0);
+                let transfer_count = telemetry_store.get_transfer_history(100).map(|h| h.len()).unwrap_or(0);
+
+                let payload = serde_json::json!({
+                    "device_type": std::env::consts::OS,
+                    "paired_devices": paired_count,
+                    "recent_events": recent_events_count,
+                    "transfers": transfer_count,
+                    "version": env!("CARGO_PKG_VERSION"),
+                });
+
+                let url = format!("{}/v1/telemetry", telemetry_relay_url);
+                debug!("Uploading usage telemetry to {}...", url);
+
+                let agent = ureq::AgentBuilder::new()
+                    .timeout(std::time::Duration::from_secs(5))
+                    .build();
+
+                let payload_str = payload.to_string();
+                let body = serde_json::json!({
+                    "device_uuid": telemetry_node_id,
+                    "payload": payload_str,
+                });
+
+                if let Err(e) = agent.post(&url).send_json(body) {
+                    error!("Error uploading telemetry: {}", e);
+                }
+            }
+
+            // Upload telemetry once every hour
+            thread::sleep(std::time::Duration::from_secs(3600));
+        }
+    });
+
     let (progress_tx, progress_rx) = flume::unbounded();
     let transfer_manager = Arc::new(cdus_agent::file_transfer::FileTransferManager::new(Arc::clone(&store), progress_tx));
 
@@ -343,6 +392,103 @@ fn main() {
                                                         )),
                                                     )
                                                     .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
+                                        IpcMessage::SubmitFeedback { text, attach_logs } => {
+                                            let node_id = relay_ipc.node_id().to_string();
+                                            let relay_url = relay_ipc.relay_url().to_string();
+                                            
+                                            let logs_str = if attach_logs {
+                                                match store_clone.get_audit_logs(100) {
+                                                    Ok(logs) => {
+                                                        logs.into_iter()
+                                                            .map(|l| format!("[{}] {}: {}", l.timestamp, l.event_type, l.content))
+                                                            .collect::<Vec<_>>()
+                                                            .join("\n")
+                                                    }
+                                                    Err(_) => "".to_string(),
+                                                }
+                                            } else {
+                                                "".to_string()
+                                            };
+
+                                            let store_cb = Arc::clone(&store_clone);
+                                            thread::spawn(move || {
+                                                let payload = serde_json::json!({
+                                                    "device_uuid": node_id,
+                                                    "content": text,
+                                                    "logs": logs_str,
+                                                });
+                                                
+                                                let url = format!("{}/v1/feedback", relay_url);
+                                                info!("Uploading user feedback to {}...", url);
+                                                
+                                                let agent = ureq::AgentBuilder::new()
+                                                    .timeout(std::time::Duration::from_secs(5))
+                                                    .build();
+                                                    
+                                                match agent.post(&url).send_json(payload) {
+                                                    Ok(resp) if resp.status() == 200 => {
+                                                        info!("Feedback uploaded successfully.");
+                                                        let _ = store_cb.append_audit_log("system", "User feedback uploaded successfully to relay");
+                                                    }
+                                                    Ok(resp) => {
+                                                        error!("Failed to upload feedback: status {}", resp.status());
+                                                        let _ = store_cb.append_audit_log("system", &format!("Failed to upload feedback: status {}", resp.status()));
+                                                    }
+                                                    Err(e) => {
+                                                        error!("Error uploading feedback: {}", e);
+                                                        let _ = store_cb.append_audit_log("system", &format!("Error uploading feedback: {}", e));
+                                                    }
+                                                }
+                                            });
+
+                                            let resp_bytes = serde_json::to_vec(
+                                                &IpcMessage::Log("Feedback queued for submission".to_string())
+                                            ).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        IpcMessage::SetTelemetryOptIn { opt_in } => {
+                                            let val = if opt_in { "true" } else { "false" };
+                                            match store_clone.set_state("telemetry_opt_in", val) {
+                                                Ok(_) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!("Telemetry opt-in set to {}", opt_in))
+                                                    ).unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!("Error setting telemetry opt-in: {}", e))
+                                                    ).unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
+                                        IpcMessage::GetTelemetryOptIn => {
+                                            let opt_in = store_clone.get_state("telemetry_opt_in")
+                                                .unwrap_or(None)
+                                                .map(|val| val == "true")
+                                                .unwrap_or(false);
+                                            let resp_bytes = serde_json::to_vec(
+                                                &IpcMessage::TelemetryOptInResponse(opt_in)
+                                            ).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        IpcMessage::Search { query } => {
+                                            match store_clone.search(&query) {
+                                                Ok(results) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::SearchResponse(results)
+                                                    ).unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!("Error performing search: {}", e))
+                                                    ).unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                             }

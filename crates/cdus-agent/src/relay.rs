@@ -66,6 +66,14 @@ impl RelayManager {
         )
     }
 
+    pub fn relay_url(&self) -> &str {
+        &self.relay_url
+    }
+
+    pub fn node_id(&self) -> &str {
+        &self.node_id
+    }
+
     pub fn get_turn_credentials(&self) -> Result<TurnCredentials> {
         let url = format!("{}/v1/turn?uuid={}", self.relay_url, self.node_id);
         info!("Fetching TURN credentials from relay at {}...", url);
