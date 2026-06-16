@@ -21,6 +21,7 @@
         <button class="nav-item" data-view="files">Files</button>
         <button class="nav-item" data-view="audit">Audit Log</button>
         <button class="nav-item" data-view="settings">Settings</button>
+        <button class="nav-item" id="sidebar-search-btn" style="margin-top: 10px; border-top: 1px solid rgba(0,0,0,0.05); padding-top: 15px;">🔍 Search <span class="shortcut-tag" style="font-size: 0.75rem; background: rgba(0,0,0,0.05); padding: 2px 6px; border-radius: 4px; float: right; font-family: monospace;">Ctrl+S</span></button>
       </nav>
     </aside>
 
@@ -280,6 +281,16 @@
           </div>
 
           <div class="settings-group">
+            <div class="setting-row">
+              <label for="telemetry-opt-in">Opt-in Telemetry</label>
+              <input type="checkbox" id="telemetry-opt-in" />
+            </div>
+            <p class="setting-hint">
+              Help us improve by sending anonymous crash and usage reports.
+            </p>
+          </div>
+
+          <div class="settings-group">
             <label for="clipboard-limit">Clipboard History Limit</label>
             <div class="slider-container">
               <input type="range" id="clipboard-limit" min="10" max="200" value="50" />
@@ -442,6 +453,124 @@
         </div>
 
         <button class="primary-btn" id="onboarding-finish-btn">Finish &amp; Open CDUS</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Spotlight Search Overlay -->
+  <div id="search-overlay" class="modal hidden">
+    <div class="search-overlay-content">
+      <div class="search-overlay-header">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="global-search-input" placeholder="Search clipboard, files, devices..." autocomplete="off" />
+        <span class="search-shortcut-hint">ESC to close</span>
+      </div>
+      
+      <div class="search-results-container">
+        <!-- Loading state -->
+        <div id="search-loading" class="search-state hidden">
+          <div class="spinner"></div>
+          <span>Searching index...</span>
+        </div>
+        
+        <!-- Error state -->
+        <div id="search-error" class="search-state hidden">
+          <span class="error-msg">Failed to perform search.</span>
+        </div>
+
+        <!-- Empty state -->
+        <div id="search-empty" class="search-state hidden">
+          <span>No matching results found.</span>
+        </div>
+
+        <!-- Results list -->
+        <div id="search-results-list" class="results-list">
+          <div class="results-group" id="group-clipboard">
+            <div class="group-title">Clipboard History</div>
+            <div class="result-item" data-id="c1" data-type="clipboard" tabindex="0">
+              <div class="result-icon">📋</div>
+              <div class="result-main">
+                <div class="result-text">https://github.com/google/gemini</div>
+                <div class="result-meta">synced from <span class="device-badge">Pixel 8</span> • 5 mins ago</div>
+              </div>
+              <div class="result-action-hint">Press Enter to Copy</div>
+            </div>
+            <div class="result-item" data-id="c2" data-type="clipboard" tabindex="0">
+              <div class="result-icon">📋</div>
+              <div class="result-main">
+                <div class="result-text">curl -sSL https://get.docker.com | sh</div>
+                <div class="result-meta">synced from <span class="device-badge">Ubuntu Server</span> • 1 hour ago</div>
+              </div>
+              <div class="result-action-hint">Press Enter to Copy</div>
+            </div>
+          </div>
+
+          <div class="results-group" id="group-files">
+            <div class="group-title">Files</div>
+            <div class="result-item" data-id="f1" data-type="file" tabindex="0">
+              <div class="result-icon">📄</div>
+              <div class="result-main">
+                <div class="result-text">cdus-architecture-spec.pdf</div>
+                <div class="result-meta">Size: 4.2 MB • sent to <span class="device-badge">Pixel 8</span> • 2 hours ago</div>
+              </div>
+              <div class="result-action-hint">Press Enter to Open</div>
+            </div>
+            <div class="result-item" data-id="f2" data-type="file" tabindex="0">
+              <div class="result-icon">🖼️</div>
+              <div class="result-main">
+                <div class="result-text">screenshot_2026-06-15.png</div>
+                <div class="result-meta">Size: 856 KB • received from <span class="device-badge">Macbook Pro</span> • Yesterday</div>
+              </div>
+              <div class="result-action-hint">Press Enter to Open</div>
+            </div>
+          </div>
+
+          <div class="results-group" id="group-devices">
+            <div class="group-title">Devices</div>
+            <div class="result-item" data-id="d1" data-type="device" tabindex="0">
+              <div class="result-icon">💻</div>
+              <div class="result-main">
+                <div class="result-text">Macbook Pro (Online)</div>
+                <div class="result-meta">OS: macOS • Connection: direct</div>
+              </div>
+              <div class="result-action-hint">Press Enter to Action</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="search-overlay-footer">
+        <div class="navigation-tips">
+          <span><kbd>↑↓</kbd> to navigate</span>
+          <span><kbd>↵</kbd> to select</span>
+        </div>
+        <div class="feedback-trigger-container">
+          <button id="search-feedback-btn" class="text-btn">💡 Send Feedback</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Send Feedback Modal -->
+  <div id="feedback-modal" class="modal hidden">
+    <div class="modal-content feedback-modal-content">
+      <h3>Send Feedback</h3>
+      <p style="margin-bottom: 20px; font-size: 0.9rem; color: #666;">Help us improve CDUS! Share your experience or report a bug.</p>
+      
+      <div class="feedback-form-group" style="width: 100%; margin-bottom: 15px;">
+        <textarea id="feedback-text" placeholder="Tell us what happened or what you'd like to see... (min 5 characters)" rows="4" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; resize: vertical;" required></textarea>
+      </div>
+      
+      <div class="feedback-form-group checkbox-row" style="display: flex; align-items: center; gap: 8px; width: 100%; margin-bottom: 20px; justify-content: flex-start;">
+        <input type="checkbox" id="feedback-attach-logs" checked style="margin: 0;" />
+        <label for="feedback-attach-logs" style="font-size: 0.85rem; color: #555; cursor: pointer;">Attach anonymized application logs</label>
+      </div>
+
+      <p id="feedback-status" class="setting-hint hidden" style="margin-bottom: 15px; font-size: 0.85rem;"></p>
+
+      <div class="modal-actions">
+        <button id="feedback-cancel-btn" class="secondary-btn">Cancel</button>
+        <button id="feedback-submit-btn" class="primary-btn">Submit Feedback</button>
       </div>
     </div>
   </div>

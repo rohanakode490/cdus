@@ -141,6 +141,42 @@ fn clear_clipboard_history() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn search(query: String) -> Result<Vec<cdus_common::SearchResult>, String> {
+    let msg = IpcMessage::Search { query };
+    match send_ipc_message(msg)? {
+        IpcMessage::SearchResponse(results) => Ok(results),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+fn submit_feedback(text: String, attach_logs: bool) -> Result<String, String> {
+    let msg = IpcMessage::SubmitFeedback { text, attach_logs };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+fn set_telemetry_opt_in(opt_in: bool) -> Result<String, String> {
+    let msg = IpcMessage::SetTelemetryOptIn { opt_in };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+fn get_telemetry_opt_in() -> Result<bool, String> {
+    let msg = IpcMessage::GetTelemetryOptIn;
+    match send_ipc_message(msg)? {
+        IpcMessage::TelemetryOptInResponse(opt_in) => Ok(opt_in),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
 async fn get_audit_logs(limit: u32) -> Result<Vec<cdus_common::AuditLogRecord>, String> {
     let msg = IpcMessage::GetAuditLogs { limit };
     match send_ipc_message(msg)? {
@@ -754,6 +790,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            search,
+            submit_feedback,
+            set_telemetry_opt_in,
+            get_telemetry_opt_in,
             ping_agent,
             set_clipboard,
             get_clipboard_history,

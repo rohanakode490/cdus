@@ -173,6 +173,23 @@ let pairingModal: Element | null = null;
 let cancelPairingBtn: Element | null = null;
 let confirmPairingBtn: HTMLButtonElement | null = null;
 
+// --- Search & Feedback Elements ---
+let searchOverlay: HTMLElement | null = null;
+let globalSearchInput: HTMLInputElement | null = null;
+let searchResultsList: HTMLElement | null = null;
+let searchLoading: HTMLElement | null = null;
+let searchEmpty: HTMLElement | null = null;
+let searchError: HTMLElement | null = null;
+let searchFeedbackBtn: HTMLElement | null = null;
+let sidebarSearchBtn: HTMLElement | null = null;
+
+let feedbackModal: HTMLElement | null = null;
+let feedbackCancelBtn: HTMLElement | null = null;
+let feedbackSubmitBtn: HTMLElement | null = null;
+let feedbackText: HTMLTextAreaElement | null = null;
+let feedbackAttachLogs: HTMLInputElement | null = null;
+let feedbackStatus: HTMLElement | null = null;
+
 // --- Helper Functions ---
 
 let clipboardHistory: any[] = [];
@@ -376,9 +393,12 @@ async function loadSettings() {
     const deviceName: string | null = await invoke("get_state", { key: "device_name" });
     const syncEnabled: string | null = await invoke("get_state", { key: "sync_enabled" });
     const limit: string | null = await invoke("get_state", { key: "clipboard_limit" });
+    const telemetryOptIn: boolean = await invoke("get_telemetry_opt_in");
 
     if (deviceName && deviceNameInput) deviceNameInput.value = deviceName;
     if (syncEnabled && syncEnabledInput) syncEnabledInput.checked = syncEnabled === "true";
+    const telemetryOptInInput = document.querySelector("#telemetry-opt-in") as HTMLInputElement;
+    if (telemetryOptInInput) telemetryOptInInput.checked = telemetryOptIn;
     if (limit && limitSlider) {
       limitSlider.value = limit;
       if (limitValue) limitValue.textContent = `${limit} items`;
@@ -859,6 +879,23 @@ window.addEventListener("DOMContentLoaded", () => {
   cancelPairingBtn = document.querySelector("#pairing-cancel-btn");
   confirmPairingBtn = document.querySelector("#pairing-confirm-btn") as HTMLButtonElement;
 
+  // Initialize Search & Feedback references
+  searchOverlay = document.querySelector("#search-overlay") as HTMLElement;
+  globalSearchInput = document.querySelector("#global-search-input") as HTMLInputElement;
+  searchResultsList = document.querySelector("#search-results-list") as HTMLElement;
+  searchLoading = document.querySelector("#search-loading") as HTMLElement;
+  searchEmpty = document.querySelector("#search-empty") as HTMLElement;
+  searchError = document.querySelector("#search-error") as HTMLElement;
+  searchFeedbackBtn = document.querySelector("#search-feedback-btn") as HTMLElement;
+  sidebarSearchBtn = document.querySelector("#sidebar-search-btn") as HTMLElement;
+
+  feedbackModal = document.querySelector("#feedback-modal") as HTMLElement;
+  feedbackCancelBtn = document.querySelector("#feedback-cancel-btn") as HTMLElement;
+  feedbackSubmitBtn = document.querySelector("#feedback-submit-btn") as HTMLElement;
+  feedbackText = document.querySelector("#feedback-text") as HTMLTextAreaElement;
+  feedbackAttachLogs = document.querySelector("#feedback-attach-logs") as HTMLInputElement;
+  feedbackStatus = document.querySelector("#feedback-status") as HTMLElement;
+
   loadSettings();
   loadFileHistory();
   initOnboarding();
@@ -961,7 +998,7 @@ window.addEventListener("DOMContentLoaded", () => {
     sortDropdown?.classList.add("hidden");
   });
 
-  const navItems = document.querySelectorAll(".nav-item");
+  const navItems = document.querySelectorAll(".nav-item[data-view]");
   const views = document.querySelectorAll(".view");
 
   navItems.forEach((item) => {
@@ -1023,11 +1060,13 @@ window.addEventListener("DOMContentLoaded", () => {
   document.querySelector("#save-settings-btn")?.addEventListener("click", async () => {
     const deviceName = (document.querySelector("#device-name") as HTMLInputElement).value;
     const syncEnabled = (document.querySelector("#sync-enabled") as HTMLInputElement).checked;
+    const telemetryOptIn = (document.querySelector("#telemetry-opt-in") as HTMLInputElement).checked;
     const limit = limitSlider.value;
     
     try {
       await invoke("set_state", { key: "device_name", value: deviceName });
       await invoke("set_state", { key: "sync_enabled", value: syncEnabled.toString() });
+      await invoke("set_telemetry_opt_in", { optIn: telemetryOptIn });
       await invoke("set_state", { key: "clipboard_limit", value: limit });
       alert("Settings saved successfully!");
     } catch (err) {
@@ -1461,6 +1500,307 @@ window.addEventListener("DOMContentLoaded", () => {
       console.error("Failed to check for updates:", err);
       if (statusEl) statusEl.textContent = "Failed to check for updates.";
     }
+  });
+
+  // --- Global Spotlight Search ---
+  function openSearch() {
+    searchOverlay?.classList.remove("hidden");
+    globalSearchInput?.focus();
+    if (globalSearchInput) {
+      globalSearchInput.value = "";
+    }
+    performSearch("");
+  }
+
+  function closeSearch() {
+    searchOverlay?.classList.add("hidden");
+  }
+
+  sidebarSearchBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openSearch();
+  });
+
+  // Global Keyboard Shortcuts
+  document.addEventListener("keydown", (e) => {
+    // Ctrl+S to open search
+    if (e.ctrlKey && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      if (searchOverlay?.classList.contains("hidden")) {
+        openSearch();
+      } else {
+        closeSearch();
+      }
+    }
+
+    // Escape to close active search or feedback
+    if (e.key === "Escape") {
+      if (searchOverlay && !searchOverlay.classList.contains("hidden")) {
+        closeSearch();
+      }
+      if (feedbackModal && !feedbackModal.classList.contains("hidden")) {
+        closeFeedback();
+      }
+    }
+  });
+
+  // Close search when clicking backdrop
+  searchOverlay?.addEventListener("click", (e) => {
+    if (e.target === searchOverlay) {
+      closeSearch();
+    }
+  });
+
+  // Input event to search
+  globalSearchInput?.addEventListener("input", (e) => {
+    const query = (e.target as HTMLInputElement).value;
+    performSearch(query);
+  });
+
+  // Mock search data
+  const mockSearchData = [
+    { id: "c1", type: "clipboard", text: "https://github.com/google/gemini", meta: "synced from Pixel 8 • 5 mins ago", hint: "Press Enter to Copy" },
+    { id: "c2", type: "clipboard", text: "curl -sSL https://get.docker.com | sh", meta: "synced from Ubuntu Server • 1 hour ago", hint: "Press Enter to Copy" },
+    { id: "c3", type: "clipboard", text: "ssh rohanakode@192.168.29.127", meta: "synced from Macbook Pro • 4 hours ago", hint: "Press Enter to Copy" },
+    { id: "f1", type: "file", text: "cdus-architecture-spec.pdf", meta: "Size: 4.2 MB • sent to Pixel 8 • 2 hours ago", hint: "Press Enter to Open" },
+    { id: "f2", type: "file", text: "screenshot_2026-06-15.png", meta: "Size: 856 KB • received from Macbook Pro • Yesterday", hint: "Press Enter to Open" },
+    { id: "d1", type: "device", text: "Macbook Pro (Online)", meta: "OS: macOS • Connection: direct", hint: "Press Enter to Action" },
+    { id: "d2", type: "device", text: "Pixel 8 (Online)", meta: "OS: Android • Connection: direct", hint: "Press Enter to Action" }
+  ];
+
+  let searchTimeout: any = null;
+  function performSearch(query: string) {
+    if (searchTimeout) clearTimeout(searchTimeout);
+    
+    searchLoading?.classList.remove("hidden");
+    searchResultsList?.classList.add("hidden");
+    searchEmpty?.classList.add("hidden");
+    searchError?.classList.add("hidden");
+
+    searchTimeout = setTimeout(async () => {
+      try {
+        const results: any[] = await invoke("search", { query });
+        searchLoading?.classList.add("hidden");
+
+        const mappedItems = results.map(item => ({
+          id: item.id,
+          type: item.item_type,
+          text: item.title,
+          meta: item.subtitle,
+          hint: item.item_type === "clipboard" ? "Press Enter to Copy" : (item.item_type === "file" ? "Press Enter to Open" : "Press Enter to Action")
+        }));
+
+        if (mappedItems.length === 0) {
+          searchEmpty?.classList.remove("hidden");
+          return;
+        }
+
+        searchResultsList?.classList.remove("hidden");
+        searchResultsList!.innerHTML = "";
+
+        const groups: Record<string, typeof mappedItems> = {
+          clipboard: [],
+          file: [],
+          device: []
+        };
+
+        mappedItems.forEach(item => {
+          if (groups[item.type]) {
+            groups[item.type].push(item);
+          }
+        });
+
+        const typeLabels: Record<string, string> = {
+          clipboard: "Clipboard History",
+          file: "Files",
+          device: "Devices"
+        };
+
+        Object.entries(groups).forEach(([type, items]) => {
+          if (items.length === 0) return;
+
+          const groupDiv = document.createElement("div");
+          groupDiv.className = "results-group";
+          
+          const titleDiv = document.createElement("div");
+          titleDiv.className = "group-title";
+          titleDiv.textContent = typeLabels[type];
+          groupDiv.appendChild(titleDiv);
+
+          items.forEach(item => {
+            const itemDiv = document.createElement("div");
+            itemDiv.className = "result-item";
+            itemDiv.setAttribute("data-id", item.id);
+            itemDiv.setAttribute("data-type", item.type);
+            itemDiv.setAttribute("tabindex", "0");
+
+            const icon = item.type === "clipboard" ? "📋" : (item.type === "file" ? (item.text.endsWith(".png") ? "🖼️" : "📄") : "💻");
+            
+            itemDiv.innerHTML = `
+              <div class="result-icon">${icon}</div>
+              <div class="result-main">
+                <div class="result-text">${escapeHtml(item.text)}</div>
+                <div class="result-meta">${item.meta}</div>
+              </div>
+              <div class="result-action-hint">${item.hint}</div>
+            `;
+
+            itemDiv.addEventListener("click", () => {
+              triggerResultAction(item);
+            });
+
+            groupDiv.appendChild(itemDiv);
+          });
+
+          searchResultsList?.appendChild(groupDiv);
+        });
+
+        const firstItem = searchResultsList?.querySelector(".result-item");
+        if (firstItem) {
+          firstItem.classList.add("selected");
+        }
+      } catch (err) {
+        console.error("Search failed:", err);
+        searchLoading?.classList.add("hidden");
+        searchError?.classList.remove("hidden");
+      }
+    }, 150);
+  }
+
+  function escapeHtml(text: string): string {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  async function triggerResultAction(item: any) {
+    if (item.type === "clipboard") {
+      try {
+        await invoke("set_clipboard", { content: item.text });
+        addAuditLog("sync", `Copied text from search overlay to clipboard: ${item.text.substring(0, 30)}...`);
+        closeSearch();
+      } catch (err) {
+        console.error("Failed to copy search item to clipboard:", err);
+      }
+    } else if (item.type === "file") {
+      addAuditLog("system", `Opened file from search overlay: ${item.text}`);
+      alert(`Opening file: ${item.text}`);
+      closeSearch();
+    } else if (item.type === "device") {
+      const devicesNav = document.querySelector('.nav-item[data-view="devices"]') as HTMLElement;
+      devicesNav?.click();
+      closeSearch();
+    }
+  }
+
+  // Keyboard navigation inside search overlay
+  document.addEventListener("keydown", (e) => {
+    if (searchOverlay?.classList.contains("hidden")) return;
+
+    const items = Array.from(searchResultsList?.querySelectorAll(".result-item") || []) as HTMLElement[];
+    if (items.length === 0) return;
+
+    let selectedIndex = items.findIndex(item => item.classList.contains("selected"));
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (selectedIndex !== -1) {
+        items[selectedIndex].classList.remove("selected");
+      }
+      selectedIndex = (selectedIndex + 1) % items.length;
+      items[selectedIndex].classList.add("selected");
+      items[selectedIndex].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (selectedIndex !== -1) {
+        items[selectedIndex].classList.remove("selected");
+      }
+      selectedIndex = (selectedIndex - 1 + items.length) % items.length;
+      items[selectedIndex].classList.add("selected");
+      items[selectedIndex].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter") {
+      if (selectedIndex !== -1) {
+        e.preventDefault();
+        const selectedId = items[selectedIndex].getAttribute("data-id");
+        const item = mockSearchData.find(i => i.id === selectedId);
+        if (item) {
+          triggerResultAction(item);
+        }
+      }
+    }
+  });
+
+  // --- Send Feedback Modal ---
+  function openFeedback() {
+    closeSearch();
+    feedbackModal?.classList.remove("hidden");
+    if (feedbackText) {
+      feedbackText.value = "";
+    }
+    if (feedbackStatus) {
+      feedbackStatus.classList.add("hidden");
+      feedbackStatus.textContent = "";
+    }
+    feedbackText?.focus();
+  }
+
+  function closeFeedback() {
+    feedbackModal?.classList.add("hidden");
+  }
+
+  searchFeedbackBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openFeedback();
+  });
+
+  feedbackCancelBtn?.addEventListener("click", () => {
+    closeFeedback();
+  });
+
+  feedbackModal?.addEventListener("click", (e) => {
+    if (e.target === feedbackModal) {
+      closeFeedback();
+    }
+  });
+
+  feedbackSubmitBtn?.addEventListener("click", async () => {
+    const text = feedbackText?.value.trim() || "";
+    if (text.length < 5) {
+      if (feedbackStatus) {
+        feedbackStatus.className = "setting-hint feedback-status-error";
+        feedbackStatus.textContent = "Please enter at least 5 characters.";
+        feedbackStatus.classList.remove("hidden");
+      }
+      return;
+    }
+
+    if (feedbackStatus) {
+      feedbackStatus.className = "setting-hint";
+      feedbackStatus.textContent = "Submitting feedback...";
+      feedbackStatus.classList.remove("hidden");
+    }
+
+    setTimeout(async () => {
+      try {
+        const attachLogs = feedbackAttachLogs?.checked || false;
+        await invoke("submit_feedback", { text, attachLogs });
+        
+        if (feedbackStatus) {
+          feedbackStatus.className = "setting-hint feedback-status-success";
+          feedbackStatus.textContent = "Thank you! Your feedback has been submitted successfully.";
+        }
+        
+        setTimeout(() => {
+          closeFeedback();
+        }, 1500);
+      } catch (err) {
+        console.error("Failed to submit feedback:", err);
+        if (feedbackStatus) {
+          feedbackStatus.className = "setting-hint feedback-status-error";
+          feedbackStatus.textContent = "Failed to submit feedback. Please try again.";
+        }
+      }
+    }, 1000);
   });
 });
 
