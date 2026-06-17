@@ -13,6 +13,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import androidx.compose.animation.core.*
+import androidx.compose.ui.graphics.graphicsLayer
 import uniffi.cdus_ffi.startDiscovery
 import uniffi.cdus_ffi.stopDiscovery
 import uniffi.cdus_ffi.getDiscoveredDevices
@@ -60,6 +63,12 @@ import androidx.compose.foundation.Image
 import androidx.compose.ui.draw.clip
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
+data class AndroidMockDeviceState(
+    val status: String, // "online", "offline", "reconnecting", "connecting"
+    val transport: String?, // "LAN", "Relay", null
+    val countdown: Int
+)
+
 @Composable
 fun DevicesScreen() {
     var isScanning by remember { mutableStateOf(false) }
@@ -73,6 +82,19 @@ fun DevicesScreen() {
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
+    
+    // --- Mock Reconnection States ---
+    val mockStates = remember { mutableStateMapOf<String, AndroidMockDeviceState>() }
+    val scope = rememberCoroutineScope()
+
+    fun triggerMockConnect(deviceId: String, label: String) {
+        mockStates[deviceId] = AndroidMockDeviceState("connecting", null, 0)
+        scope.launch {
+            delay(1500)
+            mockStates[deviceId] = AndroidMockDeviceState("online", if (Math.random() > 0.5) "LAN" else "Relay", 0)
+            android.widget.Toast.makeText(context, "Auto-reconnected to ${UIUtils.formatDeviceLabel(label)}", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -125,6 +147,30 @@ fun DevicesScreen() {
                 isDeveloperMode = sharedPref.getBoolean("developer_mode", false)
                 io.cdus.app.data.DeviceManager.updateLabels(devices)
                 errorMsg = null
+                
+                // Initialize mock states for new devices
+                devices.forEach { device ->
+                    if (!mockStates.containsKey(device.nodeId)) {
+                        if (device.isOnline) {
+                            mockStates[device.nodeId] = AndroidMockDeviceState("online", if (Math.random() > 0.5) "LAN" else "Relay", 0)
+                        } else {
+                            mockStates[device.nodeId] = AndroidMockDeviceState("reconnecting", null, 30)
+                        }
+                    }
+                }
+
+                // Countdown loop
+                mockStates.keys.toList().forEach { deviceId ->
+                    val state = mockStates[deviceId] ?: return@forEach
+                    if (state.status == "reconnecting") {
+                        if (state.countdown > 1) {
+                            mockStates[deviceId] = state.copy(countdown = state.countdown - 1)
+                        } else {
+                            val deviceLabel = devices.find { it.nodeId == deviceId }?.label ?: "Device"
+                            triggerMockConnect(deviceId, deviceLabel)
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 errorMsg = e.message ?: "Failed to load paired devices"
             } finally {
@@ -218,11 +264,20 @@ fun DevicesScreen() {
             for (device in pairedDevices) {
                 PairedDeviceItem(
                     device = device,
+                    mockState = mockStates[device.nodeId],
                     isDeveloperMode = isDeveloperMode,
                     onUnpairClick = { unpairDevice(device.nodeId) },
                     onSendFileClick = {
                         selectedDeviceForFile = device.nodeId
                         filePickerLauncher.launch("*/*")
+                    },
+                    onReconnectClick = {
+                        triggerMockConnect(device.nodeId, device.label)
+                        initiatePairing(device.nodeId)
+                    },
+                    onDisconnectClick = {
+                        mockStates[device.nodeId] = AndroidMockDeviceState("reconnecting", null, 30)
+                        android.widget.Toast.makeText(context, "Disconnected from ${UIUtils.formatDeviceLabel(device.label)}", android.widget.Toast.LENGTH_SHORT).show()
                     },
                     onBenchmarkClick = {
                         startBenchmark(device.nodeId)
@@ -304,13 +359,85 @@ fun DevicesScreen() {
 }
 
 @Composable
+fun ConnectionPathBadge(transport: String) {
+    val containerColor = when (transport) {
+        "LAN" -> androidx.compose.ui.graphics.Color(0xFFE8F5E9)
+        "Relay" -> androidx.compose.ui.graphics.Color(0xFFFFF3E0)
+        else -> androidx.compose.ui.graphics.Color(0xFFFFEBEE)
+    }
+    val contentColor = when (transport) {
+        "LAN" -> androidx.compose.ui.graphics.Color(0xFF2E7D32)
+        "Relay" -> androidx.compose.ui.graphics.Color(0xFFEF6C00)
+        else -> androidx.compose.ui.graphics.Color(0xFFC62828)
+    }
+    Surface(
+        color = containerColor,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+        modifier = Modifier.padding(start = 6.dp)
+    ) {
+        Text(
+            text = transport,
+            color = contentColor,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+        )
+    }
+}
+
+@Composable
 fun PairedDeviceItem(
     device: PairedDevice, 
+    mockState: AndroidMockDeviceState?,
     isDeveloperMode: Boolean = false,
     onUnpairClick: () -> Unit, 
     onSendFileClick: () -> Unit,
+    onReconnectClick: () -> Unit,
+    onDisconnectClick: () -> Unit,
     onBenchmarkClick: () -> Unit = {}
 ) {
+    val status = mockState?.status ?: if (device.isOnline) "online" else "offline"
+    val transport = mockState?.transport ?: if (device.isOnline) "LAN" else null
+    val countdown = mockState?.countdown ?: 0
+
+    val isOnline = status == "online"
+    val isConnecting = status == "connecting"
+    val isReconnecting = status == "reconnecting"
+
+    val statusText = when (status) {
+        "online" -> "Online"
+        "connecting" -> "Connecting..."
+        "reconnecting" -> "Reconnecting in ${countdown}s..."
+        else -> "Offline"
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = if (isConnecting) 600 else 1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "alpha"
+    )
+
+    val dotColor = when (status) {
+        "online" -> androidx.compose.ui.graphics.Color.Green
+        "connecting" -> androidx.compose.ui.graphics.Color(0xFF2196F3)
+        else -> androidx.compose.ui.graphics.Color.Gray
+    }
+
+    val dotModifier = Modifier
+        .size(8.dp)
+        .let { modifier ->
+            if (isConnecting || isReconnecting) {
+                modifier.graphicsLayer { this.alpha = alpha }
+            } else {
+                modifier
+            }
+        }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -337,28 +464,40 @@ fun PairedDeviceItem(
                         Text(text = UIUtils.formatDeviceLabel(device.label), style = MaterialTheme.typography.bodyLarge)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Surface(
-                                modifier = Modifier.size(8.dp),
+                                modifier = dotModifier,
                                 shape = androidx.compose.foundation.shape.CircleShape,
-                                color = if (device.isOnline) androidx.compose.ui.graphics.Color.Green else androidx.compose.ui.graphics.Color.Gray
+                                color = dotColor
                             ) {}
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (device.isOnline) "Online" else "Offline",
+                                text = statusText,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (device.isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                color = if (isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
                             )
                             Text(text = " • #${device.nodeId.take(8)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+                            
+                            if (isOnline && transport != null) {
+                                ConnectionPathBadge(transport)
+                            } else {
+                                ConnectionPathBadge("Offline")
+                            }
                         }
                     }
                 }
                 Row {
-                    if (device.isOnline) {
+                    if (isOnline) {
                         TextButton(onClick = onSendFileClick) {
                             Text("Send File")
                         }
+                        TextButton(onClick = onDisconnectClick) {
+                            Text("Disconnect", color = MaterialTheme.colorScheme.outline)
+                        }
                     } else {
-                        TextButton(onClick = { initiatePairing(device.nodeId) }) {
-                            Text("Connect")
+                        TextButton(
+                            onClick = onReconnectClick,
+                            enabled = !isConnecting
+                        ) {
+                            Text(if (isConnecting) "Connecting..." else "Reconnect Now")
                         }
                     }
                     TextButton(onClick = onUnpairClick) {
@@ -367,7 +506,7 @@ fun PairedDeviceItem(
                 }
             }
             
-            if (isDeveloperMode && device.isOnline) {
+            if (isDeveloperMode && isOnline) {
                 Divider(modifier = Modifier.padding(horizontal = 12.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),

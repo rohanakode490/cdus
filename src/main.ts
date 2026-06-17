@@ -34,6 +34,69 @@ async function addAuditLog(type: "sync" | "pairing" | "system", content: string)
   }
 }
 
+// --- Mock Reconnection State ---
+interface MockDeviceState {
+  status: "online" | "offline" | "reconnecting" | "connecting";
+  transport: string | null;
+  countdown: number;
+  timerId?: any;
+}
+const mockDeviceStates = new Map<string, MockDeviceState>();
+
+function startMockReconnection(id: string, name: string) {
+  const existing = mockDeviceStates.get(id);
+  if (existing?.timerId) {
+    clearInterval(existing.timerId);
+  }
+
+  const state: MockDeviceState = {
+    status: "reconnecting",
+    transport: null,
+    countdown: 30
+  };
+
+  state.timerId = setInterval(() => {
+    const s = mockDeviceStates.get(id);
+    if (!s || s.status !== "reconnecting") {
+      clearInterval(state.timerId);
+      return;
+    }
+    if (s.countdown > 1) {
+      s.countdown -= 1;
+      renderPairedDevices();
+    } else {
+      clearInterval(state.timerId);
+      triggerMockConnection(id, name);
+    }
+  }, 1000);
+
+  mockDeviceStates.set(id, state);
+}
+
+function triggerMockConnection(id: string, name: string) {
+  const s = mockDeviceStates.get(id);
+  if (!s) return;
+  
+  if (s.timerId) {
+    clearInterval(s.timerId);
+  }
+
+  s.status = "connecting";
+  s.countdown = 0;
+  renderPairedDevices();
+
+  setTimeout(() => {
+    const current = mockDeviceStates.get(id);
+    if (!current || current.status !== "connecting") return;
+    
+    current.status = "online";
+    current.transport = Math.random() > 0.5 ? "Lan" : "Relay";
+    renderPairedDevices();
+    addAuditLog("system", `Auto-reconnected to device ${name} (${current.transport})`);
+  }, 1500);
+}
+
+
 async function renderAuditLogs() {
   const listContainer = document.querySelector("#audit-list");
   const emptyState = document.querySelector("#audit-empty");
@@ -522,6 +585,7 @@ function renderFiles() {
         <button class="options-trigger-btn" data-id="${transfer.transferId}">⋮</button>
         <div class="options-dropdown hidden" id="dropdown-${transfer.transferId}">
           ${isFinished ? `
+            ${transfer.status === "complete" ? `<button class="open-location-btn dropdown-option" data-id="${transfer.transferId}">Show in Folder</button>` : ""}
             <button class="dismiss-btn dropdown-option" data-id="${transfer.transferId}">Dismiss</button>
             <button class="delete-file-btn danger-option dropdown-option" data-id="${transfer.transferId}">Delete Permanently</button>
           ` : `
@@ -545,6 +609,19 @@ function renderFiles() {
     });
 
     if (isFinished) {
+      if (transfer.status === "complete") {
+        itemEl.querySelector(".open-location-btn")?.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          dropdown?.classList.add("hidden");
+          try {
+            await invoke("open_file_location", { transferId: transfer.transferId });
+          } catch (err) {
+            console.error("Failed to open file location:", err);
+            alert(err);
+          }
+        });
+      }
+
       itemEl.querySelector(".dismiss-btn")?.addEventListener("click", async (e) => {
         e.stopPropagation();
         try {
@@ -644,10 +721,57 @@ async function renderPairedDevices() {
       const row = document.createElement("div");
       row.className = "device-row";
       
-      const isOnline = transport !== null;
-      const statusClass = isOnline ? "online" : "offline";
-      const statusText = isOnline ? "Online" : "Offline";
-      const transportText = transport || "";
+      // Get or initialize mock state
+      let mockState = mockDeviceStates.get(id);
+      if (!mockState) {
+        if (transport !== null) {
+          mockState = { status: "online", transport, countdown: 0 };
+          mockDeviceStates.set(id, mockState);
+        } else {
+          mockState = { status: "reconnecting", transport: null, countdown: 30 };
+          mockDeviceStates.set(id, mockState);
+          startMockReconnection(id, name);
+        }
+      }
+
+      let statusClass = "offline";
+      let statusText = "Offline";
+      let pathHtml = "";
+      let actionBtnHtml = "";
+
+      if (mockState.status === "online") {
+        statusClass = "online";
+        statusText = "Online";
+        const tType = mockState.transport || "Lan";
+        const badgeClass = tType.toLowerCase();
+        pathHtml = `<span class="connection-path ${badgeClass}">${tType}</span>`;
+        actionBtnHtml = `
+          <button class="primary-btn send-file-btn" data-id="${id}">Send File</button>
+          <button class="secondary-btn disconnect-btn" data-id="${id}" style="margin-left: 8px;">Disconnect</button>
+        `;
+      } else if (mockState.status === "reconnecting") {
+        statusClass = "reconnecting";
+        statusText = `Reconnecting in ${mockState.countdown}s...`;
+        pathHtml = `<span class="connection-path offline">Offline</span>`;
+        actionBtnHtml = `
+          <button class="primary-btn reconnect-now-btn" data-id="${id}">Reconnect Now</button>
+        `;
+      } else if (mockState.status === "connecting") {
+        statusClass = "connecting";
+        statusText = "Connecting...";
+        pathHtml = `<span class="connection-path offline">Offline</span>`;
+        actionBtnHtml = `
+          <button class="primary-btn reconnect-now-btn" data-id="${id}" disabled>Connecting...</button>
+        `;
+      } else {
+        statusClass = "offline";
+        statusText = "Offline";
+        pathHtml = `<span class="connection-path offline">Offline</span>`;
+        actionBtnHtml = `
+          <button class="primary-btn reconnect-now-btn" data-id="${id}">Connect</button>
+        `;
+      }
+
       const shortId = id.substring(0, 8);
 
       row.innerHTML = `
@@ -656,12 +780,12 @@ async function renderPairedDevices() {
           <div class="device-status">
             <span class="status-dot ${statusClass}"></span>
             <span class="device-type-label">${statusText}</span>
-            ${isOnline ? `<span class="connection-path">${transportText}</span>` : ""}
+            ${pathHtml}
           </div>
         </div>
         <div class="device-actions">
-          ${isOnline ? `<button class="primary-btn send-file-btn" data-id="${id}">Send File</button>` : `<button class="primary-btn connect-btn" data-id="${id}">Connect</button>`}
-          ${(isOnline && isDeveloperMode) ? `<button class="tertiary-btn benchmark-btn" data-id="${id}" style="margin-right: 8px;">Benchmark</button>` : ""}
+          ${actionBtnHtml}
+          ${(mockState.status === "online" && isDeveloperMode) ? `<button class="tertiary-btn benchmark-btn" data-id="${id}" style="margin-right: 8px;">Benchmark</button>` : ""}
           <button class="secondary-btn unpair-btn" data-id="${id}">Unpair</button>
         </div>
       `;
@@ -679,13 +803,25 @@ async function renderPairedDevices() {
         unpairDevice(id);
       });
 
-      row.querySelector(".connect-btn")?.addEventListener("click", async () => {
+      row.querySelector(".reconnect-now-btn")?.addEventListener("click", async () => {
+        triggerMockConnection(id, name);
         try {
           await invoke("pair_with", { nodeId: id });
-          alert("Connection attempt started...");
         } catch (err) {
           console.error("Failed to initiate connection:", err);
-          alert("Failed to initiate connection.");
+        }
+      });
+
+      row.querySelector(".disconnect-btn")?.addEventListener("click", () => {
+        const s = mockDeviceStates.get(id);
+        if (s) {
+          if (s.timerId) clearInterval(s.timerId);
+          s.status = "reconnecting";
+          s.transport = null;
+          s.countdown = 30;
+          startMockReconnection(id, name);
+          renderPairedDevices();
+          addAuditLog("system", `Disconnected from device ${name}`);
         }
       });
 
@@ -1562,8 +1698,8 @@ window.addEventListener("DOMContentLoaded", () => {
     { id: "c1", type: "clipboard", text: "https://github.com/google/gemini", meta: "synced from Pixel 8 • 5 mins ago", hint: "Press Enter to Copy" },
     { id: "c2", type: "clipboard", text: "curl -sSL https://get.docker.com | sh", meta: "synced from Ubuntu Server • 1 hour ago", hint: "Press Enter to Copy" },
     { id: "c3", type: "clipboard", text: "ssh rohanakode@192.168.29.127", meta: "synced from Macbook Pro • 4 hours ago", hint: "Press Enter to Copy" },
-    { id: "f1", type: "file", text: "cdus-architecture-spec.pdf", meta: "Size: 4.2 MB • sent to Pixel 8 • 2 hours ago", hint: "Press Enter to Open" },
-    { id: "f2", type: "file", text: "screenshot_2026-06-15.png", meta: "Size: 856 KB • received from Macbook Pro • Yesterday", hint: "Press Enter to Open" },
+    { id: "f1", type: "file", text: "cdus-architecture-spec.pdf", meta: "Size: 4.2 MB • sent to Pixel 8 • 2 hours ago", hint: "Press Enter to Show in Folder" },
+    { id: "f2", type: "file", text: "screenshot_2026-06-15.png", meta: "Size: 856 KB • received from Macbook Pro • Yesterday", hint: "Press Enter to Show in Folder" },
     { id: "d1", type: "device", text: "Macbook Pro (Online)", meta: "OS: macOS • Connection: direct", hint: "Press Enter to Action" },
     { id: "d2", type: "device", text: "Pixel 8 (Online)", meta: "OS: Android • Connection: direct", hint: "Press Enter to Action" }
   ];
@@ -1587,7 +1723,7 @@ window.addEventListener("DOMContentLoaded", () => {
           type: item.item_type,
           text: item.title,
           meta: item.subtitle,
-          hint: item.item_type === "clipboard" ? "Press Enter to Copy" : (item.item_type === "file" ? "Press Enter to Open" : "Press Enter to Action")
+          hint: item.item_type === "clipboard" ? "Press Enter to Copy" : (item.item_type === "file" ? "Press Enter to Show in Folder" : "Press Enter to Action")
         }));
 
         if (mappedItems.length === 0) {
@@ -1683,8 +1819,13 @@ window.addEventListener("DOMContentLoaded", () => {
         console.error("Failed to copy search item to clipboard:", err);
       }
     } else if (item.type === "file") {
-      addAuditLog("system", `Opened file from search overlay: ${item.text}`);
-      alert(`Opening file: ${item.text}`);
+      try {
+        await invoke("open_file_location", { transferId: item.id });
+        addAuditLog("system", `Opened file location from search overlay: ${item.text}`);
+      } catch (err) {
+        console.error("Failed to open file location:", err);
+        alert(err);
+      }
       closeSearch();
     } else if (item.type === "device") {
       const devicesNav = document.querySelector('.nav-item[data-view="devices"]') as HTMLElement;

@@ -445,6 +445,48 @@ async fn pair_with_qr(payload: String) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+async fn open_file_location(app: tauri::AppHandle, transfer_id: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    // 1. Get the file transfer history from the agent daemon (up to 1000 items)
+    let msg = IpcMessage::GetFileTransferHistory { limit: 1000 };
+    let history = match send_ipc_message(msg)? {
+        IpcMessage::FileTransferHistoryResponse(history) => history,
+        _ => return Err("Unexpected response from agent".to_string()),
+    };
+
+    // 2. Find the transfer record with the matching ID
+    let record = history
+        .into_iter()
+        .find(|r| r.transfer_id == transfer_id)
+        .ok_or_else(|| "File transfer record not found".to_string())?;
+
+    // 3. Handle edge cases: check status
+    if record.status != "complete" {
+        return Err("Cannot open location: Transfer is not complete".to_string());
+    }
+
+    // Check if path is empty or benchmark
+    if record.file_path.is_empty() || record.file_path == "/dev/null" {
+        return Err("Cannot open location: This is a benchmark transfer".to_string());
+    }
+
+    // Check if the physical file exists
+    let path = std::path::Path::new(&record.file_path);
+    if !path.exists() {
+        return Err("The file could not be found. It may have been moved or deleted.".to_string());
+    }
+
+    // 4. Reveal the item in the file manager
+    app.opener()
+        .reveal_item_in_dir(path)
+        .map_err(|e| format!("Failed to open file location: {}", e))?;
+
+    Ok(())
+}
+
+
 fn update_tray_menu(app: &tauri::AppHandle) -> Result<(), String> {
     let history = match send_ipc_message(IpcMessage::GetHistory { limit: 5 }) {
         Ok(IpcMessage::HistoryResponse(h)) => h,
@@ -826,7 +868,8 @@ pub fn run() {
             get_qr_pairing_payload,
             pair_with_qr,
             read_system_clipboard,
-            broadcast_clipboard
+            broadcast_clipboard,
+            open_file_location
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
