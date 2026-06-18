@@ -277,13 +277,23 @@ fun ClipboardListItem(
     
     val displayTime = remember(item.timestamp) {
         try {
-            val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-            val utcDateTime = LocalDateTime.parse(item.timestamp, formatter)
-            val zonedDateTime = utcDateTime.atZone(ZoneOffset.UTC)
-            val localDateTime = zonedDateTime.withZoneSameInstant(ZoneId.systemDefault())
-            localDateTime.format(DateTimeFormatter.ofPattern("MMM dd, HH:mm"))
+            val normalized = item.timestamp.replace(" ", "T")
+            val zonedDateTime = if (normalized.endsWith("Z")) {
+                java.time.Instant.parse(normalized).atZone(ZoneId.systemDefault())
+            } else {
+                val localDateTime = LocalDateTime.parse(normalized)
+                localDateTime.atZone(ZoneOffset.UTC).withZoneSameInstant(ZoneId.systemDefault())
+            }
+            zonedDateTime.format(DateTimeFormatter.ofPattern("MMM dd, HH:mm"))
         } catch (e: Exception) {
-            item.timestamp
+            try {
+                val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+                val utcDateTime = LocalDateTime.parse(item.timestamp, formatter)
+                val zonedDateTime = utcDateTime.atZone(ZoneOffset.UTC).withZoneSameInstant(ZoneId.systemDefault())
+                zonedDateTime.format(DateTimeFormatter.ofPattern("MMM dd, HH:mm"))
+            } catch (e2: Exception) {
+                item.timestamp
+            }
         }
     }
 

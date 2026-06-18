@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
 
 use cdus_agent::{broadcast_event, daemon_loop, EVENT_BUS};
-use cdus_common::{IpcMessage, TransportType};
+use cdus_common::{IpcMessage, SyncMessage, TransportType};
 use cdus_agent::libp2p_manager::Libp2pManager;
 use cdus_agent::mdns::MdnsManager;
 use cdus_agent::pairing::{ActivePairingState, PairingManager, SyncManager};
@@ -202,12 +202,15 @@ fn main() {
         )
         .expect("Failed to initialize Libp2pManager"),
     );
-    libp2p_manager.start();
     let libp2p_sync_tx = libp2p_manager.get_sync_tx();
 
     // Initialize mDNS Manager
     let mdns = MdnsManager::new();
     let mdns = Arc::new(mdns);
+
+    // Register and start mDNS discovery at startup
+    mdns.register_device(&node_id, &label, cli.port);
+    mdns.start_discovery(tx.clone());
 
     let sync_manager = Arc::new(SyncManager::new());
     sync_manager.add_peer(
@@ -216,6 +219,8 @@ fn main() {
         TransportType::P2p,
     );
     let sync_manager_daemon = Arc::clone(&sync_manager);
+
+    libp2p_manager.start(Arc::clone(&sync_manager));
 
     // Start Pairing Manager
     let pm = PairingManager::new(
@@ -235,6 +240,10 @@ fn main() {
     thread::spawn(move || {
         pm_clone.start_listener();
     });
+    // let pm_reconnect = Arc::clone(&pm);
+    // thread::spawn(move || {
+    //     pm_reconnect.start_auto_reconnect_loop();
+    // });
 
     info!("CDUS Agent starting on port {}...", cli.port);
 
@@ -334,6 +343,8 @@ fn main() {
                 let node_id_clone = node_id.clone();
                 let label_clone = label.clone();
                 let port = cli.port;
+                let transfer_manager_clone = Arc::clone(&transfer_manager);
+                let libp2p_manager_clone = Arc::clone(&libp2p_manager);
 
                 thread::spawn(move || {
                     let mut buffer = [0u8; 4096];
@@ -982,6 +993,18 @@ fn main() {
                                                 }
                                             }
                                         }
+                                        IpcMessage::DisconnectDevice { node_id } => {
+                                            if !sync_manager_ipc.send_to_peer(&node_id, SyncMessage::Disconnect) {
+                                                sync_manager_ipc.remove_peer(&node_id);
+                                            }
+                                            transfer_manager_clone.cancel_all_transfers_for_peer(&node_id);
+                                            if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
+                                                libp2p_manager_clone.disconnect_peer(peer_id);
+                                            }
+                                            broadcast_event(IpcMessage::PeerDisconnected { node_id: node_id.clone() });
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Disconnected".to_string())).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
                                         IpcMessage::RevokeDevice { uuid } => {
                                             let _ = relay_ipc.revoke_device(uuid.clone());
                                             match store_clone.remove_paired_device(&uuid) {
@@ -1113,6 +1136,9 @@ fn main() {
                                         IpcMessage::SetState { key, value } => {
                                             match store_clone.set_state(&key, &value) {
                                                 Ok(_) => {
+                                                    if key == "device_name" {
+                                                        mdns_clone.register_device(&node_id_clone, &value, port);
+                                                    }
                                                     let resp_bytes =
                                                         serde_json::to_vec(&IpcMessage::Log(
                                                             "State set successfully".to_string(),

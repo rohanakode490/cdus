@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -90,9 +91,11 @@ fun DevicesScreen() {
     fun triggerMockConnect(deviceId: String, label: String) {
         mockStates[deviceId] = AndroidMockDeviceState("connecting", null, 0)
         scope.launch {
-            delay(1500)
-            mockStates[deviceId] = AndroidMockDeviceState("online", if (Math.random() > 0.5) "LAN" else "Relay", 0)
-            android.widget.Toast.makeText(context, "Auto-reconnected to ${UIUtils.formatDeviceLabel(label)}", android.widget.Toast.LENGTH_SHORT).show()
+            delay(10000)
+            val state = mockStates[deviceId]
+            if (state != null && state.status == "connecting") {
+                mockStates[deviceId] = AndroidMockDeviceState("offline", null, 0)
+            }
         }
     }
 
@@ -148,26 +151,16 @@ fun DevicesScreen() {
                 io.cdus.app.data.DeviceManager.updateLabels(devices)
                 errorMsg = null
                 
-                // Initialize mock states for new devices
+                // Initialize mock states for devices and sync with real connectivity status
                 devices.forEach { device ->
-                    if (!mockStates.containsKey(device.nodeId)) {
-                        if (device.isOnline) {
-                            mockStates[device.nodeId] = AndroidMockDeviceState("online", if (Math.random() > 0.5) "LAN" else "Relay", 0)
-                        } else {
-                            mockStates[device.nodeId] = AndroidMockDeviceState("reconnecting", null, 30)
+                    val state = mockStates[device.nodeId]
+                    if (device.isOnline) {
+                        if (state == null || state.status != "online") {
+                            mockStates[device.nodeId] = AndroidMockDeviceState("online", "LAN", 0)
                         }
-                    }
-                }
-
-                // Countdown loop
-                mockStates.keys.toList().forEach { deviceId ->
-                    val state = mockStates[deviceId] ?: return@forEach
-                    if (state.status == "reconnecting") {
-                        if (state.countdown > 1) {
-                            mockStates[deviceId] = state.copy(countdown = state.countdown - 1)
-                        } else {
-                            val deviceLabel = devices.find { it.nodeId == deviceId }?.label ?: "Device"
-                            triggerMockConnect(deviceId, deviceLabel)
+                    } else {
+                        if (state == null || state.status == "online") {
+                            mockStates[device.nodeId] = AndroidMockDeviceState("offline", null, 0)
                         }
                     }
                 }
@@ -276,7 +269,12 @@ fun DevicesScreen() {
                         initiatePairing(device.nodeId)
                     },
                     onDisconnectClick = {
-                        mockStates[device.nodeId] = AndroidMockDeviceState("reconnecting", null, 30)
+                        mockStates[device.nodeId] = AndroidMockDeviceState("offline", null, 0)
+                        try {
+                            uniffi.cdus_ffi.disconnectDevice(device.nodeId)
+                        } catch (e: Exception) {
+                            Logger.e("Error disconnecting device: ${e.message}")
+                        }
                         android.widget.Toast.makeText(context, "Disconnected from ${UIUtils.formatDeviceLabel(device.label)}", android.widget.Toast.LENGTH_SHORT).show()
                     },
                     onBenchmarkClick = {
@@ -474,23 +472,17 @@ fun PairedDeviceItem(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
                             )
-                            Text(text = " • #${device.nodeId.take(8)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
                             
                             if (isOnline && transport != null) {
                                 ConnectionPathBadge(transport)
-                            } else {
-                                ConnectionPathBadge("Offline")
                             }
                         }
                     }
                 }
-                Row {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     if (isOnline) {
                         TextButton(onClick = onSendFileClick) {
                             Text("Send File")
-                        }
-                        TextButton(onClick = onDisconnectClick) {
-                            Text("Disconnect", color = MaterialTheme.colorScheme.outline)
                         }
                     } else {
                         TextButton(
@@ -500,8 +492,36 @@ fun PairedDeviceItem(
                             Text(if (isConnecting) "Connecting..." else "Reconnect Now")
                         }
                     }
-                    TextButton(onClick = onUnpairClick) {
-                        Text("Unpair", color = MaterialTheme.colorScheme.error)
+                    
+                    var showMenu by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "Device Options"
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            if (isOnline) {
+                                DropdownMenuItem(
+                                    text = { Text("Disconnect") },
+                                    onClick = {
+                                        showMenu = false
+                                        onDisconnectClick()
+                                    }
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("Unpair", color = MaterialTheme.colorScheme.error) },
+                                onClick = {
+                                    showMenu = false
+                                    onUnpairClick()
+                                }
+                            )
+                        }
                     }
                 }
             }

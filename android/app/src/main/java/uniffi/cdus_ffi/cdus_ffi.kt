@@ -926,6 +926,8 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -972,6 +974,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_delete_clipboard_item(`id`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_delete_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_disconnect_device(`nodeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_get_audit_logs(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1167,6 +1171,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_delete_file_transfer(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_disconnect_device(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_get_audit_logs(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_clipboard_history(
@@ -1307,6 +1313,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_delete_file_transfer() != 11099.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_disconnect_device() != 4323.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_get_audit_logs() != 38904.toShort()) {
@@ -2714,6 +2723,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_delete_file_transfer(
         FfiConverterString.lower(`transferId`),_status)
+}
+    
+    
+ fun `disconnectDevice`(`nodeId`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_disconnect_device(
+        FfiConverterString.lower(`nodeId`),_status)
 }
     
     

@@ -153,9 +153,12 @@ pub struct CdusBehaviour {
     pub stream: libp2p_stream::Behaviour,
 }
 
+use crate::pairing::SyncManager;
+
 #[derive(Debug, Clone)]
 pub enum SwarmCommand {
     AddAddress(PeerId, libp2p::Multiaddr),
+    Disconnect(PeerId),
 }
 
 pub struct Libp2pManager {
@@ -175,6 +178,7 @@ pub struct Libp2pManager {
     transfer_manager: Arc<FileTransferManager>,
     download_dir: Option<std::path::PathBuf>,
     listen_addresses: Arc<Mutex<Vec<libp2p::Multiaddr>>>,
+    pub sync_manager: parking_lot::RwLock<Option<Arc<SyncManager>>>,
 }
 
 impl Libp2pManager {
@@ -223,6 +227,7 @@ impl Libp2pManager {
             transfer_manager,
             download_dir,
             listen_addresses: Arc::new(Mutex::new(Vec::new())),
+            sync_manager: parking_lot::RwLock::new(None),
         })
     }
 
@@ -254,7 +259,9 @@ impl Libp2pManager {
         self.runtime.handle().clone()
     }
 
-    pub fn start(&self) {
+    pub fn start(&self, sync_manager: Arc<SyncManager>) {
+        *self.sync_manager.write() = Some(Arc::clone(&sync_manager));
+        let sync_manager_clone = Arc::clone(&sync_manager);
         let runtime = Arc::clone(&self.runtime);
         let runtime_for_pool = Arc::clone(&self.runtime);
         let keypair = self.keypair.clone();
@@ -343,6 +350,10 @@ impl Libp2pManager {
                         incoming = incoming_streams.next() => {
                             if let Some((peer, stream)) = incoming {
                                 info!("Incoming file stream from {}", peer);
+                                if !sync_manager_clone.is_connected(&peer.to_string()) {
+                                    error!("Incoming file stream rejected: Peer {} is disconnected", peer);
+                                    continue;
+                                }
                                 let store_clone = Arc::clone(&store);
                                 let tx_clone = tx.clone();
                                 let tm_clone = Arc::clone(&transfer_manager);
@@ -418,28 +429,35 @@ impl Libp2pManager {
                                         }
                                         CdusBehaviourEvent::Gossipsub(gossipsub::Event::Message { propagation_source, message, .. }) => {
                                             if let Ok(sync_msg) = SyncMessage::from_slice(&message.data) {
-                                                // Verify peer is paired
+                                                // Verify peer is paired and connected
                                                 if let Ok(true) = store.is_device_paired(&propagation_source.to_string()) {
-                                                    match sync_msg {
-                                                        SyncMessage::ClipboardUpdate { content, timestamp } => {
-                                                            let _ = tx.send(IpcMessage::SetClipboard {
-                                                                content,
-                                                                timestamp,
-                                                                source: format!("libp2p:{}", propagation_source)
-                                                            });
-                                                        }
-                                                        SyncMessage::PeerExchange { peers } => {
-                                                            info!("Received PEX via Gossipsub from {} ({} peers)", propagation_source, peers.len());
-                                                            for peer_rec in peers {
-                                                                if let Ok(peer_id) = peer_rec.node_id.parse::<libp2p::PeerId>() {
-                                                                    for addr_str in peer_rec.addresses {
-                                                                        if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
-                                                                            swarm.add_peer_address(peer_id, addr);
+                                                    if sync_manager_clone.is_connected(&propagation_source.to_string()) {
+                                                        match sync_msg {
+                                                            SyncMessage::ClipboardUpdate { content, timestamp } => {
+                                                                let _ = tx.send(IpcMessage::SetClipboard {
+                                                                    content,
+                                                                    timestamp,
+                                                                    source: format!("libp2p:{}", propagation_source)
+                                                                });
+                                                            }
+                                                            SyncMessage::PeerExchange { peers } => {
+                                                                info!("Received PEX via Gossipsub from {} ({} peers)", propagation_source, peers.len());
+                                                                for peer_rec in peers {
+                                                                    if let Ok(peer_id) = peer_rec.node_id.parse::<libp2p::PeerId>() {
+                                                                        for addr_str in peer_rec.addresses {
+                                                                            if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                                                                                swarm.add_peer_address(peer_id, addr);
+                                                                            }
                                                                         }
                                                                     }
                                                                 }
                                                             }
+                                                            SyncMessage::Disconnect => {
+                                                                info!("Received Disconnect request over Gossipsub from {}", propagation_source);
+                                                            }
                                                         }
+                                                    } else {
+                                                        info!("Ignoring Gossipsub message from disconnected peer {}", propagation_source);
                                                     }
                                                 }
                                             }
@@ -511,6 +529,10 @@ impl Libp2pManager {
                                         swarm.add_peer_address(peer_id, addr);
                                         let _ = swarm.dial(peer_id);
                                     }
+                                    SwarmCommand::Disconnect(peer_id) => {
+                                        info!("Manually disconnecting libp2p peer: {}", peer_id);
+                                        let _ = swarm.disconnect_peer_id(peer_id);
+                                    }
                                 }
                             }
                         }
@@ -525,6 +547,13 @@ impl Libp2pManager {
     }
 
     pub fn open_file_stream(&self, peer_id: PeerId) -> Result<crate::file_transfer::Libp2pFileStream> {
+        let is_connected = self.sync_manager.read().as_ref()
+            .map(|sm| sm.is_connected(&peer_id.to_string()))
+            .unwrap_or(false);
+        if !is_connected {
+            return Err(anyhow::anyhow!("Cannot open stream: Peer {} is disconnected", peer_id));
+        }
+
         let control = self.stream_control.lock().clone()
             .ok_or_else(|| anyhow::anyhow!("Stream control not initialized"))?;
         let protocol = libp2p::StreamProtocol::new("/cdus/file/1.0.0");
@@ -534,5 +563,9 @@ impl Libp2pManager {
         })?;
         
         Ok(crate::file_transfer::Libp2pFileStream::new(stream, self.runtime.handle()))
+    }
+
+    pub fn disconnect_peer(&self, peer_id: PeerId) {
+        let _ = self.command_tx.send(SwarmCommand::Disconnect(peer_id));
     }
 }

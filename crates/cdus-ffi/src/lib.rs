@@ -265,7 +265,6 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                         )
                         .expect("Failed to initialize Libp2pManager"),
                     );
-                    libp2p_manager.start();
                     let libp2p_sync_tx = libp2p_manager.get_sync_tx();
                     *LIBP2P_MANAGER.lock().unwrap() = Some(Arc::clone(&libp2p_manager));
 
@@ -275,6 +274,8 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                         libp2p_sync_tx,
                         cdus_common::TransportType::P2p,
                     );
+
+                    libp2p_manager.start(Arc::clone(&sync_manager));
 
                     // Setup Pairing Manager
                     let pm = cdus_agent::pairing::PairingManager::new(
@@ -295,8 +296,16 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                     std::thread::spawn(move || {
                         pm_clone.start_listener();
                     });
+                    // let pm_reconnect = Arc::clone(&pm);
+                    // std::thread::spawn(move || {
+                    //     pm_reconnect.start_auto_reconnect_loop();
+                    // });
 
                     *PAIRING_MANAGER.lock().unwrap() = Some(pm);
+
+                    // Register and start mDNS discovery at startup
+                    MDNS.register_device(&node_id, &label, 5200);
+                    MDNS.start_discovery(tx.clone());
 
                     // Background thread to drain messages and notify listeners
                     std::thread::spawn(move || {
@@ -403,6 +412,14 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                     }
                                 }
                                 IpcMessage::PeerDisconnected { node_id } => {
+                                    if let Some(tm) = TRANSFER_MANAGER.lock().unwrap().as_ref() {
+                                        tm.cancel_all_transfers_for_peer(&node_id);
+                                    }
+                                    if let Some(lm) = LIBP2P_MANAGER.lock().unwrap().as_ref() {
+                                        if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
+                                            lm.disconnect_peer(peer_id);
+                                        }
+                                    }
                                     if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
                                         listener.on_peer_disconnected(node_id);
                                     }
@@ -476,6 +493,22 @@ pub fn resume_file_transfer(transfer_id: String) {
 
 #[uniffi::export]
 pub fn send_file(node_id: String, path: String) {
+    let is_connected = if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+        pm.sync_manager.is_connected(&node_id)
+    } else {
+        false
+    };
+    if !is_connected {
+        error!("Cannot send file: Peer {} is disconnected", node_id);
+        if let Some(tm) = TRANSFER_MANAGER.lock().unwrap().as_ref() {
+            let _ = tm.progress_tx.send(ProgressEvent::Failed {
+                transfer_id: "".to_string(),
+                reason: "Peer is disconnected".to_string(),
+            });
+        }
+        return;
+    }
+
     let path_buf = std::path::PathBuf::from(path);
     let store_opt = STORE.lock().unwrap();
     let lm_opt = LIBP2P_MANAGER.lock().unwrap();
@@ -587,6 +620,25 @@ pub fn delete_clipboard_item(id: i64) {
 pub fn clear_clipboard_history() {
     if let Some(store) = STORE.lock().unwrap().as_ref() {
         let _ = store.clear_events();
+    }
+}
+
+#[uniffi::export]
+pub fn disconnect_device(node_id: String) {
+    if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+        if !pm.sync_manager.send_to_peer(&node_id, SyncMessage::Disconnect) {
+            pm.sync_manager.remove_peer(&node_id);
+        }
+        // Also broadcast peer disconnected event locally
+        cdus_agent::broadcast_event(IpcMessage::PeerDisconnected { node_id: node_id.clone() });
+    }
+    if let Some(tm) = TRANSFER_MANAGER.lock().unwrap().as_ref() {
+        tm.cancel_all_transfers_for_peer(&node_id);
+    }
+    if let Some(lm) = LIBP2P_MANAGER.lock().unwrap().as_ref() {
+        if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
+            lm.disconnect_peer(peer_id);
+        }
     }
 }
 

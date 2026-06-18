@@ -9,7 +9,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use std::thread;
 use std::time::Duration;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tungstenite::{accept, client, Message, WebSocket};
 
 use crate::libp2p_manager::Libp2pManager;
@@ -959,6 +959,80 @@ impl PairingManager {
         }
     }
 
+    pub fn start_auto_reconnect_loop(self: Arc<Self>) {
+        info!("Auto-reconnect loop started");
+        let mut last_attempts: std::collections::HashMap<String, std::time::Instant> = std::collections::HashMap::new();
+        
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(15));
+            
+            let paired_devices = match self.store.get_paired_devices() {
+                Ok(devices) => devices,
+                Err(e) => {
+                    error!("Auto-reconnect loop: failed to retrieve paired devices: {}", e);
+                    continue;
+                }
+            };
+            
+            for device in paired_devices {
+                let is_connected = self.sync_manager.is_connected(&device.node_id);
+                if !is_connected {
+                    let should_retry = match last_attempts.get(&device.node_id) {
+                        Some(last_attempt) => last_attempt.elapsed() >= std::time::Duration::from_secs(30),
+                        None => true,
+                    };
+                    
+                    if should_retry {
+                        last_attempts.insert(device.node_id.clone(), std::time::Instant::now());
+                        info!("Auto-reconnect: initiating retry for offline paired device {}", device.node_id);
+                        
+                        let pm = Arc::clone(&self);
+                        let target_uuid = device.node_id.clone();
+                        let ips = device.last_known_ips.clone();
+                        let port = device.last_known_port;
+                        
+                        std::thread::spawn(move || {
+                            // Verify the device is still paired before starting connection
+                            if !pm.store.is_device_paired(&target_uuid).unwrap_or(false) {
+                                debug!("Auto-reconnect: device {} was unpaired, aborting reconnect", target_uuid);
+                                return;
+                            }
+                            
+                            let mut success = false;
+                            
+                            if let (Some(ip_list), Some(p)) = (ips, port) {
+                                for ip in ip_list {
+                                    if let Ok(ip_addr) = ip.parse() {
+                                        let addr = std::net::SocketAddr::new(ip_addr, p);
+                                        // Re-check before each connection attempt
+                                        if !pm.store.is_device_paired(&target_uuid).unwrap_or(false) {
+                                            return;
+                                        }
+                                        debug!("Auto-reconnect: trying LAN connection for {} at {}", target_uuid, addr);
+                                        if pm.initiate_pairing(addr, Some(target_uuid.clone())) {
+                                            info!("Auto-reconnect: LAN connection to {} succeeded", target_uuid);
+                                            success = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            if !success {
+                                if pm.store.is_device_paired(&target_uuid).unwrap_or(false) {
+                                    debug!("Auto-reconnect: LAN connection failed or unavailable for {}, falling back to remote relay...", target_uuid);
+                                    pm.reconnect_known_device(target_uuid);
+                                }
+                            }
+                        });
+                    }
+                } else {
+                    last_attempts.remove(&device.node_id);
+                }
+            }
+        }
+    }
+
     #[tracing::instrument(skip(self))]
     pub fn start_listener(&self) {
         use socket2::{Domain, Protocol, Socket, Type};
@@ -1270,6 +1344,10 @@ fn run_turn_sync_session(
                                     }
                                 }
                             }
+                            SyncMessage::Disconnect => {
+                                info!("Received Disconnect request from peer {} via TURN, closing session", label);
+                                break;
+                            }
                         }
                     }
                 }
@@ -1281,21 +1359,33 @@ fn run_turn_sync_session(
         }
 
         // 2. Check for outgoing messages
-        if let Ok(msg) = rx.try_recv() {
-            let data = msg.to_vec()?;
-            let mut buf = vec![0u8; data.len() + 1024];
-            match transport.write_message(&data, &mut buf) {
-                Ok(n) => {
-                    if let Err(e) = conn.tx.send(buf[..n].to_vec()) {
-                        error!("Failed to send to TURN thread: {}", e);
+        match rx.try_recv() {
+            Ok(msg) => {
+                let is_disconnect = msg == SyncMessage::Disconnect;
+                let data = msg.to_vec()?;
+                let mut buf = vec![0u8; data.len() + 1024];
+                match transport.write_message(&data, &mut buf) {
+                    Ok(n) => {
+                        if let Err(e) = conn.tx.send(buf[..n].to_vec()) {
+                            error!("Failed to send to TURN thread: {}", e);
+                            break;
+                        }
+                        if is_disconnect {
+                            info!("Sent Disconnect to peer {} via TURN, closing session", label);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        error!("Noise encryption failed: {}", e);
                         break;
                     }
                 }
-                Err(e) => {
-                    error!("Noise encryption failed: {}", e);
-                    break;
-                }
             }
+            Err(flume::TryRecvError::Disconnected) => {
+                info!("Outgoing channel disconnected, closing TURN sync session for {}", label);
+                break;
+            }
+            Err(flume::TryRecvError::Empty) => {}
         }
 
         thread::sleep(Duration::from_millis(100));
@@ -2215,6 +2305,10 @@ fn run_sync_session(
                                 }
                             }
                         }
+                        SyncMessage::Disconnect => {
+                            info!("Received Disconnect request from peer {}, closing session", label);
+                            break;
+                        }
                     }
                 }
             }
@@ -2229,9 +2323,21 @@ fn run_sync_session(
         }
 
         // 2. Check for outgoing messages
-        if let Ok(msg) = rx.try_recv() {
-            let data = msg.to_vec()?;
-            write_ws_framed(&mut ws, &mut transport, &data)?;
+        match rx.try_recv() {
+            Ok(msg) => {
+                let is_disconnect = msg == SyncMessage::Disconnect;
+                let data = msg.to_vec()?;
+                write_ws_framed(&mut ws, &mut transport, &data)?;
+                if is_disconnect {
+                    info!("Sent Disconnect to peer {}, closing session", label);
+                    break;
+                }
+            }
+            Err(flume::TryRecvError::Disconnected) => {
+                info!("Outgoing channel disconnected, closing sync session for {}", label);
+                break;
+            }
+            Err(flume::TryRecvError::Empty) => {}
         }
 
         thread::sleep(Duration::from_millis(100));

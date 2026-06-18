@@ -147,6 +147,15 @@ impl FileTransferManager {
         self.handle_decision(transfer_id, false);
     }
 
+    pub fn cancel_all_transfers_for_peer(&self, peer_id: &str) {
+        if let Ok(transfers) = self.db.get_active_transfers_for_peer(peer_id) {
+            for t in transfers {
+                info!("Cancelling active transfer {} for disconnected peer {}", t.transfer_id, peer_id);
+                self.cancel_transfer(&t.transfer_id);
+            }
+        }
+    }
+
     pub fn simulate_crash(&self, transfer_id: &str) {
         info!("FileTransferManager: SIMULATING HARD CRASH for {}", transfer_id);
         // In a real system we'd just return an error, but for testing auto-resume after process death:

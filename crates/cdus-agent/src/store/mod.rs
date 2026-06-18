@@ -748,6 +748,37 @@ impl Store {
         Ok(result)
     }
 
+    pub fn get_active_transfers_for_peer(&self, peer_node_id: &str) -> Result<Vec<TransferRecord>> {
+        let conn = self.state_conn.lock();
+        let query = "SELECT transfer_id, direction, peer_node_id, file_path, file_name,
+                            total_bytes, bytes_confirmed, chunk_size, file_hash, status,
+                            error_message, created_at, updated_at
+                     FROM file_transfers WHERE peer_node_id = ?1 AND status IN ('pending', 'in_progress', 'paused')";
+        let mut stmt = conn.prepare(query)?;
+        let rows = stmt.query_map([peer_node_id], |row| {
+            Ok(TransferRecord {
+                transfer_id: row.get(0)?,
+                direction: row.get(1)?,
+                peer_node_id: row.get(2)?,
+                file_path: row.get(3)?,
+                file_name: row.get(4)?,
+                total_bytes: row.get(5)?,
+                bytes_confirmed: row.get(6)?,
+                chunk_size: row.get(7)?,
+                file_hash: row.get(8)?,
+                status: row.get(9)?,
+                error_message: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
+            })
+        })?;
+        let mut results = Vec::new();
+        for r in rows {
+            results.push(r?);
+        }
+        Ok(results)
+    }
+
     pub fn get_transfer(&self, transfer_id: &str) -> Result<Option<TransferRecord>> {
         let conn = self.state_conn.lock();
         conn.query_row(

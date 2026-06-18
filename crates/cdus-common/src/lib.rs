@@ -136,6 +136,9 @@ pub enum IpcMessage {
     UnpairDevice {
         node_id: String,
     },
+    DisconnectDevice {
+        node_id: String,
+    },
     RevokeDevice {
         uuid: String,
     },
@@ -379,6 +382,7 @@ pub enum SyncMessage {
     PeerExchange {
         peers: Vec<PeerExchangeRecord>,
     },
+    Disconnect,
 }
 
 impl SyncMessage {

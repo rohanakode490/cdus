@@ -291,6 +291,11 @@ pub fn daemon_loop(
                     broadcast_event(IpcMessage::DeviceLost { node_id });
                 }
                 IpcMessage::PeerDisconnected { node_id } => {
+                    let tm = libp2p_manager.get_transfer_manager();
+                    tm.cancel_all_transfers_for_peer(&node_id);
+                    if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
+                        libp2p_manager.disconnect_peer(peer_id);
+                    }
                     broadcast_event(IpcMessage::PeerDisconnected { node_id });
                 }
                 IpcMessage::PeerConnected { node_id } => {
@@ -310,6 +315,15 @@ pub fn daemon_loop(
                     });
                 }
                 IpcMessage::SendFile { node_id, path } => {
+                    if !sync_manager.is_connected(&node_id) {
+                        error!("Cannot send file: Peer {} is disconnected", node_id);
+                        let tm = libp2p_manager.get_transfer_manager();
+                        let _ = tm.progress_tx.send(cdus_common::ProgressEvent::Failed {
+                            transfer_id: "".to_string(),
+                            reason: "Peer is disconnected".to_string(),
+                        });
+                        continue;
+                    }
                     let path_buf = std::path::PathBuf::from(path);
                     let store_clone = Arc::clone(&store);
                     let libp2p_manager_clone = Arc::clone(&libp2p_manager);

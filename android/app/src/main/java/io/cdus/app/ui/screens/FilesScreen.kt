@@ -265,67 +265,78 @@ fun TransferItem(transfer: FileTransferInfo) {
                     }
                 }
                 
-                Box {
-                    IconButton(onClick = { showMenu = true }) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "Options"
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        when (transfer.status) {
-                            TransferStatus.INCOMING -> {
-                                DropdownMenuItem(
-                                    text = { Text("Accept") },
-                                    onClick = {
-                                        showMenu = false
-                                        uniffi.cdus_ffi.acceptFileTransfer(transfer.transferId)
-                                        FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.DOWNLOADING))
-                                        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                                        notificationManager.cancel(2) // FILE_NOTIFICATION_ID
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Decline", color = MaterialTheme.colorScheme.error) },
-                                    onClick = {
-                                        showMenu = false
-                                        uniffi.cdus_ffi.rejectFileTransfer(transfer.transferId)
-                                        FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.REJECTED))
-                                        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                                        notificationManager.cancel(2) // FILE_NOTIFICATION_ID
-                                    }
-                                )
-                            }
-                            TransferStatus.OUTGOING, TransferStatus.DOWNLOADING, TransferStatus.HASHING -> {
-                                DropdownMenuItem(
-                                    text = { Text("Cancel", color = MaterialTheme.colorScheme.error) },
-                                    onClick = {
-                                        showMenu = false
-                                        uniffi.cdus_ffi.cancelFileTransfer(transfer.transferId)
-                                        FileTransferManager.markError(transfer.transferId, "Cancelled")
-                                    }
-                                )
-                            }
-                            TransferStatus.COMPLETE, TransferStatus.ERROR, TransferStatus.REJECTED -> {
-                                DropdownMenuItem(
-                                    text = { Text("Dismiss") },
-                                    onClick = {
-                                        showMenu = false
-                                        FileTransferManager.removeTransfer(transfer.transferId)
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Delete Permanently", color = MaterialTheme.colorScheme.error) },
-                                    onClick = {
-                                        showMenu = false
-                                        FileTransferManager.deleteTransferPermanently(context, transfer.transferId)
-                                    }
-                                )
+                if (transfer.status != TransferStatus.INCOMING) {
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "Options"
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            when (transfer.status) {
+                                TransferStatus.OUTGOING, TransferStatus.DOWNLOADING, TransferStatus.HASHING -> {
+                                    DropdownMenuItem(
+                                        text = { Text("Cancel", color = MaterialTheme.colorScheme.error) },
+                                        onClick = {
+                                            showMenu = false
+                                            uniffi.cdus_ffi.cancelFileTransfer(transfer.transferId)
+                                            FileTransferManager.markError(transfer.transferId, "Cancelled")
+                                        }
+                                    )
+                                }
+                                TransferStatus.COMPLETE, TransferStatus.ERROR, TransferStatus.REJECTED -> {
+                                    DropdownMenuItem(
+                                        text = { Text("Dismiss") },
+                                        onClick = {
+                                            showMenu = false
+                                            FileTransferManager.removeTransfer(transfer.transferId)
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Delete Permanently", color = MaterialTheme.colorScheme.error) },
+                                        onClick = {
+                                            showMenu = false
+                                            FileTransferManager.deleteTransferPermanently(context, transfer.transferId)
+                                        }
+                                    )
+                                }
+                                else -> {}
                             }
                         }
+                    }
+                }
+            }
+            
+            if (transfer.status == TransferStatus.INCOMING) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(
+                        onClick = {
+                            uniffi.cdus_ffi.acceptFileTransfer(transfer.transferId)
+                            FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.DOWNLOADING))
+                            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                            notificationManager.cancel(2) // FILE_NOTIFICATION_ID
+                        }
+                    ) {
+                        Text("Accept")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(
+                        onClick = {
+                            uniffi.cdus_ffi.rejectFileTransfer(transfer.transferId)
+                            FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.REJECTED))
+                            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                            notificationManager.cancel(2) // FILE_NOTIFICATION_ID
+                        }
+                    ) {
+                        Text("Decline", color = MaterialTheme.colorScheme.error)
                     }
                 }
             }

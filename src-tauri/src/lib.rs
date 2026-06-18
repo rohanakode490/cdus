@@ -319,6 +319,15 @@ async fn unpair_device(node_id: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn disconnect_device(node_id: String) -> Result<String, String> {
+    let msg = IpcMessage::DisconnectDevice { node_id };
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => Ok(msg),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
 async fn send_file(node_id: String, path: String) -> Result<String, String> {
     let msg = IpcMessage::SendFile { node_id, path };
     match send_ipc_message(msg)? {
@@ -856,6 +865,7 @@ pub fn run() {
             get_pairing_status,
             get_paired_devices,
             unpair_device,
+            disconnect_device,
             send_file,
             accept_file_transfer,
             reject_file_transfer,

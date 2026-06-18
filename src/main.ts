@@ -6,6 +6,25 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import QRCode from "qrcode";
 import { Html5Qrcode } from "html5-qrcode";
 
+function formatTimestamp(timestampStr: string): string {
+  try {
+    const isoStr = timestampStr.trim().replace(" ", "T") + "Z";
+    const date = new Date(isoStr);
+    if (isNaN(date.getTime())) {
+      return timestampStr;
+    }
+    return date.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    });
+  } catch (e) {
+    return timestampStr;
+  }
+}
+
 
 // --- State Management ---
 let pairedDeviceIds: string[] = [];
@@ -43,57 +62,26 @@ interface MockDeviceState {
 }
 const mockDeviceStates = new Map<string, MockDeviceState>();
 
-function startMockReconnection(id: string, name: string) {
-  const existing = mockDeviceStates.get(id);
-  if (existing?.timerId) {
-    clearInterval(existing.timerId);
-  }
-
-  const state: MockDeviceState = {
-    status: "reconnecting",
-    transport: null,
-    countdown: 30
-  };
-
-  state.timerId = setInterval(() => {
-    const s = mockDeviceStates.get(id);
-    if (!s || s.status !== "reconnecting") {
-      clearInterval(state.timerId);
-      return;
-    }
-    if (s.countdown > 1) {
-      s.countdown -= 1;
-      renderPairedDevices();
-    } else {
-      clearInterval(state.timerId);
-      triggerMockConnection(id, name);
-    }
-  }, 1000);
-
-  mockDeviceStates.set(id, state);
-}
-
-function triggerMockConnection(id: string, name: string) {
+function triggerMockConnection(id: string) {
   const s = mockDeviceStates.get(id);
   if (!s) return;
   
   if (s.timerId) {
-    clearInterval(s.timerId);
+    clearTimeout(s.timerId);
   }
 
   s.status = "connecting";
   s.countdown = 0;
   renderPairedDevices();
 
-  setTimeout(() => {
+  // Reset to offline if connection does not succeed within 10 seconds
+  s.timerId = setTimeout(() => {
     const current = mockDeviceStates.get(id);
-    if (!current || current.status !== "connecting") return;
-    
-    current.status = "online";
-    current.transport = Math.random() > 0.5 ? "Lan" : "Relay";
-    renderPairedDevices();
-    addAuditLog("system", `Auto-reconnected to device ${name} (${current.transport})`);
-  }, 1500);
+    if (current && current.status === "connecting") {
+      current.status = "offline";
+      renderPairedDevices();
+    }
+  }, 10000);
 }
 
 
@@ -342,7 +330,7 @@ function filterAndRenderClipboard() {
       ${displayHtml}
       <div class="clipboard-meta">
         <span class="device-badge">${item.source}</span>
-        <span class="timestamp">${item.timestamp}</span>
+        <span class="timestamp">${formatTimestamp(item.timestamp)}</span>
       </div>
       <div class="clipboard-actions">
         ${localOnlyToggle}
@@ -723,14 +711,21 @@ async function renderPairedDevices() {
       
       // Get or initialize mock state
       let mockState = mockDeviceStates.get(id);
-      if (!mockState) {
-        if (transport !== null) {
+      if (transport !== null) {
+        if (!mockState || mockState.status !== "online" || mockState.transport !== transport) {
+          if (mockState?.timerId) {
+            clearInterval(mockState.timerId);
+          }
           mockState = { status: "online", transport, countdown: 0 };
           mockDeviceStates.set(id, mockState);
-        } else {
-          mockState = { status: "reconnecting", transport: null, countdown: 30 };
+        }
+      } else {
+        if (!mockState || mockState.status === "online") {
+          if (mockState?.timerId) {
+            clearTimeout(mockState.timerId);
+          }
+          mockState = { status: "offline", transport: null, countdown: 0 };
           mockDeviceStates.set(id, mockState);
-          startMockReconnection(id, name);
         }
       }
 
@@ -752,31 +747,26 @@ async function renderPairedDevices() {
       } else if (mockState.status === "reconnecting") {
         statusClass = "reconnecting";
         statusText = `Reconnecting in ${mockState.countdown}s...`;
-        pathHtml = `<span class="connection-path offline">Offline</span>`;
         actionBtnHtml = `
           <button class="primary-btn reconnect-now-btn" data-id="${id}">Reconnect Now</button>
         `;
       } else if (mockState.status === "connecting") {
         statusClass = "connecting";
         statusText = "Connecting...";
-        pathHtml = `<span class="connection-path offline">Offline</span>`;
         actionBtnHtml = `
           <button class="primary-btn reconnect-now-btn" data-id="${id}" disabled>Connecting...</button>
         `;
       } else {
         statusClass = "offline";
         statusText = "Offline";
-        pathHtml = `<span class="connection-path offline">Offline</span>`;
         actionBtnHtml = `
           <button class="primary-btn reconnect-now-btn" data-id="${id}">Connect</button>
         `;
       }
 
-      const shortId = id.substring(0, 8);
-
       row.innerHTML = `
         <div class="device-info">
-          <span class="device-name-label">${name} <span class="device-id-tag">#${shortId}</span></span>
+          <span class="device-name-label">${name}</span>
           <div class="device-status">
             <span class="status-dot ${statusClass}"></span>
             <span class="device-type-label">${statusText}</span>
@@ -804,7 +794,7 @@ async function renderPairedDevices() {
       });
 
       row.querySelector(".reconnect-now-btn")?.addEventListener("click", async () => {
-        triggerMockConnection(id, name);
+        triggerMockConnection(id);
         try {
           await invoke("pair_with", { nodeId: id });
         } catch (err) {
@@ -812,16 +802,20 @@ async function renderPairedDevices() {
         }
       });
 
-      row.querySelector(".disconnect-btn")?.addEventListener("click", () => {
+      row.querySelector(".disconnect-btn")?.addEventListener("click", async () => {
         const s = mockDeviceStates.get(id);
         if (s) {
-          if (s.timerId) clearInterval(s.timerId);
-          s.status = "reconnecting";
+          if (s.timerId) clearTimeout(s.timerId);
+          s.status = "offline";
           s.transport = null;
-          s.countdown = 30;
-          startMockReconnection(id, name);
+          s.countdown = 0;
           renderPairedDevices();
           addAuditLog("system", `Disconnected from device ${name}`);
+          try {
+            await invoke("disconnect_device", { nodeId: id });
+          } catch (err) {
+            console.error("Failed to disconnect peer:", err);
+          }
         }
       });
 
