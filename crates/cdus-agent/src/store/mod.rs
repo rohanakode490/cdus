@@ -1095,7 +1095,23 @@ impl Store {
 
         let mut events = Vec::new();
         for event in event_iter {
-            events.push(event?);
+            let mut ev = event?;
+            if ev.source.starts_with("libp2p:") {
+                let peer_id = ev.source.trim_start_matches("libp2p:");
+                if let Ok(Some(device)) = self.get_paired_device(peer_id) {
+                    ev.source = device.label;
+                } else {
+                    let truncated = if peer_id.len() > 8 {
+                        &peer_id[..8]
+                    } else {
+                        peer_id
+                    };
+                    ev.source = format!("Unknown Device ({})", truncated);
+                }
+            } else if ev.source == "Local" {
+                ev.source = "This Device".to_string();
+            }
+            events.push(ev);
         }
         Ok(events)
     }
@@ -1716,7 +1732,7 @@ mod tests {
         assert_eq!(events[0].content, "event2");
         assert_eq!(events[0].source, "iPhone");
         assert_eq!(events[1].content, "event1");
-        assert_eq!(events[1].source, "Local");
+        assert_eq!(events[1].source, "This Device");
     }
 
     #[test]
