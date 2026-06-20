@@ -440,6 +440,12 @@ impl Libp2pManager {
                                                                     source: format!("libp2p:{}", propagation_source)
                                                                 });
                                                             }
+                                                            SyncMessage::NotificationMirror(payload) => {
+                                                                let _ = tx.send(IpcMessage::NotificationMirrored(payload));
+                                                            }
+                                                            SyncMessage::NotificationDismiss { key } => {
+                                                                let _ = tx.send(IpcMessage::NotificationDismissed { key });
+                                                            }
                                                             SyncMessage::PeerExchange { peers } => {
                                                                 info!("Received PEX via Gossipsub from {} ({} peers)", propagation_source, peers.len());
                                                                 for peer_rec in peers {

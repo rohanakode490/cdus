@@ -29,6 +29,16 @@ pub struct DiscoveredDevice {
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiNotificationPayload {
+    pub key: String,
+    pub package_name: String,
+    pub app_name: String,
+    pub title: String,
+    pub text: String,
+    pub timestamp: u64,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
 pub struct ClipboardHistoryItem {
     pub id: i64,
     pub content: String,
@@ -63,16 +73,30 @@ pub trait FileTransferListener: Send + Sync {
     fn on_peer_rejected(&self, node_id: String, transfer_id: String);
     fn on_peer_disconnected(&self, node_id: String);
     fn on_peer_connected(&self, node_id: String);
-    fn on_pairing_result(&self, success: bool, node_id: String, label: String);
+    fn on_pairing_result(&self, success: bool, node_id: String, label: String, error: Option<String>);
     fn on_already_paired(&self, node_id: String, label: String);
     fn on_stale_pairing(&self, node_id: String, label: String);
     fn on_transfer_state_changed(&self, transfer_id: String, state: String);
+    fn on_relay_status_changed(&self, connected: bool, error: Option<String>);
 }
 
 static CLIPBOARD_LISTENER: Lazy<Mutex<Option<Box<dyn ClipboardListener>>>> =
     Lazy::new(|| Mutex::new(None));
 static FILE_TRANSFER_LISTENER: Lazy<Mutex<Option<Box<dyn FileTransferListener>>>> =
     Lazy::new(|| Mutex::new(None));
+
+#[uniffi::export(callback_interface)]
+pub trait NotificationListener: Send + Sync {
+    fn on_remote_dismiss_request(&self, key: String);
+}
+
+static NOTIFICATION_LISTENER: Lazy<Mutex<Option<Box<dyn NotificationListener>>>> =
+    Lazy::new(|| Mutex::new(None));
+
+#[uniffi::export]
+pub fn set_notification_listener(listener: Box<dyn NotificationListener>) {
+    *NOTIFICATION_LISTENER.lock().unwrap() = Some(listener);
+}
 
 #[uniffi::export]
 pub fn set_clipboard_listener(listener: Box<dyn ClipboardListener>) {
@@ -424,13 +448,18 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                         listener.on_peer_disconnected(node_id);
                                     }
                                 }
-                                IpcMessage::PairingResult { success, node_id, label } => {
+                                IpcMessage::PairingResult { success, node_id, label, error } => {
                                     if success {
                                         let mut list = DISCOVERED.lock().unwrap();
                                         list.retain(|d| d.node_id != node_id);
                                     }
                                     if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
-                                        listener.on_pairing_result(success, node_id, label);
+                                        listener.on_pairing_result(success, node_id, label, error);
+                                    }
+                                }
+                                IpcMessage::RelayStatus { connected, error } => {
+                                    if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                                        listener.on_relay_status_changed(connected, error);
                                     }
                                 }
                                 IpcMessage::AlreadyPaired { node_id, label } => {
@@ -446,6 +475,11 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                 IpcMessage::FileProgress(_event) => {
                                     // These are already handled by the SEPARATE progress forwarder thread spawned above
                                     // But we could also handle them here if we didn't have that.
+                                }
+                                IpcMessage::DismissNotification { key } => {
+                                    if let Some(listener) = NOTIFICATION_LISTENER.lock().unwrap().as_ref() {
+                                        listener.on_remote_dismiss_request(key);
+                                    }
                                 }
                                 _ => {
                                     info!("FFI Core: Received IPC message: {:?}", msg);
@@ -1005,10 +1039,36 @@ pub fn clear_discovered_devices() {
 
 #[uniffi::export]
 pub fn greet_from_rust(name: String) -> String {
-    format!(
-        "Hello, {}! This is CDUS core running on Android via Rust.",
-        name
-    )
+    format!("Hello, {}! This is CDUS Sync Core running on Rust.", name)
+}
+
+#[uniffi::export]
+pub fn send_notification_mirror(
+    key: String,
+    package_name: String,
+    app_name: String,
+    title: String,
+    text: String,
+    timestamp: u64,
+) {
+    if let Some(agent_tx) = AGENT_TX.lock().unwrap().as_ref() {
+        let payload = cdus_common::NotificationPayload {
+            key,
+            package_name,
+            app_name,
+            title,
+            text,
+            timestamp,
+        };
+        let _ = agent_tx.send(IpcMessage::NotificationMirrored(payload));
+    }
+}
+
+#[uniffi::export]
+pub fn send_notification_dismiss(key: String) {
+    if let Some(agent_tx) = AGENT_TX.lock().unwrap().as_ref() {
+        let _ = agent_tx.send(IpcMessage::NotificationDismissed { key });
+    }
 }
 
 #[uniffi::export]

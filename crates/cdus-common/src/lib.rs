@@ -18,6 +18,16 @@ pub struct AuditLogRecord {
     pub timestamp: u64, // unix timestamp ms
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+pub struct NotificationPayload {
+    pub key: String,
+    pub package_name: String,
+    pub app_name: String,
+    pub title: String,
+    pub text: String,
+    pub timestamp: u64,
+}
+
 pub fn is_sensitive_content(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
@@ -114,6 +124,7 @@ pub enum IpcMessage {
         success: bool,
         node_id: String,
         label: String,
+        error: Option<String>,
     },
     AlreadyPaired {
         node_id: String,
@@ -233,6 +244,20 @@ pub enum IpcMessage {
     },
     GetTelemetryOptIn,
     TelemetryOptInResponse(bool),
+    RelayStatus {
+        connected: bool,
+        error: Option<String>,
+    },
+    // Notification Mirroring IPC
+    GetActiveNotifications,
+    ActiveNotificationsResponse(Vec<NotificationPayload>),
+    DismissNotification {
+        key: String,
+    },
+    NotificationMirrored(NotificationPayload),
+    NotificationDismissed {
+        key: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -383,6 +408,10 @@ pub enum SyncMessage {
         peers: Vec<PeerExchangeRecord>,
     },
     Disconnect,
+    NotificationMirror(NotificationPayload),
+    NotificationDismiss {
+        key: String,
+    },
 }
 
 impl SyncMessage {

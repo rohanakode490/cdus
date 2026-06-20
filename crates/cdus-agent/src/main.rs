@@ -520,6 +520,16 @@ fn main() {
                                                 }
                                             }
                                         }
+                                        IpcMessage::GetActiveNotifications => {
+                                            let list: Vec<cdus_common::NotificationPayload> = cdus_agent::ACTIVE_NOTIFICATIONS.lock().values().cloned().collect();
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::ActiveNotificationsResponse(list)).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        IpcMessage::DismissNotification { key } => {
+                                            let _ = tx_clone.send(IpcMessage::DismissNotification { key: key.clone() });
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::NotificationDismissed { key }).unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
                                         IpcMessage::ClearAuditLogs => {
                                             match store_clone.clear_audit_logs() {
                                                 Ok(_) => {

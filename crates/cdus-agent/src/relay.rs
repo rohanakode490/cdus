@@ -181,6 +181,10 @@ impl RelayManager {
                 match connect(&ws_url) {
                     Ok((mut socket, _response)) => {
                         info!("Relay: Connected successfully.");
+                        let _ = tx.send(IpcMessage::RelayStatus {
+                            connected: true,
+                            error: None,
+                        });
 
                         // Set read timeout
                         if let MaybeTlsStream::Plain(s) = socket.get_mut() {
@@ -229,11 +233,21 @@ impl RelayManager {
                                         {
                                             // Normal timeout, continue
                                         } else {
-                                            error!("Relay: Connection lost (IO error: {})", e);
+                                            let err_msg = format!("Connection lost (IO error: {})", e);
+                                            error!("Relay: {}", err_msg);
+                                            let _ = tx.send(IpcMessage::RelayStatus {
+                                                connected: false,
+                                                error: Some(err_msg),
+                                            });
                                             break;
                                         }
                                     } else {
-                                        error!("Relay: WebSocket error: {}", e);
+                                        let err_msg = format!("WebSocket error: {}", e);
+                                        error!("Relay: {}", err_msg);
+                                        let _ = tx.send(IpcMessage::RelayStatus {
+                                            connected: false,
+                                            error: Some(err_msg),
+                                        });
                                         break;
                                     }
                                 }
@@ -251,7 +265,12 @@ impl RelayManager {
                         }
                     }
                     Err(e) => {
-                        error!("Relay: Connection failed: {}. Retrying in 10s. (Note: Relay is optional for LAN discovery)", e);
+                        let err_msg = format!("Connection failed: {}", e);
+                        error!("Relay: {}. Retrying in 10s. (Note: Relay is optional for LAN discovery)", e);
+                        let _ = tx.send(IpcMessage::RelayStatus {
+                            connected: false,
+                            error: Some(err_msg),
+                        });
                     }
                 }
                 thread::sleep(Duration::from_secs(10));

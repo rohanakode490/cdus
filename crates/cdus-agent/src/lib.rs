@@ -24,6 +24,10 @@ use crate::store::Store;
 
 pub static EVENT_BUS: Mutex<Vec<Sender<IpcMessage>>> = Mutex::new(Vec::new());
 
+use once_cell::sync::Lazy;
+pub static ACTIVE_NOTIFICATIONS: Lazy<Mutex<std::collections::HashMap<String, cdus_common::NotificationPayload>>> =
+    Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
+
 pub fn broadcast_event(msg: IpcMessage) {
     let mut bus = EVENT_BUS.lock();
     bus.retain(|tx| tx.send(msg.clone()).is_ok());
@@ -54,7 +58,6 @@ pub fn daemon_loop(
     info!("Daemon logic thread started");
     #[cfg(not(target_os = "android"))]
     use arboard::Clipboard;
-
     #[cfg(not(target_os = "android"))]
     let mut clipboard = Clipboard::new().ok();
 
@@ -268,16 +271,19 @@ pub fn daemon_loop(
                         });
                     }
                 }
-                IpcMessage::PairingResult { success, node_id, label } => {
+                IpcMessage::PairingResult { success, node_id, label, error } => {
                     if success {
                         info!("Pairing successful with {} ({}). Removing from discovery list.", label, node_id);
                         let mut list = discovered_devices.lock();
                         list.retain(|(id, _, _, _, _)| id != &node_id);
                         let _ = store.append_audit_log("pairing", &format!("Successfully paired with device '{}' (#{})", label, &node_id[..std::cmp::min(8, node_id.len())]));
                     } else {
-                        let _ = store.append_audit_log("pairing", &format!("Pairing failed with device '{}' (#{})", label, &node_id[..std::cmp::min(8, node_id.len())]));
+                        let _ = store.append_audit_log("pairing", &format!("Pairing failed with device '{}' (#{}): {}", label, &node_id[..std::cmp::min(8, node_id.len())], error.as_deref().unwrap_or("unknown")));
                     }
-                    broadcast_event(IpcMessage::PairingResult { success, node_id, label });
+                    broadcast_event(IpcMessage::PairingResult { success, node_id, label, error });
+                }
+                IpcMessage::RelayStatus { connected, error } => {
+                    broadcast_event(IpcMessage::RelayStatus { connected, error });
                 }
                 IpcMessage::AlreadyPaired { node_id, label } => {
                     broadcast_event(IpcMessage::AlreadyPaired { node_id, label });
@@ -517,6 +523,48 @@ pub fn daemon_loop(
                     } else {
                         error!("Manual test: libp2p_request_tx not available");
                     }
+                }
+                IpcMessage::GetActiveNotifications => {
+                    let _ = tx.send(IpcMessage::ActiveNotificationsResponse(
+                        ACTIVE_NOTIFICATIONS.lock().values().cloned().collect(),
+                    ));
+                }
+                IpcMessage::DismissNotification { key } => {
+                    ACTIVE_NOTIFICATIONS.lock().remove(&key);
+                    info!("Dismissing notification: {}", key);
+                    sync_manager.broadcast(SyncMessage::NotificationDismiss { key: key.clone() });
+                    broadcast_event(IpcMessage::NotificationDismissed { key });
+                }
+                IpcMessage::NotificationMirrored(payload) => {
+                    info!("Daemon mirroring notification: {:?}", payload);
+                    ACTIVE_NOTIFICATIONS.lock().insert(payload.key.clone(), payload.clone());
+                    
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        let title = format!("{} ({})", payload.title, payload.app_name);
+                        let _ = notify_rust::Notification::new()
+                            .summary(&title)
+                            .body(&payload.text)
+                            .show();
+                    }
+
+                    #[cfg(target_os = "android")]
+                    {
+                        sync_manager.broadcast(SyncMessage::NotificationMirror(payload.clone()));
+                    }
+
+                    broadcast_event(IpcMessage::NotificationMirrored(payload));
+                }
+                IpcMessage::NotificationDismissed { key } => {
+                    info!("Daemon processing remote dismiss: {}", key);
+                    ACTIVE_NOTIFICATIONS.lock().remove(&key);
+                    
+                    #[cfg(target_os = "android")]
+                    {
+                        let _ = tx.send(IpcMessage::DismissNotification { key: key.clone() });
+                    }
+
+                    broadcast_event(IpcMessage::NotificationDismissed { key });
                 }
                 _ => {
                     info!("Daemon: Unhandled message: {:?}", msg);

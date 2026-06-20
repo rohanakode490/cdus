@@ -1037,4 +1037,136 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].content, "Private Password");
     }
+
+    #[test]
+    fn test_notification_mirror_and_dismiss() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::init(dir.path()).unwrap());
+        let (tx, rx) = flume::unbounded();
+        let lw = Arc::new(Mutex::new(None));
+        let dd = Arc::new(Mutex::new(Vec::new()));
+        let ap = Arc::new(Mutex::new(None));
+        let sm = Arc::new(SyncManager::new());
+        let tm = Arc::new(TurnManager::new().unwrap());
+        let peer_map = Arc::new(Mutex::new(HashMap::new()));
+
+        let (p_tx, _p_rx) = flume::unbounded();
+        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
+        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
+
+        let (relay, _) = RelayManager::new(
+            "test".to_string(),
+            "http://localhost".to_string(),
+            tx.clone(),
+        );
+        let pm = Arc::new(PairingManager::new(
+            Arc::clone(&store),
+            tx.clone(),
+            "test".to_string(),
+            vec![],
+            0,
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::new(relay),
+            tm,
+            lm.clone(),
+        ));
+        let lpt = Arc::new(Mutex::new(0u64));
+
+        // 1. Simulate a NotificationMirrored event sent to the daemon loop
+        let payload = cdus_common::NotificationPayload {
+            key: "test_key_123".to_string(),
+            package_name: "com.example.app".to_string(),
+            app_name: "Example App".to_string(),
+            title: "Test Title".to_string(),
+            text: "Test Notification Body".to_string(),
+            timestamp: 1600000000u64,
+        };
+
+        let (tx_in, rx_in) = flume::unbounded();
+        tx_in.send(IpcMessage::NotificationMirrored(payload.clone())).unwrap();
+
+        // Run daemon loop to process IpcMessage::NotificationMirrored
+        daemon_loop(
+            tx.clone(),
+            rx_in,
+            Some(1), // process exactly one message
+            Arc::clone(&store),
+            Arc::clone(&lw),
+            Arc::clone(&dd),
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::clone(&pm),
+            Arc::clone(&lpt),
+            peer_map.clone(),
+            None,
+            lm.clone(),
+        );
+
+        // Verify active notifications contains our notification payload
+        {
+            let map = crate::ACTIVE_NOTIFICATIONS.lock();
+            assert_eq!(map.len(), 1);
+            assert_eq!(map.get("test_key_123").unwrap().title, "Test Title");
+        }
+
+        // 2. Simulate querying the active notifications from the client
+        let (tx_in_2, rx_in_2) = flume::unbounded();
+        tx_in_2.send(IpcMessage::GetActiveNotifications).unwrap();
+
+        // Run daemon loop to process GetActiveNotifications
+        daemon_loop(
+            tx.clone(),
+            rx_in_2,
+            Some(1),
+            Arc::clone(&store),
+            Arc::clone(&lw),
+            Arc::clone(&dd),
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::clone(&pm),
+            Arc::clone(&lpt),
+            peer_map.clone(),
+            None,
+            lm.clone(),
+        );
+
+        // Verify we got the ActiveNotificationsResponse in FFI/Client rx
+        let mut got_response = false;
+        while let Ok(msg) = rx.try_recv() {
+            if let IpcMessage::ActiveNotificationsResponse(list) = msg {
+                assert_eq!(list.len(), 1);
+                assert_eq!(list[0].key, "test_key_123");
+                got_response = true;
+            }
+        }
+        assert!(got_response, "Should have received ActiveNotificationsResponse");
+
+        // 3. Simulate dismissing a notification (client clicked dismiss in UI)
+        let (tx_in_3, rx_in_3) = flume::unbounded();
+        tx_in_3.send(IpcMessage::DismissNotification { key: "test_key_123".to_string() }).unwrap();
+
+        // Run daemon loop to process DismissNotification
+        daemon_loop(
+            tx.clone(),
+            rx_in_3,
+            Some(1),
+            Arc::clone(&store),
+            Arc::clone(&lw),
+            Arc::clone(&dd),
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::clone(&pm),
+            Arc::clone(&lpt),
+            peer_map.clone(),
+            None,
+            lm.clone(),
+        );
+
+        // Verify it was removed from active notifications map
+        {
+            let map = crate::ACTIVE_NOTIFICATIONS.lock();
+            assert_eq!(map.len(), 0);
+        }
+    }
 }

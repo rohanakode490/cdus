@@ -674,6 +674,7 @@ impl PairingManager {
                                                 success: true,
                                                 node_id: source_uuid.clone(),
                                                 label: state.remote_label.clone(),
+                                                error: None,
                                             });
                                         }
                                     }
@@ -1328,6 +1329,12 @@ fn run_turn_sync_session(
                                     source: label.clone(),
                                 });
                             }
+                            SyncMessage::NotificationMirror(payload) => {
+                                let _ = ipc_tx.send(IpcMessage::NotificationMirrored(payload));
+                            }
+                            SyncMessage::NotificationDismiss { key } => {
+                                let _ = ipc_tx.send(IpcMessage::NotificationDismissed { key });
+                            }
                             SyncMessage::PeerExchange { peers } => {
                                 info!(
                                     "Received PEX via TURN from {} ({} peers)",
@@ -1428,6 +1435,7 @@ fn handle_incoming_connection(
             success: false,
             node_id: "unknown".to_string(),
             label: "unknown".to_string(),
+            error: Some(e.to_string()),
         });
         return Err(e);
     }
@@ -1778,6 +1786,7 @@ fn handle_incoming_connection_inner(
                 success: true,
                 node_id: remote_node_id.clone(),
                 label: initiator_label.clone(),
+                error: None,
             });
         }
 
@@ -1844,6 +1853,7 @@ fn handle_outgoing_connection(
             success: false,
             node_id: "unknown".to_string(),
             label: "unknown".to_string(),
+            error: Some(e.to_string()),
         });
         return Err(e);
     }
@@ -2137,6 +2147,7 @@ fn handle_outgoing_connection_inner(
                     success: true,
                     node_id: remote_node_id.clone(),
                     label: responder_label.clone(),
+                    error: None,
                 });
             } else {
                 info!(
@@ -2147,6 +2158,7 @@ fn handle_outgoing_connection_inner(
                     success: false,
                     node_id: remote_node_id.clone(),
                     label: responder_label.clone(),
+                    error: Some("Pairing confirmation failed or was rejected".to_string()),
                 });
                 return Err(anyhow::anyhow!("Pairing failed or rejected"));
             }
@@ -2292,6 +2304,12 @@ fn run_sync_session(
                                 timestamp,
                                 source: label.clone(),
                             });
+                        }
+                        SyncMessage::NotificationMirror(payload) => {
+                            let _ = ipc_tx.send(IpcMessage::NotificationMirrored(payload));
+                        }
+                        SyncMessage::NotificationDismiss { key } => {
+                            let _ = ipc_tx.send(IpcMessage::NotificationDismissed { key });
                         }
                         SyncMessage::PeerExchange { peers } => {
                             info!("Received PEX update from {} ({} peers)", label, peers.len());
