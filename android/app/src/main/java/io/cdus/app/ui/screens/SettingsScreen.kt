@@ -63,6 +63,23 @@ fun SettingsScreen() {
         )
     }
 
+    var isNotificationSyncEnabled by remember {
+        mutableStateOf(sharedPref.getBoolean("notification_sync_enabled", false))
+    }
+    var hasNotificationPermission by remember {
+        mutableStateOf(isNotificationServiceEnabled(context))
+    }
+    var showAppFilterDialog by remember { mutableStateOf(false) }
+    val appsList = remember {
+        val pm = context.packageManager
+        val mainIntent = Intent(Intent.ACTION_MAIN, null).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
+        pm.queryIntentActivities(mainIntent, 0).map { resolveInfo ->
+            val packageName = resolveInfo.activityInfo.packageName
+            val appName = resolveInfo.loadLabel(pm).toString()
+            appName to packageName
+        }.distinctBy { it.second }.sortedBy { it.first }
+    }
+
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
@@ -72,6 +89,7 @@ fun SettingsScreen() {
                 } else {
                     true
                 }
+                hasNotificationPermission = isNotificationServiceEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -207,6 +225,111 @@ fun SettingsScreen() {
             }
         }
 
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(text = "Notification Sync", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    text = "Mirror notifications from your phone to your desktop and synchronize their dismissal status bidirectionally.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                        Text(text = "Sync Notifications", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            text = if (!hasNotificationPermission) "Notification permission required" else if (isNotificationSyncEnabled) "Enabled" else "Disabled",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (hasNotificationPermission && isNotificationSyncEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                    Switch(
+                        checked = isNotificationSyncEnabled,
+                        onCheckedChange = { enabled ->
+                            if (enabled && !hasNotificationPermission) {
+                                try {
+                                    val intent = Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    Logger.e("Failed to open notification listener settings: ${e.message}")
+                                }
+                            } else {
+                                isNotificationSyncEnabled = enabled
+                                sharedPref.edit().putBoolean("notification_sync_enabled", enabled).apply()
+                            }
+                        }
+                    )
+                }
+
+                if (hasNotificationPermission && isNotificationSyncEnabled) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = { showAppFilterDialog = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Configure Synced Apps")
+                    }
+                }
+            }
+        }
+
+        if (showAppFilterDialog) {
+            AlertDialog(
+                onDismissRequest = { showAppFilterDialog = false },
+                title = { Text("Select Synced Apps") },
+                text = {
+                    Box(modifier = Modifier.heightIn(max = 400.dp)) {
+                        androidx.compose.foundation.lazy.LazyColumn {
+                            items(appsList.size) { index ->
+                                val (appName, pkgName) = appsList[index]
+                                var isAppEnabled by remember(pkgName) {
+                                    mutableStateOf(sharedPref.getBoolean("notify_app_$pkgName", true))
+                                }
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            val newValue = !isAppEnabled
+                                            isAppEnabled = newValue
+                                            sharedPref.edit().putBoolean("notify_app_$pkgName", newValue).apply()
+                                        }
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = isAppEnabled,
+                                        onCheckedChange = { newValue ->
+                                            isAppEnabled = newValue
+                                            sharedPref.edit().putBoolean("notify_app_$pkgName", newValue).apply()
+                                        }
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(text = appName, style = MaterialTheme.typography.bodyLarge)
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showAppFilterDialog = false }) {
+                        Text("Close")
+                    }
+                }
+            )
+        }
+
         if (developerModeEnabled) {
             Spacer(modifier = Modifier.height(24.dp))
             Text(text = "Developer Options", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
@@ -257,5 +380,20 @@ fun SettingsScreen() {
             )
         }
     }
+}
+
+private fun isNotificationServiceEnabled(context: Context): Boolean {
+    val pkgName = context.packageName
+    val flat = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
+    if (!flat.isNullOrEmpty()) {
+        val names = flat.split(":")
+        for (name in names) {
+            val cn = android.content.ComponentName.unflattenFromString(name)
+            if (cn != null && cn.packageName == pkgName) {
+                return true
+            }
+        }
+    }
+    return false
 }
 

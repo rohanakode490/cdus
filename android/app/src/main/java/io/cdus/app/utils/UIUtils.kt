@@ -19,4 +19,16 @@ object UIUtils {
             raw
         }
     }
+
+    /**
+     * Sanitizes raw error messages by removing URLs, IP addresses, and hash IDs to protect user privacy.
+     */
+    fun sanitizeErrorMessage(err: String?): String {
+        if (err == null) return "Unknown error"
+        var sanitized = err.replace(Regex("https?://[^\\s]+"), "[URL]")
+        sanitized = sanitized.replace(Regex("wss?://[^\\s]+"), "[URL]")
+        sanitized = sanitized.replace(Regex("\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(:\\d+)?\\b"), "[address]")
+        sanitized = sanitized.replace(Regex("\\b[0-9a-fA-F]{32,}\\b"), "[id]")
+        return sanitized
+    }
 }

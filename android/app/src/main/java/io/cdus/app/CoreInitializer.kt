@@ -31,14 +31,6 @@ object CoreInitializer {
             
             val appContext = context.applicationContext
             
-            // Acquire MulticastLock
-            val wifi = appContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            multicastLock = wifi.createMulticastLock("cdus_multicast_lock").apply {
-                setReferenceCounted(true)
-                acquire()
-            }
-            Logger.i("CoreInitializer: MulticastLock acquired")
-
             // Initialize Rust Core
             val dataDir = appContext.filesDir.absolutePath
             val deviceName = Build.MODEL
@@ -130,5 +122,31 @@ object CoreInitializer {
             }
         }
         isInitialized = false
+    }
+
+    @Synchronized
+    fun acquireMulticastLock(context: Context) {
+        if (multicastLock == null) {
+            val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            multicastLock = wifi.createMulticastLock("cdus_multicast_lock").apply {
+                setReferenceCounted(false)
+            }
+        }
+        multicastLock?.let {
+            if (!it.isHeld) {
+                it.acquire()
+                Logger.i("CoreInitializer: MulticastLock acquired")
+            }
+        }
+    }
+
+    @Synchronized
+    fun releaseMulticastLock() {
+        multicastLock?.let {
+            if (it.isHeld) {
+                it.release()
+                Logger.i("CoreInitializer: MulticastLock released")
+            }
+        }
     }
 }

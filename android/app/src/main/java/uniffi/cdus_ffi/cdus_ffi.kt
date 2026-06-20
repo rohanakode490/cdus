@@ -687,7 +687,7 @@ internal interface UniffiCallbackInterfaceFileTransferListenerMethod9 : com.sun.
     fun callback(`uniffiHandle`: Long,`nodeId`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceFileTransferListenerMethod10 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`success`: Byte,`nodeId`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+    fun callback(`uniffiHandle`: Long,`success`: Byte,`nodeId`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,`error`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceFileTransferListenerMethod11 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`nodeId`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
@@ -697,6 +697,12 @@ internal interface UniffiCallbackInterfaceFileTransferListenerMethod12 : com.sun
 }
 internal interface UniffiCallbackInterfaceFileTransferListenerMethod13 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`transferId`: RustBuffer.ByValue,`state`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFileTransferListenerMethod14 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`connected`: Byte,`error`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceNotificationListenerMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`key`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 @Structure.FieldOrder("onClipboardUpdate", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceClipboardListener(
@@ -714,7 +720,7 @@ internal open class UniffiVTableCallbackInterfaceClipboardListener(
     }
 
 }
-@Structure.FieldOrder("onIncomingRequest", "onIncomingTransferStarted", "onOutgoingTransferStarted", "onTransferProgress", "onTransferComplete", "onTransferError", "onPeerAccepted", "onPeerRejected", "onPeerDisconnected", "onPeerConnected", "onPairingResult", "onAlreadyPaired", "onStalePairing", "onTransferStateChanged", "uniffiFree")
+@Structure.FieldOrder("onIncomingRequest", "onIncomingTransferStarted", "onOutgoingTransferStarted", "onTransferProgress", "onTransferComplete", "onTransferError", "onPeerAccepted", "onPeerRejected", "onPeerDisconnected", "onPeerConnected", "onPairingResult", "onAlreadyPaired", "onStalePairing", "onTransferStateChanged", "onRelayStatusChanged", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceFileTransferListener(
     @JvmField internal var `onIncomingRequest`: UniffiCallbackInterfaceFileTransferListenerMethod0? = null,
     @JvmField internal var `onIncomingTransferStarted`: UniffiCallbackInterfaceFileTransferListenerMethod1? = null,
@@ -730,6 +736,7 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
     @JvmField internal var `onAlreadyPaired`: UniffiCallbackInterfaceFileTransferListenerMethod11? = null,
     @JvmField internal var `onStalePairing`: UniffiCallbackInterfaceFileTransferListenerMethod12? = null,
     @JvmField internal var `onTransferStateChanged`: UniffiCallbackInterfaceFileTransferListenerMethod13? = null,
+    @JvmField internal var `onRelayStatusChanged`: UniffiCallbackInterfaceFileTransferListenerMethod14? = null,
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
 ) : Structure() {
     class UniffiByValue(
@@ -747,8 +754,9 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
         `onAlreadyPaired`: UniffiCallbackInterfaceFileTransferListenerMethod11? = null,
         `onStalePairing`: UniffiCallbackInterfaceFileTransferListenerMethod12? = null,
         `onTransferStateChanged`: UniffiCallbackInterfaceFileTransferListenerMethod13? = null,
+        `onRelayStatusChanged`: UniffiCallbackInterfaceFileTransferListenerMethod14? = null,
         `uniffiFree`: UniffiCallbackInterfaceFree? = null,
-    ): UniffiVTableCallbackInterfaceFileTransferListener(`onIncomingRequest`,`onIncomingTransferStarted`,`onOutgoingTransferStarted`,`onTransferProgress`,`onTransferComplete`,`onTransferError`,`onPeerAccepted`,`onPeerRejected`,`onPeerDisconnected`,`onPeerConnected`,`onPairingResult`,`onAlreadyPaired`,`onStalePairing`,`onTransferStateChanged`,`uniffiFree`,), Structure.ByValue
+    ): UniffiVTableCallbackInterfaceFileTransferListener(`onIncomingRequest`,`onIncomingTransferStarted`,`onOutgoingTransferStarted`,`onTransferProgress`,`onTransferComplete`,`onTransferError`,`onPeerAccepted`,`onPeerRejected`,`onPeerDisconnected`,`onPeerConnected`,`onPairingResult`,`onAlreadyPaired`,`onStalePairing`,`onTransferStateChanged`,`onRelayStatusChanged`,`uniffiFree`,), Structure.ByValue
 
    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceFileTransferListener) {
         `onIncomingRequest` = other.`onIncomingRequest`
@@ -765,10 +773,36 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
         `onAlreadyPaired` = other.`onAlreadyPaired`
         `onStalePairing` = other.`onStalePairing`
         `onTransferStateChanged` = other.`onTransferStateChanged`
+        `onRelayStatusChanged` = other.`onRelayStatusChanged`
         `uniffiFree` = other.`uniffiFree`
     }
 
 }
+@Structure.FieldOrder("onRemoteDismissRequest", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceNotificationListener(
+    @JvmField internal var `onRemoteDismissRequest`: UniffiCallbackInterfaceNotificationListenerMethod0? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `onRemoteDismissRequest`: UniffiCallbackInterfaceNotificationListenerMethod0? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceNotificationListener(`onRemoteDismissRequest`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceNotificationListener) {
+        `onRemoteDismissRequest` = other.`onRemoteDismissRequest`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
+}
+
+
+
+
+
+
+
+
+
 
 
 
@@ -940,6 +974,7 @@ internal interface UniffiLib : Library {
                 uniffiCheckApiChecksums(lib)
                 uniffiCallbackInterfaceClipboardListener.register(lib)
                 uniffiCallbackInterfaceFileTransferListener.register(lib)
+                uniffiCallbackInterfaceNotificationListener.register(lib)
                 }
         }
         
@@ -948,6 +983,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_init_callback_vtable_clipboardlistener(`vtable`: UniffiVTableCallbackInterfaceClipboardListener,
     ): Unit
     fun uniffi_cdus_ffi_fn_init_callback_vtable_filetransferlistener(`vtable`: UniffiVTableCallbackInterfaceFileTransferListener,
+    ): Unit
+    fun uniffi_cdus_ffi_fn_init_callback_vtable_notificationlistener(`vtable`: UniffiVTableCallbackInterfaceNotificationListener,
     ): Unit
     fun uniffi_cdus_ffi_fn_func_accept_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1013,11 +1050,17 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_send_file(`nodeId`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_fn_func_send_notification_dismiss(`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_send_notification_mirror(`key`: RustBuffer.ByValue,`packageName`: RustBuffer.ByValue,`appName`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`timestamp`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_cdus_ffi_fn_func_set_clipboard_item_local_only(`id`: Long,`localOnly`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_set_clipboard_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_set_file_transfer_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_set_notification_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_set_telemetry_opt_in(`optIn`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1209,11 +1252,17 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_send_file(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_send_notification_dismiss(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_send_notification_mirror(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_set_clipboard_item_local_only(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_set_clipboard_listener(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_set_file_transfer_listener(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_set_notification_listener(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_set_telemetry_opt_in(
     ): Short
@@ -1258,6 +1307,10 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_stale_pairing(
     ): Short
     fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_transfer_state_changed(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_relay_status_changed(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_method_notificationlistener_on_remote_dismiss_request(
     ): Short
     fun ffi_cdus_ffi_uniffi_contract_version(
     ): Int
@@ -1372,6 +1425,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_send_file() != 7051.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_send_notification_dismiss() != 43923.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_send_notification_mirror() != 35553.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_set_clipboard_item_local_only() != 1021.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1379,6 +1438,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_set_file_transfer_listener() != 44860.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_set_notification_listener() != 35194.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_set_telemetry_opt_in() != 18079.toShort()) {
@@ -1435,7 +1497,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_peer_connected() != 13798.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_pairing_result() != 17589.toShort()) {
+    if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_pairing_result() != 49506.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_already_paired() != 17752.toShort()) {
@@ -1445,6 +1507,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_transfer_state_changed() != 32309.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_relay_status_changed() != 14396.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_method_notificationlistener_on_remote_dismiss_request() != 25989.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1823,6 +1891,54 @@ public object FfiConverterTypeDiscoveredDevice: FfiConverterRustBuffer<Discovere
 
 
 
+data class FfiNotificationPayload (
+    var `key`: kotlin.String, 
+    var `packageName`: kotlin.String, 
+    var `appName`: kotlin.String, 
+    var `title`: kotlin.String, 
+    var `text`: kotlin.String, 
+    var `timestamp`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiNotificationPayload: FfiConverterRustBuffer<FfiNotificationPayload> {
+    override fun read(buf: ByteBuffer): FfiNotificationPayload {
+        return FfiNotificationPayload(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiNotificationPayload) = (
+            FfiConverterString.allocationSize(value.`key`) +
+            FfiConverterString.allocationSize(value.`packageName`) +
+            FfiConverterString.allocationSize(value.`appName`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterString.allocationSize(value.`text`) +
+            FfiConverterULong.allocationSize(value.`timestamp`)
+    )
+
+    override fun write(value: FfiNotificationPayload, buf: ByteBuffer) {
+            FfiConverterString.write(value.`key`, buf)
+            FfiConverterString.write(value.`packageName`, buf)
+            FfiConverterString.write(value.`appName`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterString.write(value.`text`, buf)
+            FfiConverterULong.write(value.`timestamp`, buf)
+    }
+}
+
+
+
 data class FfiSearchResult (
     var `id`: kotlin.String, 
     var `itemType`: kotlin.String, 
@@ -2124,13 +2240,15 @@ public interface FileTransferListener {
     
     fun `onPeerConnected`(`nodeId`: kotlin.String)
     
-    fun `onPairingResult`(`success`: kotlin.Boolean, `nodeId`: kotlin.String, `label`: kotlin.String)
+    fun `onPairingResult`(`success`: kotlin.Boolean, `nodeId`: kotlin.String, `label`: kotlin.String, `error`: kotlin.String?)
     
     fun `onAlreadyPaired`(`nodeId`: kotlin.String, `label`: kotlin.String)
     
     fun `onStalePairing`(`nodeId`: kotlin.String, `label`: kotlin.String)
     
     fun `onTransferStateChanged`(`transferId`: kotlin.String, `state`: kotlin.String)
+    
+    fun `onRelayStatusChanged`(`connected`: kotlin.Boolean, `error`: kotlin.String?)
     
     companion object
 }
@@ -2273,13 +2391,14 @@ internal object uniffiCallbackInterfaceFileTransferListener {
         }
     }
     internal object `onPairingResult`: UniffiCallbackInterfaceFileTransferListenerMethod10 {
-        override fun callback(`uniffiHandle`: Long,`success`: Byte,`nodeId`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+        override fun callback(`uniffiHandle`: Long,`success`: Byte,`nodeId`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,`error`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
             val uniffiObj = FfiConverterTypeFileTransferListener.handleMap.get(uniffiHandle)
             val makeCall = { ->
                 uniffiObj.`onPairingResult`(
                     FfiConverterBoolean.lift(`success`),
                     FfiConverterString.lift(`nodeId`),
                     FfiConverterString.lift(`label`),
+                    FfiConverterOptionalString.lift(`error`),
                 )
             }
             val writeReturn = { _: Unit -> Unit }
@@ -2325,6 +2444,19 @@ internal object uniffiCallbackInterfaceFileTransferListener {
             uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
         }
     }
+    internal object `onRelayStatusChanged`: UniffiCallbackInterfaceFileTransferListenerMethod14 {
+        override fun callback(`uniffiHandle`: Long,`connected`: Byte,`error`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFileTransferListener.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onRelayStatusChanged`(
+                    FfiConverterBoolean.lift(`connected`),
+                    FfiConverterOptionalString.lift(`error`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
 
     internal object uniffiFree: UniffiCallbackInterfaceFree {
         override fun callback(handle: Long) {
@@ -2347,6 +2479,7 @@ internal object uniffiCallbackInterfaceFileTransferListener {
         `onAlreadyPaired`,
         `onStalePairing`,
         `onTransferStateChanged`,
+        `onRelayStatusChanged`,
         uniffiFree,
     )
 
@@ -2363,6 +2496,59 @@ internal object uniffiCallbackInterfaceFileTransferListener {
  * @suppress
  */
 public object FfiConverterTypeFileTransferListener: FfiConverterCallbackInterface<FileTransferListener>()
+
+
+
+
+
+public interface NotificationListener {
+    
+    fun `onRemoteDismissRequest`(`key`: kotlin.String)
+    
+    companion object
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceNotificationListener {
+    internal object `onRemoteDismissRequest`: UniffiCallbackInterfaceNotificationListenerMethod0 {
+        override fun callback(`uniffiHandle`: Long,`key`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeNotificationListener.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onRemoteDismissRequest`(
+                    FfiConverterString.lift(`key`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeNotificationListener.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceNotificationListener.UniffiByValue(
+        `onRemoteDismissRequest`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_cdus_ffi_fn_init_callback_vtable_notificationlistener(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypeNotificationListener: FfiConverterCallbackInterface<NotificationListener>()
 
 
 
@@ -2889,6 +3075,22 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
 }
     
     
+ fun `sendNotificationDismiss`(`key`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_send_notification_dismiss(
+        FfiConverterString.lower(`key`),_status)
+}
+    
+    
+ fun `sendNotificationMirror`(`key`: kotlin.String, `packageName`: kotlin.String, `appName`: kotlin.String, `title`: kotlin.String, `text`: kotlin.String, `timestamp`: kotlin.ULong)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_send_notification_mirror(
+        FfiConverterString.lower(`key`),FfiConverterString.lower(`packageName`),FfiConverterString.lower(`appName`),FfiConverterString.lower(`title`),FfiConverterString.lower(`text`),FfiConverterULong.lower(`timestamp`),_status)
+}
+    
+    
  fun `setClipboardItemLocalOnly`(`id`: kotlin.Long, `localOnly`: kotlin.Boolean)
         = 
     uniffiRustCall() { _status ->
@@ -2910,6 +3112,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_set_file_transfer_listener(
         FfiConverterTypeFileTransferListener.lower(`listener`),_status)
+}
+    
+    
+ fun `setNotificationListener`(`listener`: NotificationListener)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_set_notification_listener(
+        FfiConverterTypeNotificationListener.lower(`listener`),_status)
 }
     
     

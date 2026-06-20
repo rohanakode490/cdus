@@ -3,10 +3,15 @@ package io.cdus.app.ui.screens
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -84,14 +89,22 @@ fun DevicesScreen() {
 
     val context = LocalContext.current
     
-    // --- Mock Reconnection States ---
+    // --- Reconnection & Relay Dialog States ---
     val mockStates = remember { mutableStateMapOf<String, AndroidMockDeviceState>() }
+    var showRelayErrorDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    fun triggerMockConnect(deviceId: String, label: String) {
+    fun triggerActualConnect(deviceId: String) {
         mockStates[deviceId] = AndroidMockDeviceState("connecting", null, 0)
         scope.launch {
-            delay(10000)
+            try {
+                uniffi.cdus_ffi.initiatePairing(deviceId)
+            } catch (e: Exception) {
+                Logger.e("Manual reconnect error: ${e.message}")
+                mockStates[deviceId] = AndroidMockDeviceState("offline", null, 0)
+                return@launch
+            }
+            delay(15000)
             val state = mockStates[deviceId]
             if (state != null && state.status == "connecting") {
                 mockStates[deviceId] = AndroidMockDeviceState("offline", null, 0)
@@ -127,6 +140,15 @@ fun DevicesScreen() {
         selectedDeviceForFile = null
     }
 
+    DisposableEffect(isScanning) {
+        if (isScanning) {
+            io.cdus.app.CoreInitializer.acquireMulticastLock(context)
+        }
+        onDispose {
+            io.cdus.app.CoreInitializer.releaseMulticastLock()
+        }
+    }
+
     LaunchedEffect(isScanning) {
         if (isScanning) {
             clearDiscoveredDevices()
@@ -151,7 +173,7 @@ fun DevicesScreen() {
                 io.cdus.app.data.DeviceManager.updateLabels(devices)
                 errorMsg = null
                 
-                // Initialize mock states for devices and sync with real connectivity status
+                // Sync mock states for devices with real connectivity status
                 devices.forEach { device ->
                     val state = mockStates[device.nodeId]
                     if (device.isOnline) {
@@ -211,11 +233,82 @@ fun DevicesScreen() {
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Text(
-            text = "Devices",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
+        val isRelayConnected by remember { io.cdus.app.data.DeviceManager.isRelayConnected }
+        val relayError by remember { io.cdus.app.data.DeviceManager.relayError }
+
+        if (showRelayErrorDialog) {
+            AlertDialog(
+                onDismissRequest = { showRelayErrorDialog = false },
+                icon = { Icon(Icons.Default.CloudOff, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                title = { Text("Relay Offline") },
+                text = {
+                    Text(
+                        text = "CDUS lost connection to the remote relay server. Remote sync will be unavailable, but local network (LAN) sync will continue to function.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showRelayErrorDialog = false
+                        try {
+                            uniffi.cdus_ffi.connectRelay()
+                        } catch (e: Exception) {
+                            Logger.e("Failed to reconnect relay: ${e.message}")
+                        }
+                    }) {
+                        Text("Retry")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRelayErrorDialog = false }) {
+                        Text("Close")
+                    }
+                }
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "Devices",
+                style = MaterialTheme.typography.headlineMedium
+            )
+            
+            // Relay status badge
+            Surface(
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                color = if (isRelayConnected) androidx.compose.ui.graphics.Color(0xFFE2FBE8) else androidx.compose.ui.graphics.Color(0xFFFFEEF0),
+                modifier = Modifier.clickable {
+                    if (!isRelayConnected) {
+                        showRelayErrorDialog = true
+                    }
+                }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .background(
+                                color = if (isRelayConnected) androidx.compose.ui.graphics.Color.Green else androidx.compose.ui.graphics.Color.Red,
+                                shape = androidx.compose.foundation.shape.CircleShape
+                            )
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isRelayConnected) "Relay Connected" else "Relay Offline",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isRelayConnected) androidx.compose.ui.graphics.Color(0xFF1E7E34) else androidx.compose.ui.graphics.Color(0xFFD73A49),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
 
         // Paired Devices Section
         Text(
@@ -265,8 +358,7 @@ fun DevicesScreen() {
                         filePickerLauncher.launch("*/*")
                     },
                     onReconnectClick = {
-                        triggerMockConnect(device.nodeId, device.label)
-                        initiatePairing(device.nodeId)
+                        triggerActualConnect(device.nodeId)
                     },
                     onDisconnectClick = {
                         mockStates[device.nodeId] = AndroidMockDeviceState("offline", null, 0)
@@ -423,6 +515,7 @@ fun PairedDeviceItem(
     val dotColor = when (status) {
         "online" -> androidx.compose.ui.graphics.Color.Green
         "connecting" -> androidx.compose.ui.graphics.Color(0xFF2196F3)
+        "reconnecting" -> androidx.compose.ui.graphics.Color(0xFFFF9800)
         else -> androidx.compose.ui.graphics.Color.Gray
     }
 

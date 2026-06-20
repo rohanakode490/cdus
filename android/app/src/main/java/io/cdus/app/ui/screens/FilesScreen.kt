@@ -27,6 +27,8 @@ import io.cdus.app.data.TransferStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.cdus.app.utils.UIUtils
+import io.cdus.app.utils.Logger
 
 enum class SortOption(val label: String) {
     NEWEST("Newest First"),
@@ -193,6 +195,7 @@ fun FilesScreen() {
 fun TransferItem(transfer: FileTransferInfo) {
     val context = LocalContext.current
     var showMenu by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Card(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -226,7 +229,7 @@ fun TransferItem(transfer: FileTransferInfo) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(text = transfer.fileName, style = MaterialTheme.typography.bodyLarge)
                     if (transfer.status == TransferStatus.ERROR) {
-                        Text(text = transfer.error ?: "Unknown error", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        Text(text = UIUtils.sanitizeErrorMessage(transfer.error), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     } else if (transfer.status == TransferStatus.REJECTED) {
                         Text(text = "Declined", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                     } else if (transfer.status == TransferStatus.HASHING) {
@@ -337,6 +340,41 @@ fun TransferItem(transfer: FileTransferInfo) {
                         }
                     ) {
                         Text("Decline", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+
+            if (transfer.status == TransferStatus.ERROR) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(
+                        onClick = {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/rohanakode490/cdus/blob/main/docs/troubleshooting.md"))
+                            context.startActivity(intent)
+                        }
+                    ) {
+                        Text("Troubleshoot", color = MaterialTheme.colorScheme.outline)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    try {
+                                        uniffi.cdus_ffi.resumeFileTransfer(transfer.transferId)
+                                    } catch (e: Exception) {
+                                        Logger.e("Failed to resume transfer: ${e.message}")
+                                    }
+                                }
+                                FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.DOWNLOADING, progress = 0f, error = null))
+                            }
+                        }
+                    ) {
+                        Text("Retry")
                     }
                 }
             }

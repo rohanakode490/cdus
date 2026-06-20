@@ -15,6 +15,8 @@ import uniffi.cdus_ffi.FileTransferListener
 import uniffi.cdus_ffi.setFileTransferListener
 import uniffi.cdus_ffi.acceptFileTransfer
 import uniffi.cdus_ffi.rejectFileTransfer
+import uniffi.cdus_ffi.NotificationListener
+import uniffi.cdus_ffi.setNotificationListener
 import io.cdus.app.data.FileTransferManager
 import io.cdus.app.data.FileTransferInfo
 import io.cdus.app.data.TransferStatus
@@ -29,7 +31,7 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import java.io.ByteArrayOutputStream
 
-class SyncService : Service(), ClipboardListener, FileTransferListener {
+class SyncService : Service(), ClipboardListener, FileTransferListener, NotificationListener {
 
     companion object {
         const val ACTION_STOP_SERVICE = "io.cdus.app.service.STOP_SERVICE"
@@ -56,7 +58,13 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         clipboardManager.addPrimaryClipChangedListener(clipChangedListener)
         setClipboardListener(this)
         setFileTransferListener(this)
+        setNotificationListener(this)
         Logger.i("SyncService created and remote listeners added")
+    }
+
+    override fun onRemoteDismissRequest(key: String) {
+        Logger.i("Received remote dismiss request for key: $key")
+        CdusNotificationListenerService.cancelNotification(key)
     }
 
     private fun uriToBase64Png(uri: android.net.Uri): String? {
@@ -469,11 +477,23 @@ class SyncService : Service(), ClipboardListener, FileTransferListener {
         }
     }
 
-    override fun onPairingResult(success: Boolean, nodeId: String, label: String) {
-        Logger.i("Pairing result for $label ($nodeId): success=$success")
+    override fun onPairingResult(success: Boolean, nodeId: String, label: String, error: String?) {
+        Logger.i("Pairing result for $label ($nodeId): success=$success, error=$error")
         android.os.Handler(android.os.Looper.getMainLooper()).post {
-            val msg = if (success) "Pairing successful with $label" else "Pairing failed with $label"
-            android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+            val msg = if (success) {
+                "Pairing successful with $label"
+            } else {
+                "Pairing failed with $label: ${error ?: "timeout or rejection"}"
+            }
+            android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
+    override fun onRelayStatusChanged(connected: Boolean, error: String?) {
+        Logger.i("Relay status changed: connected=$connected, error=$error")
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            io.cdus.app.data.DeviceManager.isRelayConnected.value = connected
+            io.cdus.app.data.DeviceManager.relayError.value = error
         }
     }
 
