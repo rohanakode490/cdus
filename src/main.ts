@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { listen } from "@tauri-apps/api/event";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -39,6 +40,18 @@ let html5QrCode: Html5Qrcode | null = null;
 
 let currentOnboardingStep = 1;
 
+interface NotificationPayload {
+  key: string;
+  package_name: string;
+  app_name: string;
+  title: string;
+  text: string;
+  timestamp: number;
+}
+
+let activeNotifications: NotificationPayload[] = [];
+let notificationsLoaded = false;
+
 
 
 async function addAuditLog(type: "sync" | "pairing" | "system", content: string) {
@@ -53,35 +66,113 @@ async function addAuditLog(type: "sync" | "pairing" | "system", content: string)
   }
 }
 
-// --- Mock Reconnection State ---
+function sanitizeErrorMessage(err: string): string {
+  if (!err) return "";
+  let sanitized = err.replace(/https?:\/\/[^\s]+/g, "[URL]");
+  sanitized = sanitized.replace(/wss?:\/\/[^\s]+/g, "[URL]");
+  sanitized = sanitized.replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?\b/g, "[address]");
+  sanitized = sanitized.replace(/\b[0-9a-fA-F]{32,}\b/g, "[id]");
+  return sanitized;
+}
+
+// --- Error Recovery UI Modal ---
+function showErrorModal(
+  title: string,
+  message: string,
+  technicalDetails?: string,
+  retryAction?: () => void,
+  troubleshootingUrl?: string
+) {
+  const modal = document.querySelector("#error-modal") as HTMLElement;
+  const titleEl = document.querySelector("#error-modal-title") as HTMLElement;
+  const messageEl = document.querySelector("#error-modal-message") as HTMLElement;
+  const detailsContainer = document.querySelector("#error-modal-details-container") as HTMLElement;
+  const detailsEl = document.querySelector("#error-modal-details") as HTMLElement;
+  const troubleshootEl = document.querySelector("#error-modal-troubleshoot") as HTMLElement;
+  const closeBtn = document.querySelector("#error-modal-close") as HTMLElement;
+  const retryBtn = document.querySelector("#error-modal-retry") as HTMLElement;
+
+  if (!modal) return;
+
+  titleEl.textContent = title;
+  messageEl.textContent = message;
+
+  if (technicalDetails) {
+    detailsEl.textContent = sanitizeErrorMessage(technicalDetails);
+    detailsContainer.style.display = "block";
+  } else {
+    detailsContainer.style.display = "none";
+  }
+
+  if (troubleshootingUrl) {
+    troubleshootEl.setAttribute("href", troubleshootingUrl);
+    troubleshootEl.style.display = "inline-flex";
+  } else {
+    troubleshootEl.style.display = "none";
+  }
+
+  if (retryAction) {
+    retryBtn.style.display = "inline-block";
+    const newRetryBtn = retryBtn.cloneNode(true) as HTMLButtonElement;
+    retryBtn.parentNode?.replaceChild(newRetryBtn, retryBtn);
+    newRetryBtn.addEventListener("click", () => {
+      modal.classList.add("hidden");
+      retryAction();
+    });
+  } else {
+    retryBtn.style.display = "none";
+  }
+
+  const newCloseBtn = closeBtn.cloneNode(true) as HTMLButtonElement;
+  closeBtn.parentNode?.replaceChild(newCloseBtn, closeBtn);
+  newCloseBtn.addEventListener("click", () => {
+    modal.classList.add("hidden");
+  });
+
+  modal.classList.remove("hidden");
+}
+
+// Hook up the troubleshoot link click opening externally via plugin-opener
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelector("#error-modal-troubleshoot")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    const url = (e.currentTarget as HTMLElement).getAttribute("href");
+    if (url) {
+      openUrl(url).catch((err: any) => console.error("Failed to open URL:", err));
+    }
+  });
+});
+
+// --- Device Connection States ---
 interface MockDeviceState {
-  status: "online" | "offline" | "reconnecting" | "connecting";
+  status: "online" | "offline" | "connecting";
   transport: string | null;
-  countdown: number;
   timerId?: any;
 }
 const mockDeviceStates = new Map<string, MockDeviceState>();
 
-function triggerMockConnection(id: string) {
-  const s = mockDeviceStates.get(id);
-  if (!s) return;
+function triggerDeviceConnection(id: string) {
+  let s = mockDeviceStates.get(id);
+  if (!s) {
+    s = { status: "offline", transport: null };
+    mockDeviceStates.set(id, s);
+  }
   
   if (s.timerId) {
     clearTimeout(s.timerId);
   }
 
   s.status = "connecting";
-  s.countdown = 0;
   renderPairedDevices();
 
-  // Reset to offline if connection does not succeed within 10 seconds
+  // Reset to offline if connection does not succeed within 15 seconds
   s.timerId = setTimeout(() => {
     const current = mockDeviceStates.get(id);
     if (current && current.status === "connecting") {
       current.status = "offline";
       renderPairedDevices();
     }
-  }, 10000);
+  }, 15000);
 }
 
 
@@ -559,7 +650,7 @@ function renderFiles() {
           <span class="file-name">${transfer.fileName}</span>
           <span class="transfer-status-text ${transfer.status === "error" ? "error-text" : ""}">${transfer.status}</span>
         </div>
-        ${transfer.status === "error" ? `<div class="error-message">${transfer.error || "Unknown error"}</div>` : ""}
+        ${transfer.status === "error" ? `<div class="error-message">${sanitizeErrorMessage(transfer.error || "Unknown error")}</div>` : ""}
         <div class="progress-bar-container small">
           <div class="progress-bar" style="width: ${transfer.progress}%"></div>
         </div>
@@ -709,14 +800,15 @@ async function renderPairedDevices() {
       const row = document.createElement("div");
       row.className = "device-row";
       
-      // Get or initialize mock state
+      // Get or initialize state
       let mockState = mockDeviceStates.get(id);
       if (transport !== null) {
         if (!mockState || mockState.status !== "online" || mockState.transport !== transport) {
           if (mockState?.timerId) {
             clearInterval(mockState.timerId);
+            clearTimeout(mockState.timerId);
           }
-          mockState = { status: "online", transport, countdown: 0 };
+          mockState = { status: "online", transport };
           mockDeviceStates.set(id, mockState);
         }
       } else {
@@ -724,7 +816,7 @@ async function renderPairedDevices() {
           if (mockState?.timerId) {
             clearTimeout(mockState.timerId);
           }
-          mockState = { status: "offline", transport: null, countdown: 0 };
+          mockState = { status: "offline", transport: null };
           mockDeviceStates.set(id, mockState);
         }
       }
@@ -743,12 +835,6 @@ async function renderPairedDevices() {
         actionBtnHtml = `
           <button class="primary-btn send-file-btn" data-id="${id}">Send File</button>
           <button class="secondary-btn disconnect-btn" data-id="${id}" style="margin-left: 8px;">Disconnect</button>
-        `;
-      } else if (mockState.status === "reconnecting") {
-        statusClass = "reconnecting";
-        statusText = `Reconnecting in ${mockState.countdown}s...`;
-        actionBtnHtml = `
-          <button class="primary-btn reconnect-now-btn" data-id="${id}">Reconnect Now</button>
         `;
       } else if (mockState.status === "connecting") {
         statusClass = "connecting";
@@ -794,11 +880,18 @@ async function renderPairedDevices() {
       });
 
       row.querySelector(".reconnect-now-btn")?.addEventListener("click", async () => {
-        triggerMockConnection(id);
+        triggerDeviceConnection(id);
         try {
           await invoke("pair_with", { nodeId: id });
         } catch (err) {
           console.error("Failed to initiate connection:", err);
+          const s = mockDeviceStates.get(id);
+          if (s) {
+            if (s.timerId) clearTimeout(s.timerId);
+            s.status = "offline";
+            s.transport = null;
+            renderPairedDevices();
+          }
         }
       });
 
@@ -808,7 +901,6 @@ async function renderPairedDevices() {
           if (s.timerId) clearTimeout(s.timerId);
           s.status = "offline";
           s.transport = null;
-          s.countdown = 0;
           renderPairedDevices();
           addAuditLog("system", `Disconnected from device ${name}`);
           try {
@@ -1151,10 +1243,30 @@ window.addEventListener("DOMContentLoaded", () => {
         renderPairedDevices();
       } else if (targetViewId === "files") {
         renderFiles();
+      } else if (targetViewId === "notifications") {
+        renderNotifications();
       } else if (targetViewId === "audit") {
         renderAuditLogs();
       }
     });
+  });
+
+  document.querySelector("#clear-notifications-btn")?.addEventListener("click", async () => {
+    const keys = activeNotifications.map(n => n.key);
+    for (const key of keys) {
+      try {
+        await invoke("dismiss_notification", { key });
+      } catch (err) {
+        console.error("Failed to dismiss notification:", key, err);
+      }
+    }
+    activeNotifications = [];
+    renderNotifications();
+  });
+
+  document.querySelector("#retry-notifications-btn")?.addEventListener("click", () => {
+    notificationsLoaded = false;
+    renderNotifications();
   });
 
   const activeView = document.querySelector(".view.active");
@@ -1164,6 +1276,8 @@ window.addEventListener("DOMContentLoaded", () => {
     renderPairedDevices();
   } else if (activeView?.id === "view-files") {
     renderFiles();
+  } else if (activeView?.id === "view-notifications") {
+    renderNotifications();
   } else if (activeView?.id === "view-audit") {
     renderAuditLogs();
   }
@@ -1558,7 +1672,18 @@ window.addEventListener("DOMContentLoaded", () => {
 
   listen("file-transfer-error", (event: any) => {
     const [transferId, error] = event.payload;
-    alert(`Transfer failed: ${error}`);
+    
+    showErrorModal(
+      "File Transfer Failed",
+      "We couldn't complete the file transfer. Please make sure the other device is online, has CDUS open, and has enough storage space.",
+      error || "Unknown transfer error",
+      transferId ? () => {
+        invoke("resume_file_transfer", { transferId }).catch(err => {
+          console.error("Failed to resume transfer:", err);
+        });
+      } : undefined,
+      "https://github.com/rohanakode490/cdus/blob/main/docs/troubleshooting.md"
+    );
     hideProgressToast();
     
     const transfer = transfers.get(transferId);
@@ -1578,17 +1703,75 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   listen("pairing-result", (event: any) => {
-    const [success, _nodeId, label] = event.payload;
+    const [success, nodeId, label, error] = event.payload;
     if (success) {
       console.log(`Pairing successful with ${label}`);
       renderPairedDevices().then(() => {
         updateDiscoveryList();
       });
+      addAuditLog("pairing", `Successfully paired with device '${label}'`);
+    } else {
+      console.error(`Pairing failed with ${label}: ${error}`);
+      let userFriendlyMsg = "The pairing request failed. Please check the following:\n1. Make sure both devices are on the same network.\n2. Ensure the PIN code was entered correctly.\n3. Make sure CDUS is open and not blocked by a firewall.";
+      if (error && error.includes("timed out")) {
+        userFriendlyMsg = "Pairing timed out. The other device took too long to respond. Please make sure the app is running on both devices and try again.";
+      } else if (error && error.includes("rejected")) {
+        userFriendlyMsg = "Pairing was rejected by the remote device.";
+      }
+      
+      showErrorModal(
+        "Pairing Failed",
+        userFriendlyMsg,
+        error || "Unknown pairing error",
+        nodeId ? () => {
+          invoke("pair_with", { nodeId }).catch(err => {
+            console.error("Failed to retry pairing:", err);
+          });
+        } : undefined,
+        "https://github.com/rohanakode490/cdus/blob/main/docs/troubleshooting.md"
+      );
+    }
+  });
+
+  listen("relay-status", (event: any) => {
+    const [connected, _error] = event.payload;
+    const relayIndicator = document.querySelector("#relay-status-indicator");
+    if (relayIndicator) {
+      if (connected) {
+        relayIndicator.classList.remove("offline");
+        relayIndicator.classList.add("online");
+        relayIndicator.textContent = "Relay Connected";
+      } else {
+        relayIndicator.classList.remove("online");
+        relayIndicator.classList.add("offline");
+        relayIndicator.textContent = "Relay Offline";
+      }
     }
   });
 
   listen("peer-connected", (_event: any) => {
     renderPairedDevices();
+  });
+
+  listen("notification-mirrored", (event: any) => {
+    console.log("UI: Received notification-mirrored", event.payload);
+    const payload = event.payload;
+    activeNotifications = activeNotifications.filter(n => n.key !== payload.key);
+    activeNotifications.push(payload);
+    const notificationsView = document.querySelector("#view-notifications");
+    if (notificationsView?.classList.contains("active")) {
+      renderNotifications();
+    }
+  });
+
+  listen("notification-dismissed", (event: any) => {
+    console.log("UI: Received notification-dismissed", event.payload);
+    const key = event.payload;
+    activeNotifications = activeNotifications.filter(n => n.key !== key);
+    const notificationsView = document.querySelector("#view-notifications");
+    if (notificationsView?.classList.contains("active")) {
+      renderNotifications();
+    }
   });
 
   // Initial load
@@ -1957,5 +2140,107 @@ async function checkForUpdates() {
   } catch (err) {
     console.error("Failed to check for updates:", err);
   }
+}
+
+async function renderNotifications() {
+  const container = document.querySelector("#notifications-list-container");
+  const listEl = document.querySelector("#notifications-list");
+  const emptyEl = document.querySelector("#notifications-empty");
+  const loadingEl = document.querySelector("#notifications-loading");
+  const errorEl = document.querySelector("#notifications-error");
+
+  if (!container || !listEl || !emptyEl || !loadingEl || !errorEl) return;
+
+  // Show loading state if not loaded yet
+  if (!notificationsLoaded) {
+    loadingEl.classList.remove("hidden");
+    listEl.innerHTML = "";
+    emptyEl.classList.add("hidden");
+    errorEl.classList.add("hidden");
+    
+    try {
+      const active: any = await invoke("get_active_notifications");
+      activeNotifications = active;
+      notificationsLoaded = true;
+    } catch (err) {
+      console.error("Failed to load active notifications:", err);
+      loadingEl.classList.add("hidden");
+      errorEl.classList.remove("hidden");
+      return;
+    }
+  }
+
+  loadingEl.classList.add("hidden");
+  errorEl.classList.add("hidden");
+  listEl.innerHTML = "";
+
+  if (activeNotifications.length === 0) {
+    emptyEl.classList.remove("hidden");
+    return;
+  }
+
+  emptyEl.classList.add("hidden");
+
+  // Sort by timestamp descending
+  const sorted = [...activeNotifications].sort((a, b) => b.timestamp - a.timestamp);
+
+  sorted.forEach((notif) => {
+    const cardEl = document.createElement("div");
+    cardEl.className = "notification-card";
+    
+    const formattedTime = new Date(notif.timestamp).toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    const headerEl = document.createElement("div");
+    headerEl.className = "notification-card-header";
+    
+    const appEl = document.createElement("span");
+    appEl.className = "notification-app-name";
+    appEl.textContent = notif.app_name || notif.package_name;
+    
+    const timeEl = document.createElement("span");
+    timeEl.className = "notification-time";
+    timeEl.textContent = formattedTime;
+    
+    headerEl.appendChild(appEl);
+    headerEl.appendChild(timeEl);
+
+    const titleEl = document.createElement("div");
+    titleEl.className = "notification-title";
+    titleEl.textContent = notif.title || "";
+
+    const textEl = document.createElement("div");
+    textEl.className = "notification-text";
+    textEl.textContent = notif.text || "";
+
+    const actionsEl = document.createElement("div");
+    actionsEl.className = "notification-actions";
+
+    const dismissBtn = document.createElement("button");
+    dismissBtn.className = "dismiss-btn";
+    dismissBtn.textContent = "Dismiss";
+    dismissBtn.setAttribute("data-key", notif.key);
+    dismissBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await invoke("dismiss_notification", { key: notif.key });
+        activeNotifications = activeNotifications.filter(n => n.key !== notif.key);
+        renderNotifications();
+      } catch (err) {
+        console.error("Failed to dismiss notification:", err);
+      }
+    });
+
+    actionsEl.appendChild(dismissBtn);
+
+    cardEl.appendChild(headerEl);
+    cardEl.appendChild(titleEl);
+    cardEl.appendChild(textEl);
+    cardEl.appendChild(actionsEl);
+
+    listEl.appendChild(cardEl);
+  });
 }
 

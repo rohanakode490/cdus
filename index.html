@@ -14,15 +14,17 @@
     <aside id="sidebar">
       <div class="sidebar-header">
         <h1>CDUS</h1>
+        <div class="relay-status-pill offline" id="relay-status-indicator">Relay Offline</div>
       </div>
-      <nav>
-        <button class="nav-item active" data-view="devices">Devices</button>
-        <button class="nav-item" data-view="clipboard">Clipboard</button>
-        <button class="nav-item" data-view="files">Files</button>
-        <button class="nav-item" data-view="audit">Audit Log</button>
-        <button class="nav-item" data-view="settings">Settings</button>
-        <button class="nav-item" id="sidebar-search-btn" style="margin-top: 10px; border-top: 1px solid rgba(0,0,0,0.05); padding-top: 15px;">🔍 Search <span class="shortcut-tag" style="font-size: 0.75rem; background: rgba(0,0,0,0.05); padding: 2px 6px; border-radius: 4px; float: right; font-family: monospace;">Ctrl+S</span></button>
-      </nav>
+        <nav>
+          <button class="nav-item active" data-view="devices">Devices</button>
+          <button class="nav-item" data-view="clipboard">Clipboard</button>
+          <button class="nav-item" data-view="files">Files</button>
+          <button class="nav-item" data-view="notifications">Notifications</button>
+          <button class="nav-item" data-view="audit">Audit Log</button>
+          <button class="nav-item" data-view="settings">Settings</button>
+          <button class="nav-item" id="sidebar-search-btn" style="margin-top: 10px; border-top: 1px solid rgba(0,0,0,0.05); padding-top: 15px;">🔍 Search <span class="shortcut-tag" style="font-size: 0.75rem; background: rgba(0,0,0,0.05); padding: 2px 6px; border-radius: 4px; float: right; font-family: monospace;">Ctrl+S</span></button>
+        </nav>
     </aside>
 
     <main id="content">
@@ -338,6 +340,29 @@
         </div>
       </div>
 
+      <div id="view-notifications" class="view">
+        <div class="header-with-action">
+          <h2>Notifications</h2>
+          <button id="clear-notifications-btn" class="secondary-btn">Clear All</button>
+        </div>
+        <div id="notifications-loading" class="loading-state-container hidden">
+          <div class="spinner"></div>
+          <p>Loading notifications...</p>
+        </div>
+        <div id="notifications-error" class="error-state-container hidden">
+          <p class="error-message">Failed to load notifications.</p>
+          <button id="retry-notifications-btn" class="secondary-btn">Retry</button>
+        </div>
+        <div id="notifications-list-container">
+          <div id="notifications-list"></div>
+          <div id="notifications-empty" class="empty-state-container">
+            <p class="empty-state">
+              No active mirrored notifications from your phone.
+            </p>
+          </div>
+        </div>
+      </div>
+
       <div id="view-audit" class="view">
         <div class="header-with-action">
           <div class="header-main">
@@ -571,6 +596,26 @@
       <div class="modal-actions">
         <button id="feedback-cancel-btn" class="secondary-btn">Cancel</button>
         <button id="feedback-submit-btn" class="primary-btn">Submit Feedback</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error Recovery Modal -->
+  <div id="error-modal" class="modal hidden">
+    <div class="modal-content error-modal-content" style="width: 420px;">
+      <div class="error-modal-header" style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px; width: 100%;">
+        <span class="error-icon" style="font-size: 1.8rem; color: #f44336;">⚠️</span>
+        <h3 id="error-modal-title" style="margin: 0; font-size: 1.3rem;">Error Occurred</h3>
+      </div>
+      <p id="error-modal-message" style="margin-bottom: 20px; font-size: 0.95rem; color: #333; line-height: 1.5; text-align: left; width: 100%;"></p>
+      <div id="error-modal-details-container" style="margin-bottom: 20px; text-align: left; display: none; width: 100%;">
+        <span style="font-size: 0.75rem; font-weight: bold; color: #666; text-transform: uppercase; letter-spacing: 0.5px;">Technical Details</span>
+        <pre id="error-modal-details" style="margin-top: 5px; padding: 10px; background: #f5f5f5; border: 1px solid #ddd; border-radius: 6px; font-family: monospace; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; word-break: break-all; max-height: 120px; color: #333; box-sizing: border-box; width: 100%;"></pre>
+      </div>
+      <div class="modal-actions" style="display: flex; gap: 10px; justify-content: flex-end; width: 100%; margin-top: 10px;">
+        <a id="error-modal-troubleshoot" href="#" class="secondary-btn text-center" style="display: inline-flex; align-items: center; justify-content: center; text-decoration: none;" target="_blank">Troubleshoot</a>
+        <button id="error-modal-close" class="secondary-btn">Close</button>
+        <button id="error-modal-retry" class="primary-btn">Retry</button>
       </div>
     </div>
   </div>

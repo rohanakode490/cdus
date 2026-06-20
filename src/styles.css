@@ -1950,3 +1950,159 @@ input[type="text"] {
   color: #c62828 !important;
 }
 
+/* Relay Status Pill & Error Modal Styles */
+.relay-status-pill {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-weight: 600;
+  margin-top: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.relay-status-pill.online {
+  background-color: #e2fbe8;
+  color: #1e7e34;
+}
+
+.relay-status-pill.offline {
+  background-color: #ffeef0;
+  color: #d73a49;
+}
+
+@media (prefers-color-scheme: dark) {
+  .relay-status-pill.online {
+    background-color: #1b3a24;
+    color: #85e294;
+  }
+  .relay-status-pill.offline {
+    background-color: #441d22;
+    color: #fdaeb7;
+  }
+  .error-modal-content {
+    background-color: #262626 !important;
+    color: #eee !important;
+  }
+  #error-modal-details {
+    background: #1e1e1e !important;
+    border-color: #444 !important;
+    color: #eee !important;
+  }
+}
+
+/* --- Notification Mirroring --- */
+#notifications-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.notification-card {
+  background-color: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.notification-card:hover {
+  border-color: #24c8db;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.notification-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.notification-app-name {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #666;
+  letter-spacing: 0.05em;
+  background: #f0f0f0;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.notification-time {
+  font-size: 0.75rem;
+  color: #999;
+}
+
+.notification-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #111;
+}
+
+.notification-text {
+  font-size: 0.9rem;
+  color: #444;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.notification-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.notification-actions .dismiss-btn {
+  background-color: transparent;
+  color: #d32f2f;
+  border: 1px solid #ffcdd2;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.notification-actions .dismiss-btn:hover {
+  background-color: #ffebee;
+  border-color: #d32f2f;
+}
+
+/* Dark mode overrides for notifications */
+@media (prefers-color-scheme: dark) {
+  .notification-card {
+    background-color: #262626;
+    border-color: #444;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  }
+  .notification-card:hover {
+    border-color: #24c8db;
+  }
+  .notification-app-name {
+    background: #333;
+    color: #aaa;
+  }
+  .notification-title {
+    color: #fff;
+  }
+  .notification-text {
+    color: #ccc;
+  }
+  .notification-actions .dismiss-btn {
+    color: #ef5350;
+    border-color: #5c2528;
+  }
+  .notification-actions .dismiss-btn:hover {
+    background-color: #3d1c1e;
+    border-color: #ef5350;
+  }
+}
+
+

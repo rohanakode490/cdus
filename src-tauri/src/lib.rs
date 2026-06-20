@@ -45,6 +45,26 @@ fn send_ipc_message(msg: IpcMessage) -> Result<IpcMessage, String> {
     serde_json::from_slice(&buffer).map_err(|e| format!("Failed to parse response: {}", e))
 }
 
+#[tauri::command]
+fn get_active_notifications() -> Result<Vec<cdus_common::NotificationPayload>, String> {
+    let msg = IpcMessage::GetActiveNotifications;
+    match send_ipc_message(msg)? {
+        IpcMessage::ActiveNotificationsResponse(list) => Ok(list),
+        IpcMessage::Log(err) => Err(err),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+fn dismiss_notification(key: String) -> Result<String, String> {
+    let msg = IpcMessage::DismissNotification { key };
+    match send_ipc_message(msg)? {
+        IpcMessage::NotificationDismissed { key } => Ok(key),
+        IpcMessage::Log(msg) => Ok(msg),
+        response => Ok(format!("{:?}", response)),
+    }
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -822,9 +842,21 @@ pub fn run() {
                                                 let _ = app_handle_events
                                                     .emit("peer-connected", node_id);
                                             }
-                                            IpcMessage::PairingResult { success, node_id, label } => {
+                                            IpcMessage::PairingResult { success, node_id, label, error } => {
                                                 let _ = app_handle_events
-                                                    .emit("pairing-result", (success, node_id, label));
+                                                    .emit("pairing-result", (success, node_id, label, error));
+                                            }
+                                            IpcMessage::RelayStatus { connected, error } => {
+                                                let _ = app_handle_events
+                                                    .emit("relay-status", (connected, error));
+                                            }
+                                            IpcMessage::NotificationMirrored(payload) => {
+                                                let _ = app_handle_events
+                                                    .emit("notification-mirrored", payload);
+                                            }
+                                            IpcMessage::NotificationDismissed { key } => {
+                                                let _ = app_handle_events
+                                                    .emit("notification-dismissed", key);
                                             }
                                             _ => {}
                                         }
@@ -841,6 +873,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            get_active_notifications,
+            dismiss_notification,
             search,
             submit_feedback,
             set_telemetry_opt_in,
