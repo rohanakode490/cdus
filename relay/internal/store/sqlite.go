@@ -21,9 +21,16 @@ func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Enable WAL mode for better concurrency
+	// Limit to a single connection to serialize writes
+	db.SetMaxOpenConns(1)
+
+	// Enable WAL mode for concurrency
 	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
 		return nil, fmt.Errorf("failed to enable WAL: %w", err)
+	}
+	// Enable busy timeout to wait for locks
+	if _, err := db.Exec("PRAGMA busy_timeout=5000;"); err != nil {
+		return nil, fmt.Errorf("failed to enable busy_timeout: %w", err)
 	}
 
 	s := &SQLiteStore{db: db}
