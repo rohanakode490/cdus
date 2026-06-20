@@ -38,6 +38,7 @@ android/app/src/main/jniLibs/**/*.so
 
 # Relay artifacts
 relay/cdus-relay
+relay/load-test
 relay/*.db
 
 agent_data*/
