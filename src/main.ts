@@ -1872,9 +1872,17 @@ window.addEventListener("DOMContentLoaded", () => {
 
   let searchTimeout: any = null;
   let activeSearchResults: any[] = [];
+  let recentSearchQueries: string[] = JSON.parse(localStorage.getItem("recent_searches") || "[]");
 
-  function renderSearchResults(results: any[]) {
-    const mappedItems = results.map(item => ({
+  function addRecentSearch(query: string) {
+    if (!query || query.trim().length < 2) return;
+    const cleanQuery = query.trim();
+    recentSearchQueries = [cleanQuery, ...recentSearchQueries.filter(q => q !== cleanQuery)].slice(0, 5);
+    localStorage.setItem("recent_searches", JSON.stringify(recentSearchQueries));
+  }
+
+  function renderSearchResults(results: any[], query: string) {
+    activeSearchResults = results.map(item => ({
       id: item.id,
       type: item.item_type,
       text: item.title,
@@ -1882,26 +1890,83 @@ window.addEventListener("DOMContentLoaded", () => {
       hint: item.item_type === "clipboard" ? "Press Enter to Copy" : (item.item_type === "file" ? "Press Enter to Show in Folder" : "Press Enter to Action")
     }));
 
-    activeSearchResults = mappedItems;
+    searchResultsList!.innerHTML = "";
 
-    if (mappedItems.length === 0) {
+    const previewPane = document.querySelector("#search-preview-pane");
+    if (previewPane) {
+      previewPane.innerHTML = `<div class="preview-placeholder">Select an item to see preview</div>`;
+    }
+
+    if (query === "" && recentSearchQueries.length > 0) {
+      const recentGroupDiv = document.createElement("div");
+      recentGroupDiv.className = "results-group recent-searches-group";
+      
+      const titleDiv = document.createElement("div");
+      titleDiv.className = "group-title";
+      titleDiv.style.display = "flex";
+      titleDiv.style.justifyContent = "space-between";
+      titleDiv.style.alignItems = "center";
+      titleDiv.innerHTML = `
+        <span>Recent Searches</span>
+        <button id="clear-recent-searches-btn" style="background:none; border:none; color:#00838f; cursor:pointer; font-size:0.7rem; font-weight:600; padding:0; outline:none;">Clear All</button>
+      `;
+      recentGroupDiv.appendChild(titleDiv);
+
+      const listDiv = document.createElement("div");
+      listDiv.className = "recent-queries-list";
+      listDiv.style.display = "flex";
+      listDiv.style.flexWrap = "wrap";
+      listDiv.style.gap = "8px";
+      listDiv.style.padding = "4px 20px 12px";
+
+      recentSearchQueries.forEach(q => {
+        const queryBadge = document.createElement("span");
+        queryBadge.className = "query-badge";
+        queryBadge.textContent = q;
+        queryBadge.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (globalSearchInput) {
+            globalSearchInput.value = q;
+            performSearch(q);
+          }
+        });
+        listDiv.appendChild(queryBadge);
+      });
+
+      recentGroupDiv.appendChild(listDiv);
+      searchResultsList?.appendChild(recentGroupDiv);
+
+      // Wire clear button
+      const clearBtn = titleDiv.querySelector("#clear-recent-searches-btn");
+      clearBtn?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        recentSearchQueries = [];
+        localStorage.removeItem("recent_searches");
+        performSearch(""); // Rerender
+      });
+    }
+
+    if (activeSearchResults.length === 0) {
       searchLoading?.classList.add("hidden");
-      searchResultsList?.classList.add("hidden");
-      searchEmpty?.classList.remove("hidden");
+      if (query !== "") {
+        searchResultsList?.classList.add("hidden");
+        searchEmpty?.classList.remove("hidden");
+      } else {
+        searchResultsList?.classList.remove("hidden");
+      }
       return;
     }
 
     searchEmpty?.classList.add("hidden");
     searchResultsList?.classList.remove("hidden");
-    searchResultsList!.innerHTML = "";
 
-    const groups: Record<string, typeof mappedItems> = {
+    const groups: Record<string, typeof activeSearchResults> = {
       clipboard: [],
       file: [],
       device: []
     };
 
-    mappedItems.forEach(item => {
+    activeSearchResults.forEach(item => {
       if (groups[item.type]) {
         groups[item.type].push(item);
       }
@@ -1930,6 +1995,7 @@ window.addEventListener("DOMContentLoaded", () => {
         itemDiv.setAttribute("data-id", item.id);
         itemDiv.setAttribute("data-type", item.type);
         itemDiv.setAttribute("tabindex", "0");
+        (itemDiv as any)._searchItem = item;
 
         const icon = item.type === "clipboard" ? "📋" : (item.type === "file" ? (item.text.endsWith(".png") ? "🖼️" : "📄") : "💻");
         
@@ -1946,15 +2012,23 @@ window.addEventListener("DOMContentLoaded", () => {
           triggerResultAction(item);
         });
 
+        // Hover selection to dynamically update preview
+        itemDiv.addEventListener("mouseenter", () => {
+          searchResultsList?.querySelectorAll(".result-item").forEach(i => i.classList.remove("selected"));
+          itemDiv.classList.add("selected");
+          updatePreviewPane(itemDiv);
+        });
+
         groupDiv.appendChild(itemDiv);
       });
 
       searchResultsList?.appendChild(groupDiv);
     });
 
-    const firstItem = searchResultsList?.querySelector(".result-item");
+    const firstItem = searchResultsList?.querySelector(".result-item") as HTMLElement;
     if (firstItem) {
       firstItem.classList.add("selected");
+      updatePreviewPane(firstItem);
     }
   }
 
@@ -1965,11 +2039,10 @@ window.addEventListener("DOMContentLoaded", () => {
     searchError?.classList.add("hidden");
 
     if (query.trim() === "") {
-      // Execute instantly for empty query (recent items) to avoid loading flash
       searchLoading?.classList.add("hidden");
       invoke("search", { query: "" })
         .then((results: any) => {
-          renderSearchResults(results);
+          renderSearchResults(results, "");
         })
         .catch(err => {
           console.error("Initial search failed:", err);
@@ -1983,7 +2056,7 @@ window.addEventListener("DOMContentLoaded", () => {
         try {
           const results: any[] = await invoke("search", { query });
           searchLoading?.classList.add("hidden");
-          renderSearchResults(results);
+          renderSearchResults(results, query);
         } catch (err) {
           console.error("Search failed:", err);
           searchLoading?.classList.add("hidden");
@@ -1993,6 +2066,184 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  async function updatePreviewPane(itemElement: HTMLElement) {
+    const previewPane = document.querySelector("#search-preview-pane");
+    if (!previewPane) return;
+
+    const item = (itemElement as any)._searchItem;
+    if (!item) {
+      previewPane.innerHTML = `<div class="preview-placeholder">Select an item to see preview</div>`;
+      return;
+    }
+
+    if (item.type === "clipboard") {
+      let isRich = false;
+      let displayHtml = "";
+      
+      try {
+        const parsed = JSON.parse(item.text);
+        if (parsed && parsed.type === "image") {
+          isRich = true;
+          displayHtml = `
+            <div class="preview-title">Image Clipboard</div>
+            <div style="margin-top: 8px; text-align:center;">
+              <img src="${parsed.data}" class="preview-image" alt="Clipboard Image" />
+            </div>
+            <div class="preview-meta-row" style="margin-top: 10px;">
+              <div class="preview-meta-item">
+                <span class="preview-meta-label">Type:</span>
+                <span>PNG Image</span>
+              </div>
+              <div class="preview-meta-item" style="flex-direction:column; align-items:flex-start;">
+                <span class="preview-meta-label">Origin:</span>
+                <span style="font-size:0.75rem; color:#666;">${item.meta}</span>
+              </div>
+            </div>
+          `;
+        } else if (parsed && parsed.type === "url") {
+          isRich = true;
+          const faviconHtml = parsed.favicon 
+            ? `<img src="${parsed.favicon}" style="width:16px; height:16px; object-fit:contain; border-radius:2px;" alt="" />`
+            : `🌐`;
+          displayHtml = `
+            <div class="preview-title" style="display:flex; align-items:center; gap:6px;">
+              ${faviconHtml}
+              <span>Link Metadata</span>
+            </div>
+            <div class="preview-meta-row" style="margin-top: 8px;">
+              <div class="preview-meta-item" style="flex-direction:column; gap:2px; align-items:flex-start;">
+                <span class="preview-meta-label">Title:</span>
+                <span style="font-weight: 500; font-size: 0.82rem;">${parsed.title}</span>
+              </div>
+              <div class="preview-meta-item" style="flex-direction:column; gap:2px; align-items:flex-start;">
+                <span class="preview-meta-label">URL:</span>
+                <a href="${parsed.url}" target="_blank" style="word-break:break-all; font-size:0.75rem; color:#00838f;" onclick="event.stopPropagation()">${parsed.url}</a>
+              </div>
+              <div class="preview-meta-item" style="flex-direction:column; align-items:flex-start;">
+                <span class="preview-meta-label">Origin:</span>
+                <span style="font-size:0.75rem; color:#666;">${item.meta}</span>
+              </div>
+            </div>
+          `;
+        }
+      } catch (e) {
+        // Not JSON
+      }
+
+      if (!isRich) {
+        const charCount = item.text.length;
+        const wordCount = item.text.split(/\s+/).filter(Boolean).length;
+        
+        displayHtml = `
+          <div class="preview-title">Text Clipboard</div>
+          <div class="preview-meta-row">
+            <div class="preview-meta-item">
+              <span class="preview-meta-label">Characters:</span>
+              <span>${charCount}</span>
+            </div>
+            <div class="preview-meta-item">
+              <span class="preview-meta-label">Words:</span>
+              <span>${wordCount}</span>
+            </div>
+            <div class="preview-meta-item" style="flex-direction:column; align-items:flex-start; gap:2px;">
+              <span class="preview-meta-label">Source Details:</span>
+              <span style="font-size:0.75rem; color:#666;">${item.meta}</span>
+            </div>
+          </div>
+          <div class="preview-body-container">
+            <div class="preview-text-snippet">${escapeHtml(item.text)}</div>
+          </div>
+        `;
+      }
+
+      previewPane.innerHTML = displayHtml;
+
+    } else if (item.type === "file") {
+      previewPane.innerHTML = `
+        <div class="preview-title">${escapeHtml(item.text)}</div>
+        <div class="preview-meta-row">
+          <div class="preview-meta-item" style="flex-direction:column; align-items:flex-start; gap:2px;">
+            <span class="preview-meta-label">Transfer Details:</span>
+            <span style="font-size:0.75rem; color:#666;">${item.meta}</span>
+          </div>
+          <div class="preview-meta-item" id="file-path-row" style="display:none; flex-direction:column; align-items:flex-start; gap:2px; margin-top: 4px; width:100%;">
+            <span class="preview-meta-label">Local Path:</span>
+            <span id="file-path-val" style="font-size:0.75rem; font-family:monospace; word-break:break-all; background:rgba(0,0,0,0.03); padding:4px 6px; border-radius:4px; width:100%;">Loading path...</span>
+          </div>
+        </div>
+        <div class="preview-body-container" id="file-snippet-container" style="display:none; width:100%;">
+          <div class="preview-text-snippet" id="file-snippet-val">Loading snippet...</div>
+        </div>
+      `;
+
+      try {
+        const history: any[] = await invoke("get_file_transfer_history", { limit: 1000 });
+        const record = history.find(r => r.transfer_id === item.id);
+        
+        if (record) {
+          const pathRow = previewPane.querySelector("#file-path-row") as HTMLElement;
+          const pathVal = previewPane.querySelector("#file-path-val") as HTMLElement;
+          
+          if (record.file_path) {
+            if (pathRow) pathRow.style.display = "flex";
+            if (pathVal) pathVal.textContent = record.file_path;
+            
+            if (record.status === "complete" && record.file_path !== "/dev/null") {
+              try {
+                const snippet: string = await invoke("read_text_preview", { filePath: record.file_path });
+                const snippetContainer = previewPane.querySelector("#file-snippet-container") as HTMLElement;
+                const snippetVal = previewPane.querySelector("#file-snippet-val") as HTMLElement;
+                
+                if (snippetContainer && snippetVal) {
+                  if (snippet === "Binary file content") {
+                    if (record.file_name.endsWith(".png") || record.file_name.endsWith(".jpg") || record.file_name.endsWith(".jpeg") || record.file_name.endsWith(".webp")) {
+                      snippetContainer.style.display = "block";
+                      const src = convertFileSrc(record.file_path);
+                      snippetVal.innerHTML = `<img src="${src}" class="preview-image" alt="Image Preview" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" /><span style="display:none; font-style:italic;">Image preview failed</span>`;
+                    } else {
+                      snippetContainer.style.display = "block";
+                      snippetVal.textContent = "Binary file (Preview unavailable)";
+                      snippetVal.style.fontStyle = "italic";
+                      snippetVal.style.color = "#888";
+                    }
+                  } else {
+                    snippetContainer.style.display = "block";
+                    snippetVal.textContent = snippet;
+                    snippetVal.style.fontStyle = "normal";
+                    snippetVal.style.color = "";
+                  }
+                }
+              } catch (e) {
+                console.error("Failed to read text snippet:", e);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch file details for preview:", err);
+      }
+
+    } else if (item.type === "device") {
+      previewPane.innerHTML = `
+        <div class="preview-title">${escapeHtml(item.text)}</div>
+        <div class="preview-meta-row">
+          <div class="preview-meta-item" style="flex-direction:column; align-items:flex-start; gap:2px;">
+            <span class="preview-meta-label">Device Connection:</span>
+            <span>${item.meta}</span>
+          </div>
+        </div>
+      `;
+    }
+  }
+
+  function convertFileSrc(filePath: string): string {
+    if ((window as any).__TAURI_INTERNALS__ && (window as any).__TAURI_INTERNALS__.convertFileSrc) {
+      return (window as any).__TAURI_INTERNALS__.convertFileSrc(filePath);
+    }
+    const encoded = encodeURIComponent(filePath).replace(/%2F/g, '/').replace(/%5C/g, '/');
+    return `http://asset.localhost/${encoded}`;
+  }
+
   function escapeHtml(text: string): string {
     const div = document.createElement("div");
     div.textContent = text;
@@ -2000,6 +2251,11 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   async function triggerResultAction(item: any) {
+    const currentQuery = globalSearchInput?.value || "";
+    if (currentQuery.trim().length >= 2) {
+      addRecentSearch(currentQuery);
+    }
+
     if (item.type === "clipboard") {
       try {
         await invoke("set_clipboard", { content: item.text });
@@ -2043,6 +2299,7 @@ window.addEventListener("DOMContentLoaded", () => {
       }
       items[selectedIndex].classList.add("selected");
       items[selectedIndex].scrollIntoView({ block: "nearest" });
+      updatePreviewPane(items[selectedIndex]);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       if (selectedIndex !== -1) {
@@ -2053,6 +2310,7 @@ window.addEventListener("DOMContentLoaded", () => {
       }
       items[selectedIndex].classList.add("selected");
       items[selectedIndex].scrollIntoView({ block: "nearest" });
+      updatePreviewPane(items[selectedIndex]);
     } else if (e.key === "Enter") {
       if (selectedIndex !== -1) {
         e.preventDefault();
