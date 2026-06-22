@@ -476,7 +476,7 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                     // These are already handled by the SEPARATE progress forwarder thread spawned above
                                     // But we could also handle them here if we didn't have that.
                                 }
-                                IpcMessage::DismissNotification { key } => {
+                                IpcMessage::DismissNotification { key } | IpcMessage::NotificationDismissed { key } => {
                                     if let Some(listener) = NOTIFICATION_LISTENER.lock().unwrap().as_ref() {
                                         listener.on_remote_dismiss_request(key);
                                     }
@@ -1051,7 +1051,7 @@ pub fn send_notification_mirror(
     text: String,
     timestamp: u64,
 ) {
-    if let Some(agent_tx) = AGENT_TX.lock().unwrap().as_ref() {
+    if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
         let payload = cdus_common::NotificationPayload {
             key,
             package_name,
@@ -1060,14 +1060,14 @@ pub fn send_notification_mirror(
             text,
             timestamp,
         };
-        let _ = agent_tx.send(IpcMessage::NotificationMirrored(payload));
+        pm.sync_manager.broadcast(SyncMessage::NotificationMirror(payload));
     }
 }
 
 #[uniffi::export]
 pub fn send_notification_dismiss(key: String) {
-    if let Some(agent_tx) = AGENT_TX.lock().unwrap().as_ref() {
-        let _ = agent_tx.send(IpcMessage::NotificationDismissed { key });
+    if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+        pm.sync_manager.broadcast(SyncMessage::NotificationDismiss { key });
     }
 }
 
