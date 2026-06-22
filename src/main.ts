@@ -1870,114 +1870,127 @@ window.addEventListener("DOMContentLoaded", () => {
     performSearch(query);
   });
 
-  // Mock search data
-  const mockSearchData = [
-    { id: "c1", type: "clipboard", text: "https://github.com/google/gemini", meta: "synced from Pixel 8 • 5 mins ago", hint: "Press Enter to Copy" },
-    { id: "c2", type: "clipboard", text: "curl -sSL https://get.docker.com | sh", meta: "synced from Ubuntu Server • 1 hour ago", hint: "Press Enter to Copy" },
-    { id: "c3", type: "clipboard", text: "ssh rohanakode@192.168.29.127", meta: "synced from Macbook Pro • 4 hours ago", hint: "Press Enter to Copy" },
-    { id: "f1", type: "file", text: "cdus-architecture-spec.pdf", meta: "Size: 4.2 MB • sent to Pixel 8 • 2 hours ago", hint: "Press Enter to Show in Folder" },
-    { id: "f2", type: "file", text: "screenshot_2026-06-15.png", meta: "Size: 856 KB • received from Macbook Pro • Yesterday", hint: "Press Enter to Show in Folder" },
-    { id: "d1", type: "device", text: "Macbook Pro (Online)", meta: "OS: macOS • Connection: direct", hint: "Press Enter to Action" },
-    { id: "d2", type: "device", text: "Pixel 8 (Online)", meta: "OS: Android • Connection: direct", hint: "Press Enter to Action" }
-  ];
-
   let searchTimeout: any = null;
+  let activeSearchResults: any[] = [];
+
+  function renderSearchResults(results: any[]) {
+    const mappedItems = results.map(item => ({
+      id: item.id,
+      type: item.item_type,
+      text: item.title,
+      meta: item.subtitle,
+      hint: item.item_type === "clipboard" ? "Press Enter to Copy" : (item.item_type === "file" ? "Press Enter to Show in Folder" : "Press Enter to Action")
+    }));
+
+    activeSearchResults = mappedItems;
+
+    if (mappedItems.length === 0) {
+      searchLoading?.classList.add("hidden");
+      searchResultsList?.classList.add("hidden");
+      searchEmpty?.classList.remove("hidden");
+      return;
+    }
+
+    searchEmpty?.classList.add("hidden");
+    searchResultsList?.classList.remove("hidden");
+    searchResultsList!.innerHTML = "";
+
+    const groups: Record<string, typeof mappedItems> = {
+      clipboard: [],
+      file: [],
+      device: []
+    };
+
+    mappedItems.forEach(item => {
+      if (groups[item.type]) {
+        groups[item.type].push(item);
+      }
+    });
+
+    const typeLabels: Record<string, string> = {
+      clipboard: "Clipboard History",
+      file: "Files",
+      device: "Devices"
+    };
+
+    Object.entries(groups).forEach(([type, items]) => {
+      if (items.length === 0) return;
+
+      const groupDiv = document.createElement("div");
+      groupDiv.className = "results-group";
+      
+      const titleDiv = document.createElement("div");
+      titleDiv.className = "group-title";
+      titleDiv.textContent = typeLabels[type];
+      groupDiv.appendChild(titleDiv);
+
+      items.forEach(item => {
+        const itemDiv = document.createElement("div");
+        itemDiv.className = "result-item";
+        itemDiv.setAttribute("data-id", item.id);
+        itemDiv.setAttribute("data-type", item.type);
+        itemDiv.setAttribute("tabindex", "0");
+
+        const icon = item.type === "clipboard" ? "📋" : (item.type === "file" ? (item.text.endsWith(".png") ? "🖼️" : "📄") : "💻");
+        
+        itemDiv.innerHTML = `
+          <div class="result-icon">${icon}</div>
+          <div class="result-main">
+            <div class="result-text">${escapeHtml(item.text)}</div>
+            <div class="result-meta">${item.meta}</div>
+          </div>
+          <div class="result-action-hint">${item.hint}</div>
+        `;
+
+        itemDiv.addEventListener("click", () => {
+          triggerResultAction(item);
+        });
+
+        groupDiv.appendChild(itemDiv);
+      });
+
+      searchResultsList?.appendChild(groupDiv);
+    });
+
+    const firstItem = searchResultsList?.querySelector(".result-item");
+    if (firstItem) {
+      firstItem.classList.add("selected");
+    }
+  }
+
   function performSearch(query: string) {
     if (searchTimeout) clearTimeout(searchTimeout);
     
-    searchLoading?.classList.remove("hidden");
-    searchResultsList?.classList.add("hidden");
     searchEmpty?.classList.add("hidden");
     searchError?.classList.add("hidden");
 
-    searchTimeout = setTimeout(async () => {
-      try {
-        const results: any[] = await invoke("search", { query });
-        searchLoading?.classList.add("hidden");
-
-        const mappedItems = results.map(item => ({
-          id: item.id,
-          type: item.item_type,
-          text: item.title,
-          meta: item.subtitle,
-          hint: item.item_type === "clipboard" ? "Press Enter to Copy" : (item.item_type === "file" ? "Press Enter to Show in Folder" : "Press Enter to Action")
-        }));
-
-        if (mappedItems.length === 0) {
-          searchEmpty?.classList.remove("hidden");
-          return;
-        }
-
-        searchResultsList?.classList.remove("hidden");
-        searchResultsList!.innerHTML = "";
-
-        const groups: Record<string, typeof mappedItems> = {
-          clipboard: [],
-          file: [],
-          device: []
-        };
-
-        mappedItems.forEach(item => {
-          if (groups[item.type]) {
-            groups[item.type].push(item);
-          }
+    if (query.trim() === "") {
+      // Execute instantly for empty query (recent items) to avoid loading flash
+      searchLoading?.classList.add("hidden");
+      invoke("search", { query: "" })
+        .then((results: any) => {
+          renderSearchResults(results);
+        })
+        .catch(err => {
+          console.error("Initial search failed:", err);
+          searchError?.classList.remove("hidden");
         });
+    } else {
+      searchLoading?.classList.remove("hidden");
+      searchResultsList?.classList.add("hidden");
 
-        const typeLabels: Record<string, string> = {
-          clipboard: "Clipboard History",
-          file: "Files",
-          device: "Devices"
-        };
-
-        Object.entries(groups).forEach(([type, items]) => {
-          if (items.length === 0) return;
-
-          const groupDiv = document.createElement("div");
-          groupDiv.className = "results-group";
-          
-          const titleDiv = document.createElement("div");
-          titleDiv.className = "group-title";
-          titleDiv.textContent = typeLabels[type];
-          groupDiv.appendChild(titleDiv);
-
-          items.forEach(item => {
-            const itemDiv = document.createElement("div");
-            itemDiv.className = "result-item";
-            itemDiv.setAttribute("data-id", item.id);
-            itemDiv.setAttribute("data-type", item.type);
-            itemDiv.setAttribute("tabindex", "0");
-
-            const icon = item.type === "clipboard" ? "📋" : (item.type === "file" ? (item.text.endsWith(".png") ? "🖼️" : "📄") : "💻");
-            
-            itemDiv.innerHTML = `
-              <div class="result-icon">${icon}</div>
-              <div class="result-main">
-                <div class="result-text">${escapeHtml(item.text)}</div>
-                <div class="result-meta">${item.meta}</div>
-              </div>
-              <div class="result-action-hint">${item.hint}</div>
-            `;
-
-            itemDiv.addEventListener("click", () => {
-              triggerResultAction(item);
-            });
-
-            groupDiv.appendChild(itemDiv);
-          });
-
-          searchResultsList?.appendChild(groupDiv);
-        });
-
-        const firstItem = searchResultsList?.querySelector(".result-item");
-        if (firstItem) {
-          firstItem.classList.add("selected");
+      searchTimeout = setTimeout(async () => {
+        try {
+          const results: any[] = await invoke("search", { query });
+          searchLoading?.classList.add("hidden");
+          renderSearchResults(results);
+        } catch (err) {
+          console.error("Search failed:", err);
+          searchLoading?.classList.add("hidden");
+          searchError?.classList.remove("hidden");
         }
-      } catch (err) {
-        console.error("Search failed:", err);
-        searchLoading?.classList.add("hidden");
-        searchError?.classList.remove("hidden");
-      }
-    }, 150);
+      }, 150);
+    }
   }
 
   function escapeHtml(text: string): string {
@@ -2024,23 +2037,27 @@ window.addEventListener("DOMContentLoaded", () => {
       e.preventDefault();
       if (selectedIndex !== -1) {
         items[selectedIndex].classList.remove("selected");
+        selectedIndex = (selectedIndex + 1) % items.length;
+      } else {
+        selectedIndex = 0;
       }
-      selectedIndex = (selectedIndex + 1) % items.length;
       items[selectedIndex].classList.add("selected");
       items[selectedIndex].scrollIntoView({ block: "nearest" });
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       if (selectedIndex !== -1) {
         items[selectedIndex].classList.remove("selected");
+        selectedIndex = (selectedIndex - 1 + items.length) % items.length;
+      } else {
+        selectedIndex = items.length - 1;
       }
-      selectedIndex = (selectedIndex - 1 + items.length) % items.length;
       items[selectedIndex].classList.add("selected");
       items[selectedIndex].scrollIntoView({ block: "nearest" });
     } else if (e.key === "Enter") {
       if (selectedIndex !== -1) {
         e.preventDefault();
         const selectedId = items[selectedIndex].getAttribute("data-id");
-        const item = mockSearchData.find(i => i.id === selectedId);
+        const item = activeSearchResults.find(i => i.id === selectedId);
         if (item) {
           triggerResultAction(item);
         }
