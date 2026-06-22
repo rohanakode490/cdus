@@ -442,6 +442,43 @@ fn common_history_to_tauri(history: Vec<cdus_common::FileTransferRecord>) -> Vec
 }
 
 #[tauri::command]
+fn read_text_preview(file_path: String) -> Result<String, String> {
+    use std::fs::File;
+    use std::io::Read;
+
+    let path = std::path::Path::new(&file_path);
+    if !path.exists() {
+        return Err("File not found".to_string());
+    }
+
+    let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if metadata.len() > 10 * 1024 * 1024 {
+        return Ok("File is too large to preview (>10MB)".to_string());
+    }
+
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let mut buffer = vec![0; 500];
+    let bytes_read = file.read(&mut buffer).map_err(|e| e.to_string())?;
+
+    if bytes_read == 0 {
+        return Ok("Empty file".to_string());
+    }
+
+    match String::from_utf8(buffer[..bytes_read].to_vec()) {
+        Ok(text) => {
+            let mut preview = text;
+            if preview.len() >= 500 {
+                preview.push_str("...");
+            }
+            Ok(preview)
+        }
+        Err(_) => {
+            Ok("Binary file content".to_string())
+        }
+    }
+}
+
+#[tauri::command]
 async fn start_benchmark(node_id: String) -> Result<String, String> {
     let msg = IpcMessage::StartBenchmark { node_id };
     match send_ipc_message(msg)? {
@@ -913,7 +950,8 @@ pub fn run() {
             pair_with_qr,
             read_system_clipboard,
             broadcast_clipboard,
-            open_file_location
+            open_file_location,
+            read_text_preview
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
