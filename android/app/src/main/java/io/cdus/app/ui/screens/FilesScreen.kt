@@ -29,6 +29,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import io.cdus.app.utils.UIUtils
 import io.cdus.app.utils.Logger
+import io.cdus.app.utils.FileUtils
 
 enum class SortOption(val label: String) {
     NEWEST("Newest First"),
@@ -292,6 +293,22 @@ fun TransferItem(transfer: FileTransferInfo) {
                                     )
                                 }
                                 TransferStatus.COMPLETE, TransferStatus.ERROR, TransferStatus.REJECTED -> {
+                                    if (transfer.status == TransferStatus.COMPLETE) {
+                                        DropdownMenuItem(
+                                            text = { Text("Open File") },
+                                            onClick = {
+                                                showMenu = false
+                                                FileUtils.openFile(context, transfer.fileName)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Show in Folder") },
+                                            onClick = {
+                                                showMenu = false
+                                                FileUtils.openFileLocation(context, transfer.fileName)
+                                            }
+                                        )
+                                    }
                                     DropdownMenuItem(
                                         text = { Text("Dismiss") },
                                         onClick = {

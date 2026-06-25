@@ -84,15 +84,20 @@ class MainActivity : ComponentActivity() {
                     val content = clipData.getItemAt(0).coerceToText(this).toString()
                     if (content.isNotEmpty()) {
                         val sharedPref = getSharedPreferences("cdus_settings", Context.MODE_PRIVATE)
-                        if (sharedPref.getBoolean("clipboard_sync", false)) {
-                            // Only broadcast if it's new
-                            val lastHash = sharedPref.getString("last_clip_hash", "")
-                            val currentHash = content.hashCode().toString()
-                            if (currentHash != lastHash) {
-                                sharedPref.edit().putString("last_clip_hash", currentHash).apply()
+                        val lastHash = sharedPref.getString("last_clip_hash", "")
+                        val currentHash = content.hashCode().toString()
+                        if (currentHash != lastHash) {
+                            sharedPref.edit().putString("last_clip_hash", currentHash).apply()
+                            val syncEnabled = sharedPref.getBoolean("clipboard_sync", false)
+                            if (syncEnabled) {
                                 Logger.i("New clipboard content detected on resume, broadcasting")
                                 lifecycleScope.launch(Dispatchers.IO) {
                                     uniffi.cdus_ffi.broadcastClipboard(content)
+                                }
+                            } else {
+                                Logger.i("New clipboard content detected on resume, saving locally only")
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    uniffi.cdus_ffi.saveClipboardLocal(content)
                                 }
                             }
                         }

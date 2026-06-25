@@ -141,13 +141,6 @@ fun SettingsScreen() {
                         onCheckedChange = { enabled ->
                             isSyncEnabled = enabled
                             sharedPref.edit().putBoolean("clipboard_sync", enabled).apply()
-                            
-                            val intent = Intent(context, SyncService::class.java)
-                            if (enabled) {
-                                ContextCompat.startForegroundService(context, intent)
-                            } else {
-                                context.stopService(intent)
-                            }
                         }
                     )
                 }

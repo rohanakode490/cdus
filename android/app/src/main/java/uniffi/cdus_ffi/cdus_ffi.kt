@@ -962,6 +962,8 @@ internal open class UniffiVTableCallbackInterfaceNotificationListener(
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -1045,6 +1047,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_reject_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_resume_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_save_clipboard_local(`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_search(`query`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1248,6 +1252,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_resume_file_transfer(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_save_clipboard_local(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_search(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_send_file(
@@ -1417,6 +1423,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_resume_file_transfer() != 13935.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_save_clipboard_local() != 13978.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_search() != 35355.toShort()) {
@@ -3055,6 +3064,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_resume_file_transfer(
         FfiConverterString.lower(`transferId`),_status)
+}
+    
+    
+ fun `saveClipboardLocal`(`content`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_save_clipboard_local(
+        FfiConverterString.lower(`content`),_status)
 }
     
     
