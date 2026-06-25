@@ -1169,4 +1169,86 @@ mod tests {
             assert_eq!(map.len(), 0);
         }
     }
+
+    #[test]
+    fn test_unlock_clipboard_item_broadcast() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::init(dir.path()).unwrap());
+        let (tx, _rx) = flume::unbounded();
+        let lw = Arc::new(Mutex::new(None));
+        let dd = Arc::new(Mutex::new(Vec::new()));
+        let ap = Arc::new(Mutex::new(None));
+        let sm = Arc::new(SyncManager::new());
+        let tm = Arc::new(TurnManager::new().unwrap());
+        let peer_map = Arc::new(Mutex::new(HashMap::new()));
+
+        let (p_tx, _p_rx) = flume::unbounded();
+        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
+        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
+
+        let (relay, _) = RelayManager::new(
+            "test".to_string(),
+            "http://localhost".to_string(),
+            tx.clone(),
+        );
+        let pm = Arc::new(PairingManager::new(
+            Arc::clone(&store),
+            tx.clone(),
+            "test".to_string(),
+            vec![],
+            0,
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::new(relay),
+            tm,
+            lm.clone(),
+        ));
+        let lpt = Arc::new(Mutex::new(0u64));
+
+        // Append a clipboard item and set it as local_only = true
+        let payload = "Secret Password".to_string();
+        let _ = store.append_event(payload.as_bytes(), "Local").unwrap();
+        let history = store.get_recent_events(1).unwrap();
+        let item_id = history[0].id;
+        store.set_local_only(item_id, true).unwrap();
+
+        // Register a mock peer to SyncManager to receive the broadcasted update
+        let (peer_tx, peer_rx) = flume::unbounded();
+        sm.add_peer("peer1".to_string(), peer_tx, TransportType::P2p);
+
+        // Simulate unlocking the clipboard item
+        let (tx_in, rx_in) = flume::unbounded();
+        tx_in.send(IpcMessage::ToggleLocalOnly { id: item_id, local_only: false }).unwrap();
+
+        // Run daemon loop
+        daemon_loop(
+            tx.clone(),
+            rx_in,
+            Some(1),
+            Arc::clone(&store),
+            Arc::clone(&lw),
+            Arc::clone(&dd),
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::clone(&pm),
+            Arc::clone(&lpt),
+            peer_map.clone(),
+            None,
+            lm.clone(),
+        );
+
+        // Verify the database event status is updated to local_only = false
+        let history = store.get_recent_events(1).unwrap();
+        assert!(!history[0].local_only);
+
+        // Verify that SyncMessage::ClipboardUpdate was broadcasted to our peer
+        let received_msg = peer_rx.recv_timeout(std::time::Duration::from_millis(500)).unwrap();
+        match received_msg {
+            SyncMessage::ClipboardUpdate { content, timestamp } => {
+                assert_eq!(content, payload);
+                assert!(timestamp > 0);
+            }
+            _ => panic!("Expected ClipboardUpdate message"),
+        }
+    }
 }

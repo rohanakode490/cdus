@@ -261,7 +261,6 @@ impl Libp2pManager {
 
     pub fn start(&self, sync_manager: Arc<SyncManager>) {
         *self.sync_manager.write() = Some(Arc::clone(&sync_manager));
-        let sync_manager_clone = Arc::clone(&sync_manager);
         let runtime = Arc::clone(&self.runtime);
         let runtime_for_pool = Arc::clone(&self.runtime);
         let keypair = self.keypair.clone();
@@ -350,8 +349,8 @@ impl Libp2pManager {
                         incoming = incoming_streams.next() => {
                             if let Some((peer, stream)) = incoming {
                                 info!("Incoming file stream from {}", peer);
-                                if !sync_manager_clone.is_connected(&peer.to_string()) {
-                                    error!("Incoming file stream rejected: Peer {} is disconnected", peer);
+                                if !matches!(store.is_device_paired(&peer.to_string()), Ok(true)) {
+                                    error!("Incoming file stream rejected: Peer {} is not paired", peer);
                                     continue;
                                 }
                                 let store_clone = Arc::clone(&store);
@@ -429,41 +428,37 @@ impl Libp2pManager {
                                         }
                                         CdusBehaviourEvent::Gossipsub(gossipsub::Event::Message { propagation_source, message, .. }) => {
                                             if let Ok(sync_msg) = SyncMessage::from_slice(&message.data) {
-                                                // Verify peer is paired and connected
+                                                // Verify peer is paired
                                                 if let Ok(true) = store.is_device_paired(&propagation_source.to_string()) {
-                                                    if sync_manager_clone.is_connected(&propagation_source.to_string()) {
-                                                        match sync_msg {
-                                                            SyncMessage::ClipboardUpdate { content, timestamp } => {
-                                                                let _ = tx.send(IpcMessage::SetClipboard {
-                                                                    content,
-                                                                    timestamp,
-                                                                    source: format!("libp2p:{}", propagation_source)
-                                                                });
-                                                            }
-                                                            SyncMessage::NotificationMirror(payload) => {
-                                                                let _ = tx.send(IpcMessage::NotificationMirrored(payload));
-                                                            }
-                                                            SyncMessage::NotificationDismiss { key } => {
-                                                                let _ = tx.send(IpcMessage::NotificationDismissed { key });
-                                                            }
-                                                            SyncMessage::PeerExchange { peers } => {
-                                                                info!("Received PEX via Gossipsub from {} ({} peers)", propagation_source, peers.len());
-                                                                for peer_rec in peers {
-                                                                    if let Ok(peer_id) = peer_rec.node_id.parse::<libp2p::PeerId>() {
-                                                                        for addr_str in peer_rec.addresses {
-                                                                            if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
-                                                                                swarm.add_peer_address(peer_id, addr);
-                                                                            }
+                                                    match sync_msg {
+                                                        SyncMessage::ClipboardUpdate { content, timestamp } => {
+                                                            let _ = tx.send(IpcMessage::SetClipboard {
+                                                                content,
+                                                                timestamp,
+                                                                source: format!("libp2p:{}", propagation_source)
+                                                            });
+                                                        }
+                                                        SyncMessage::NotificationMirror(payload) => {
+                                                            let _ = tx.send(IpcMessage::NotificationMirrored(payload));
+                                                        }
+                                                        SyncMessage::NotificationDismiss { key } => {
+                                                            let _ = tx.send(IpcMessage::NotificationDismissed { key });
+                                                        }
+                                                        SyncMessage::PeerExchange { peers } => {
+                                                            info!("Received PEX via Gossipsub from {} ({} peers)", propagation_source, peers.len());
+                                                            for peer_rec in peers {
+                                                                if let Ok(peer_id) = peer_rec.node_id.parse::<libp2p::PeerId>() {
+                                                                    for addr_str in peer_rec.addresses {
+                                                                        if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                                                                            swarm.add_peer_address(peer_id, addr);
                                                                         }
                                                                     }
                                                                 }
                                                             }
-                                                            SyncMessage::Disconnect => {
-                                                                info!("Received Disconnect request over Gossipsub from {}", propagation_source);
-                                                            }
                                                         }
-                                                    } else {
-                                                        info!("Ignoring Gossipsub message from disconnected peer {}", propagation_source);
+                                                        SyncMessage::Disconnect => {
+                                                            info!("Received Disconnect request over Gossipsub from {}", propagation_source);
+                                                        }
                                                     }
                                                 }
                                             }
@@ -553,11 +548,9 @@ impl Libp2pManager {
     }
 
     pub fn open_file_stream(&self, peer_id: PeerId) -> Result<crate::file_transfer::Libp2pFileStream> {
-        let is_connected = self.sync_manager.read().as_ref()
-            .map(|sm| sm.is_connected(&peer_id.to_string()))
-            .unwrap_or(false);
-        if !is_connected {
-            return Err(anyhow::anyhow!("Cannot open stream: Peer {} is disconnected", peer_id));
+        let is_paired = matches!(self.store.is_device_paired(&peer_id.to_string()), Ok(true));
+        if !is_paired {
+            return Err(anyhow::anyhow!("Cannot open stream: Peer {} is not paired", peer_id));
         }
 
         let control = self.stream_control.lock().clone()

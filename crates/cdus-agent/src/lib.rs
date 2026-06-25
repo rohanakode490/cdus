@@ -80,6 +80,19 @@ pub fn daemon_loop(
                     info!("Toggling local_only to {} for event {}", local_only, id);
                     if let Err(e) = store.set_local_only(id, local_only) {
                         error!("Failed to toggle local_only: {}", e);
+                    } else if !local_only {
+                        if let Ok(Some(event)) = store.get_event_by_id(id) {
+                            let timestamp = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64;
+                            let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
+                            let _ = store.set_state("last_clipboard_content", &event.content);
+                            sync_manager.broadcast(SyncMessage::ClipboardUpdate {
+                                content: event.content,
+                                timestamp,
+                            });
+                        }
                     }
                     if let Ok(history) = store.get_recent_events(50) {
                         broadcast_event(IpcMessage::HistoryResponse(history));

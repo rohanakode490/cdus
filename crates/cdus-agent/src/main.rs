@@ -1085,6 +1085,20 @@ fn main() {
                                         IpcMessage::ToggleLocalOnly { id, local_only } => {
                                             match store_clone.set_local_only(id, local_only) {
                                                 Ok(_) => {
+                                                    if !local_only {
+                                                        if let Ok(Some(event)) = store_clone.get_event_by_id(id) {
+                                                            let timestamp = std::time::SystemTime::now()
+                                                                .duration_since(std::time::UNIX_EPOCH)
+                                                                .unwrap_or_default()
+                                                                .as_millis() as u64;
+                                                            let _ = store_clone.set_state("last_sync_timestamp", &timestamp.to_string());
+                                                            let _ = store_clone.set_state("last_clipboard_content", &event.content);
+                                                            sync_manager_ipc.broadcast(SyncMessage::ClipboardUpdate {
+                                                                content: event.content,
+                                                                timestamp,
+                                                            });
+                                                        }
+                                                    }
                                                     let resp_bytes = serde_json::to_vec(
                                                         &IpcMessage::Log("Clipboard local_only toggled".to_string()),
                                                     )

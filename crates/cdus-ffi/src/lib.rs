@@ -640,6 +640,23 @@ pub fn get_clipboard_history(limit: u32) -> Vec<ClipboardHistoryItem> {
 pub fn set_clipboard_item_local_only(id: i64, local_only: bool) {
     if let Some(store) = STORE.lock().unwrap().as_ref() {
         let _ = store.set_local_only(id, local_only);
+        if !local_only {
+            if let Ok(Some(event)) = store.get_event_by_id(id) {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
+                let _ = store.set_state("last_clipboard_content", &event.content);
+                if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+                    pm.sync_manager
+                        .broadcast(SyncMessage::ClipboardUpdate {
+                            content: event.content,
+                            timestamp,
+                        });
+                }
+            }
+        }
     }
 }
 
@@ -681,21 +698,41 @@ pub fn broadcast_clipboard(content: String) {
     if content.trim().is_empty() {
         return;
     }
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    // Save to local store first (unconditionally so it shows in local history)
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let _ = store.append_event(content.as_bytes(), "Local");
+        let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
+        let _ = store.set_state("last_clipboard_content", &content);
+    }
+
+    // Broadcast if actively paired
     if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-
-        // Save to local store first
-        if let Some(store) = STORE.lock().unwrap().as_ref() {
-            let _ = store.append_event(content.as_bytes(), "Local");
-            let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
-            let _ = store.set_state("last_clipboard_content", &content);
-        }
-
         pm.sync_manager
             .broadcast(SyncMessage::ClipboardUpdate { content, timestamp });
+    }
+}
+
+#[uniffi::export]
+pub fn save_clipboard_local(content: String) {
+    if content.trim().is_empty() {
+        return;
+    }
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        if let Ok(hash) = store.append_event(content.as_bytes(), "Local") {
+            let _ = store.mark_event_local_only_by_hash(&hash, true);
+        }
+        let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
+        let _ = store.set_state("last_clipboard_content", &content);
     }
 }
 

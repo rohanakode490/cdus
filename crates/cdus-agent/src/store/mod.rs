@@ -1116,11 +1116,49 @@ impl Store {
         Ok(events)
     }
 
+    pub fn get_event_by_id(&self, id: i64) -> Result<Option<ClipboardEvent>> {
+        let conn = self.events_conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, payload, source, timestamp, local_only FROM events WHERE id = ?",
+        )?;
+        let mut event_iter = stmt.query_map([id], |row| {
+            let payload: Vec<u8> = row.get(1)?;
+            let content = String::from_utf8(payload)
+                .unwrap_or_else(|_| "[invalid utf8]".to_string());
+            let is_sensitive = cdus_common::is_sensitive_content(&content);
+            let local_only: bool = row.get(4)?;
+            Ok(ClipboardEvent {
+                id: row.get(0)?,
+                content,
+                source: row.get(2)?,
+                timestamp: row.get(3)?,
+                is_sensitive,
+                local_only,
+            })
+        })?;
+
+        if let Some(event) = event_iter.next() {
+            let ev = event?;
+            Ok(Some(ev))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn set_local_only(&self, id: i64, local_only: bool) -> Result<()> {
         let conn = self.events_conn.lock();
         conn.execute(
             "UPDATE events SET local_only = ?1 WHERE id = ?2",
             (local_only as i32, id),
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_event_local_only_by_hash(&self, hash: &str, local_only: bool) -> Result<()> {
+        let conn = self.events_conn.lock();
+        conn.execute(
+            "UPDATE events SET local_only = ?1 WHERE hash = ?2",
+            (local_only as i32, hash),
         )?;
         Ok(())
     }
