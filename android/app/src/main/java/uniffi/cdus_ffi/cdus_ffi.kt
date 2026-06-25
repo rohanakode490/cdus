@@ -1056,7 +1056,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_send_notification_dismiss(`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_cdus_ffi_fn_func_send_notification_mirror(`key`: RustBuffer.ByValue,`packageName`: RustBuffer.ByValue,`appName`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`timestamp`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_cdus_ffi_fn_func_send_notification_mirror(`key`: RustBuffer.ByValue,`packageName`: RustBuffer.ByValue,`appName`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`timestamp`: Long,`isOngoing`: Byte,`onlyAlertOnce`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_set_clipboard_item_local_only(`id`: Long,`localOnly`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1437,7 +1437,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_send_notification_dismiss() != 43923.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_cdus_ffi_checksum_func_send_notification_mirror() != 35553.toShort()) {
+    if (lib.uniffi_cdus_ffi_checksum_func_send_notification_mirror() != 1487.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_set_clipboard_item_local_only() != 1021.toShort()) {
@@ -3100,11 +3100,11 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
 }
     
     
- fun `sendNotificationMirror`(`key`: kotlin.String, `packageName`: kotlin.String, `appName`: kotlin.String, `title`: kotlin.String, `text`: kotlin.String, `timestamp`: kotlin.ULong)
+ fun `sendNotificationMirror`(`key`: kotlin.String, `packageName`: kotlin.String, `appName`: kotlin.String, `title`: kotlin.String, `text`: kotlin.String, `timestamp`: kotlin.ULong, `isOngoing`: kotlin.Boolean, `onlyAlertOnce`: kotlin.Boolean)
         = 
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_send_notification_mirror(
-        FfiConverterString.lower(`key`),FfiConverterString.lower(`packageName`),FfiConverterString.lower(`appName`),FfiConverterString.lower(`title`),FfiConverterString.lower(`text`),FfiConverterULong.lower(`timestamp`),_status)
+        FfiConverterString.lower(`key`),FfiConverterString.lower(`packageName`),FfiConverterString.lower(`appName`),FfiConverterString.lower(`title`),FfiConverterString.lower(`text`),FfiConverterULong.lower(`timestamp`),FfiConverterBoolean.lower(`isOngoing`),FfiConverterBoolean.lower(`onlyAlertOnce`),_status)
 }
     
     

@@ -738,15 +738,15 @@ mod tests {
         let ftm2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), flume::unbounded().0));
         let lm2 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2.clone()).unwrap());
 
-        let pm1 = Arc::new(PairingManager::new(Arc::clone(&store1), tx1.clone(), id1.clone(), priv1.clone(), 5401, Arc::clone(&ap1), Arc::clone(&sm1), Arc::new(relay1), tm1, lm1));
-        let pm2 = Arc::new(PairingManager::new(Arc::clone(&store2), tx2.clone(), id2.clone(), priv2.clone(), 5402, Arc::clone(&ap2), Arc::clone(&sm2), Arc::new(relay2), tm2, lm2));
+        let pm1 = Arc::new(PairingManager::new(Arc::clone(&store1), tx1.clone(), id1.clone(), priv1.clone(), 5521, Arc::clone(&ap1), Arc::clone(&sm1), Arc::new(relay1), tm1, lm1));
+        let pm2 = Arc::new(PairingManager::new(Arc::clone(&store2), tx2.clone(), id2.clone(), priv2.clone(), 5522, Arc::clone(&ap2), Arc::clone(&sm2), Arc::new(relay2), tm2, lm2));
 
         let pm2_c = Arc::clone(&pm2);
         thread::spawn(move || pm2_c.start_listener());
         thread::sleep(Duration::from_millis(100));
 
         let pm1_init = Arc::clone(&pm1);
-        thread::spawn(move || { pm1_init.initiate_pairing("127.0.0.1:5402".parse().unwrap(), None); });
+        thread::spawn(move || { pm1_init.initiate_pairing("127.0.0.1:5522".parse().unwrap(), None); });
 
         // Auto-confirm for test
         let mut attempts = 0;
@@ -1081,6 +1081,8 @@ mod tests {
             title: "Test Title".to_string(),
             text: "Test Notification Body".to_string(),
             timestamp: 1600000000u64,
+            is_ongoing: false,
+            only_alert_once: false,
         };
 
         let (tx_in, rx_in) = flume::unbounded();

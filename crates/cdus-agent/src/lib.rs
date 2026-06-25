@@ -16,7 +16,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::libp2p_manager::Libp2pManager;
 use crate::pairing::{ActivePairingState, PairingManager, SyncManager};
@@ -26,6 +26,8 @@ pub static EVENT_BUS: Mutex<Vec<Sender<IpcMessage>>> = Mutex::new(Vec::new());
 
 use once_cell::sync::Lazy;
 pub static ACTIVE_NOTIFICATIONS: Lazy<Mutex<std::collections::HashMap<String, cdus_common::NotificationPayload>>> =
+    Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
+pub static LAST_ALERT_TIMESTAMPS: Lazy<Mutex<std::collections::HashMap<String, std::time::Instant>>> =
     Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
 
 pub fn broadcast_event(msg: IpcMessage) {
@@ -71,7 +73,7 @@ pub fn daemon_loop(
 
         // Process all available messages in the queue before sleeping
         while let Ok(msg) = rx.try_recv() {
-            info!("Daemon processing: {:?}", msg);
+            debug!("Daemon processing: {:?}", msg);
             match msg {
                 IpcMessage::Ping => {
                     let _ = tx.send(IpcMessage::Pong);
@@ -544,21 +546,51 @@ pub fn daemon_loop(
                 }
                 IpcMessage::DismissNotification { key } => {
                     ACTIVE_NOTIFICATIONS.lock().remove(&key);
+                    LAST_ALERT_TIMESTAMPS.lock().remove(&key);
                     info!("Dismissing notification: {}", key);
                     sync_manager.broadcast(SyncMessage::NotificationDismiss { key: key.clone() });
                     broadcast_event(IpcMessage::NotificationDismissed { key });
                 }
                 IpcMessage::NotificationMirrored(payload) => {
-                    info!("Daemon mirroring notification: {:?}", payload);
+                    let should_alert = {
+                        if payload.is_ongoing {
+                            false
+                        } else if payload.only_alert_once && ACTIVE_NOTIFICATIONS.lock().contains_key(&payload.key) {
+                            false
+                        } else {
+                            let mut alert_times = LAST_ALERT_TIMESTAMPS.lock();
+                            let now = std::time::Instant::now();
+                            if let Some(&last_time) = alert_times.get(&payload.key) {
+                                if now.duration_since(last_time) < Duration::from_secs(5) {
+                                    false
+                                } else {
+                                    alert_times.insert(payload.key.clone(), now);
+                                    true
+                                }
+                            } else {
+                                alert_times.insert(payload.key.clone(), now);
+                                true
+                            }
+                        }
+                    };
+
+                    if should_alert {
+                        info!("Daemon mirroring notification: {:?}", payload);
+                    } else {
+                        debug!("Daemon mirroring notification (silent update): {:?}", payload);
+                    }
+
                     ACTIVE_NOTIFICATIONS.lock().insert(payload.key.clone(), payload.clone());
                     
                     #[cfg(not(target_os = "android"))]
                     {
-                        let title = format!("{} ({})", payload.title, payload.app_name);
-                        let _ = notify_rust::Notification::new()
-                            .summary(&title)
-                            .body(&payload.text)
-                            .show();
+                        if should_alert {
+                            let title = format!("{} ({})", payload.title, payload.app_name);
+                            let _ = notify_rust::Notification::new()
+                                .summary(&title)
+                                .body(&payload.text)
+                                .show();
+                        }
                     }
 
                     #[cfg(target_os = "android")]
@@ -571,6 +603,7 @@ pub fn daemon_loop(
                 IpcMessage::NotificationDismissed { key } => {
                     info!("Daemon processing remote dismiss: {}", key);
                     ACTIVE_NOTIFICATIONS.lock().remove(&key);
+                    LAST_ALERT_TIMESTAMPS.lock().remove(&key);
                     
                     #[cfg(target_os = "android")]
                     {

@@ -1087,6 +1087,8 @@ pub fn send_notification_mirror(
     title: String,
     text: String,
     timestamp: u64,
+    is_ongoing: bool,
+    only_alert_once: bool,
 ) {
     if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
         let payload = cdus_common::NotificationPayload {
@@ -1096,6 +1098,8 @@ pub fn send_notification_mirror(
             title,
             text,
             timestamp,
+            is_ongoing,
+            only_alert_once,
         };
         pm.sync_manager.broadcast(SyncMessage::NotificationMirror(payload));
     }

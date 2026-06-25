@@ -26,6 +26,8 @@ pub struct NotificationPayload {
     pub title: String,
     pub text: String,
     pub timestamp: u64,
+    pub is_ongoing: bool,
+    pub only_alert_once: bool,
 }
 
 pub fn is_sensitive_content(text: &str) -> bool {

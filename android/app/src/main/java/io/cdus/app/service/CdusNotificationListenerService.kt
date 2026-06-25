@@ -89,17 +89,23 @@ class CdusNotificationListenerService : NotificationListenerService() {
             }
 
             val key = sbn.key ?: ""
+            val isOngoing = sbn.isOngoing
+            val onlyAlertOnce = (sbn.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE) != 0
 
             // UniFFI call must run on Dispatchers.IO context
             CoroutineScope(Dispatchers.IO).launch {
-                Logger.d("Mirroring notification: $appName, Title: $title, Key: $key")
+                if (!isOngoing) {
+                    Logger.d("Mirroring notification: $appName, Title: $title, Key: $key, isOngoing: $isOngoing, onlyAlertOnce: $onlyAlertOnce")
+                }
                 sendNotificationMirror(
                     key = key,
                     packageName = packageName,
                     appName = appName,
                     title = title,
                     text = text,
-                    timestamp = timestamp.toULong()
+                    timestamp = timestamp.toULong(),
+                    isOngoing = isOngoing,
+                    onlyAlertOnce = onlyAlertOnce
                 )
             }
         } catch (e: Exception) {
