@@ -417,4 +417,3 @@ func TestHandleTelemetry(t *testing.T) {
 		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
 	}
 }
-
