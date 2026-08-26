@@ -1139,7 +1139,17 @@ mod tests {
 
     impl FileStream for MockFileStream {
         fn write_message(&mut self, msg: &FileMessage) -> Result<()> {
-            info!("MockFileStream: writing message {:?}", msg);
+            match msg {
+                FileMessage::Chunk(chunk) => {
+                    info!(
+                        "MockFileStream: writing message Chunk(transfer_id: {}, chunk_index: {}, byte_offset: {}, data_len: {})",
+                        chunk.transfer_id, chunk.chunk_index, chunk.byte_offset, chunk.data.len()
+                    );
+                }
+                other => {
+                    info!("MockFileStream: writing message {:?}", other);
+                }
+            }
             self.tx
                 .send(msg.clone())
                 .map_err(|_| anyhow!("Stream closed"))

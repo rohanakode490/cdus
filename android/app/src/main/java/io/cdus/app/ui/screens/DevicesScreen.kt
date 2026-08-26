@@ -752,6 +752,7 @@ fun QrPairingDialog(onDismiss: () -> Unit) {
     )
 }
 
+@androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
 @Composable
 fun QrScannerDialog(onDismiss: () -> Unit, onQrScanned: (String) -> Unit) {
     val context = LocalContext.current
