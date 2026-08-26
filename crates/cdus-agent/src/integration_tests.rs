@@ -1,19 +1,20 @@
 #[cfg(test)]
 mod tests {
+    use crate::file_transfer::FileTransferManager;
+    use crate::libp2p_manager::Libp2pManager;
     use crate::pairing::{ActivePairingState, PairingManager, SyncManager};
     use crate::relay::RelayManager;
     use crate::store::Store;
     use crate::turn_manager::TurnManager;
     use crate::{daemon_loop, EVENT_BUS};
-    use cdus_common::{IpcMessage, SyncMessage, TransportType, ProgressEvent};
+    use cdus_common::{IpcMessage, ProgressEvent, SyncMessage, TransportType};
+    use parking_lot::Mutex;
     use std::collections::HashMap;
-    use std::sync::Arc; use parking_lot::Mutex;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
     use tempfile::tempdir;
-    use crate::libp2p_manager::Libp2pManager;
-    use crate::file_transfer::FileTransferManager;
-    use std::net::SocketAddr;
 
     #[test]
     fn test_mutual_pairing_and_clipboard_sync() {
@@ -44,8 +45,13 @@ mod tests {
         let (relay2, _) =
             RelayManager::new(id2.clone(), "http://localhost".to_string(), tx2.clone());
 
-        let ftm1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), flume::unbounded().0));
-        let lm1 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx1.clone(), Arc::clone(&store1), ftm1).unwrap());
+        let ftm1 = Arc::new(FileTransferManager::new(
+            Arc::clone(&store1),
+            flume::unbounded().0,
+        ));
+        let lm1 = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx1.clone(), Arc::clone(&store1), ftm1).unwrap(),
+        );
         let pm1 = PairingManager::new(
             Arc::clone(&store1),
             tx1.clone(),
@@ -58,8 +64,13 @@ mod tests {
             tm1,
             lm1,
         );
-        let ftm2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), flume::unbounded().0));
-        let lm2 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2).unwrap());
+        let ftm2 = Arc::new(FileTransferManager::new(
+            Arc::clone(&store2),
+            flume::unbounded().0,
+        ));
+        let lm2 = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2).unwrap(),
+        );
         let pm2 = PairingManager::new(
             Arc::clone(&store2),
             tx2.clone(),
@@ -102,14 +113,8 @@ mod tests {
             attempts += 1;
         }
 
-        assert!(
-            ap1.lock().is_some(),
-            "Initiator should have active pairing"
-        );
-        assert!(
-            ap2.lock().is_some(),
-            "Responder should have active pairing"
-        );
+        assert!(ap1.lock().is_some(), "Initiator should have active pairing");
+        assert!(ap2.lock().is_some(), "Responder should have active pairing");
 
         // Confirm on both sides
         {
@@ -194,7 +199,9 @@ mod tests {
 
         let (p_tx, _p_rx) = flume::unbounded();
         let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
-        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
+        let lm = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap(),
+        );
 
         let (relay, _) = RelayManager::new(
             "test".to_string(),
@@ -338,8 +345,13 @@ mod tests {
         let (relay2, _) =
             RelayManager::new(id2.clone(), "http://localhost".to_string(), tx2.clone());
 
-        let ftm1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), flume::unbounded().0));
-        let lm1 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx1.clone(), Arc::clone(&store1), ftm1).unwrap());
+        let ftm1 = Arc::new(FileTransferManager::new(
+            Arc::clone(&store1),
+            flume::unbounded().0,
+        ));
+        let lm1 = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx1.clone(), Arc::clone(&store1), ftm1).unwrap(),
+        );
         let pm1 = Arc::new(PairingManager::new(
             Arc::clone(&store1),
             tx1,
@@ -352,8 +364,13 @@ mod tests {
             tm1,
             lm1,
         ));
-        let ftm2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), flume::unbounded().0));
-        let lm2 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2).unwrap());
+        let ftm2 = Arc::new(FileTransferManager::new(
+            Arc::clone(&store2),
+            flume::unbounded().0,
+        ));
+        let lm2 = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2).unwrap(),
+        );
         let pm2 = Arc::new(PairingManager::new(
             Arc::clone(&store2),
             tx2,
@@ -414,8 +431,13 @@ mod tests {
         let sm = Arc::new(SyncManager::new());
         let tm = Arc::new(TurnManager::new().unwrap());
         let (relay, _) = RelayManager::new(id.clone(), "http://localhost".to_string(), tx.clone());
-        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), flume::unbounded().0));
-        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
+        let ftm = Arc::new(FileTransferManager::new(
+            Arc::clone(&store),
+            flume::unbounded().0,
+        ));
+        let lm = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap(),
+        );
         let pm = Arc::new(PairingManager::new(
             Arc::clone(&store),
             tx,
@@ -455,8 +477,13 @@ mod tests {
         let sm = Arc::new(SyncManager::new());
         let tm = Arc::new(TurnManager::new().unwrap());
         let (relay, _) = RelayManager::new(id.clone(), "http://localhost".to_string(), tx.clone());
-        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), flume::unbounded().0));
-        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
+        let ftm = Arc::new(FileTransferManager::new(
+            Arc::clone(&store),
+            flume::unbounded().0,
+        ));
+        let lm = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap(),
+        );
         let pm = PairingManager::new(
             Arc::clone(&store),
             tx,
@@ -519,8 +546,13 @@ mod tests {
         let relay1 = Arc::new(relay1);
         let relay2 = Arc::new(relay2);
 
-        let ftm1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), flume::unbounded().0));
-        let lm1 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx1.clone(), Arc::clone(&store1), ftm1).unwrap());
+        let ftm1 = Arc::new(FileTransferManager::new(
+            Arc::clone(&store1),
+            flume::unbounded().0,
+        ));
+        let lm1 = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx1.clone(), Arc::clone(&store1), ftm1).unwrap(),
+        );
         let pm1 = Arc::new(PairingManager::new(
             Arc::clone(&store1),
             tx1.clone(),
@@ -534,8 +566,13 @@ mod tests {
             lm1,
         ));
 
-        let ftm2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), flume::unbounded().0));
-        let lm2 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2).unwrap());
+        let ftm2 = Arc::new(FileTransferManager::new(
+            Arc::clone(&store2),
+            flume::unbounded().0,
+        ));
+        let lm2 = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2).unwrap(),
+        );
         let pm2 = Arc::new(PairingManager::new(
             Arc::clone(&store2),
             tx2.clone(),
@@ -646,7 +683,9 @@ mod tests {
 
         let (p_tx, _p_rx) = flume::unbounded();
         let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
-        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
+        let lm = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap(),
+        );
 
         let pm = Arc::new(PairingManager::new(
             Arc::clone(&store),
@@ -693,14 +732,19 @@ mod tests {
         // 3. Verify it's NOT in discovered_devices list
         let discovered = dd.lock();
         assert!(
-            !discovered.iter().any(|(node_id, _, _, _, _)| node_id == &id),
+            !discovered
+                .iter()
+                .any(|(node_id, _, _, _, _)| node_id == &id),
             "Paired device should not be added to discovered list"
         );
 
         // 4. Verify no DeviceDiscovered event was broadcasted
         while let Ok(msg) = rx_event.try_recv() {
             if let IpcMessage::DeviceDiscovered { node_id, .. } = msg {
-                assert_ne!(node_id, id, "Paired device discovery should not be broadcasted");
+                assert_ne!(
+                    node_id, id,
+                    "Paired device discovery should not be broadcasted"
+                );
             }
         }
     }
@@ -730,23 +774,71 @@ mod tests {
         let (id2, priv2) = store2.get_or_create_identity(dir2.path()).unwrap();
 
         // 1. Setup Pairing
-        let (relay1, _) = RelayManager::new(id1.clone(), "http://localhost".to_string(), tx1.clone());
-        let (relay2, _) = RelayManager::new(id2.clone(), "http://localhost".to_string(), tx2.clone());
+        let (relay1, _) =
+            RelayManager::new(id1.clone(), "http://localhost".to_string(), tx1.clone());
+        let (relay2, _) =
+            RelayManager::new(id2.clone(), "http://localhost".to_string(), tx2.clone());
 
-        let ftm1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), flume::unbounded().0));
-        let lm1 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx1.clone(), Arc::clone(&store1), ftm1.clone()).unwrap());
-        let ftm2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), flume::unbounded().0));
-        let lm2 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2.clone()).unwrap());
+        let ftm1 = Arc::new(FileTransferManager::new(
+            Arc::clone(&store1),
+            flume::unbounded().0,
+        ));
+        let lm1 = Arc::new(
+            Libp2pManager::new(
+                vec![0u8; 32],
+                tx1.clone(),
+                Arc::clone(&store1),
+                ftm1.clone(),
+            )
+            .unwrap(),
+        );
+        let ftm2 = Arc::new(FileTransferManager::new(
+            Arc::clone(&store2),
+            flume::unbounded().0,
+        ));
+        let lm2 = Arc::new(
+            Libp2pManager::new(
+                vec![0u8; 32],
+                tx2.clone(),
+                Arc::clone(&store2),
+                ftm2.clone(),
+            )
+            .unwrap(),
+        );
 
-        let pm1 = Arc::new(PairingManager::new(Arc::clone(&store1), tx1.clone(), id1.clone(), priv1.clone(), 5521, Arc::clone(&ap1), Arc::clone(&sm1), Arc::new(relay1), tm1, lm1));
-        let pm2 = Arc::new(PairingManager::new(Arc::clone(&store2), tx2.clone(), id2.clone(), priv2.clone(), 5522, Arc::clone(&ap2), Arc::clone(&sm2), Arc::new(relay2), tm2, lm2));
+        let pm1 = Arc::new(PairingManager::new(
+            Arc::clone(&store1),
+            tx1.clone(),
+            id1.clone(),
+            priv1.clone(),
+            5521,
+            Arc::clone(&ap1),
+            Arc::clone(&sm1),
+            Arc::new(relay1),
+            tm1,
+            lm1,
+        ));
+        let pm2 = Arc::new(PairingManager::new(
+            Arc::clone(&store2),
+            tx2.clone(),
+            id2.clone(),
+            priv2.clone(),
+            5522,
+            Arc::clone(&ap2),
+            Arc::clone(&sm2),
+            Arc::new(relay2),
+            tm2,
+            lm2,
+        ));
 
         let pm2_c = Arc::clone(&pm2);
         thread::spawn(move || pm2_c.start_listener());
         thread::sleep(Duration::from_millis(100));
 
         let pm1_init = Arc::clone(&pm1);
-        thread::spawn(move || { pm1_init.initiate_pairing("127.0.0.1:5522".parse().unwrap(), None); });
+        thread::spawn(move || {
+            pm1_init.initiate_pairing("127.0.0.1:5522".parse().unwrap(), None);
+        });
 
         // Auto-confirm for test
         let mut attempts = 0;
@@ -754,8 +846,12 @@ mod tests {
             thread::sleep(Duration::from_millis(100));
             attempts += 1;
         }
-        { *ap1.lock().as_ref().unwrap().confirmed.lock() = Some(true); }
-        { *ap2.lock().as_ref().unwrap().confirmed.lock() = Some(true); }
+        {
+            *ap1.lock().as_ref().unwrap().confirmed.lock() = Some(true);
+        }
+        {
+            *ap2.lock().as_ref().unwrap().confirmed.lock() = Some(true);
+        }
 
         thread::sleep(Duration::from_millis(500));
         assert!(sm1.is_connected(&id2));
@@ -772,36 +868,79 @@ mod tests {
         let file_hash = blake3::hash(&large_content).to_hex().to_string();
         let transfer_id = uuid::Uuid::new_v4().to_string();
 
-        store1.create_transfer(&transfer_id, "outgoing", &id2, &large_file_path.to_string_lossy(), "large.bin", 10 * 1024 * 1024, 262144, &file_hash)?;
+        store1.create_transfer(
+            &transfer_id,
+            "outgoing",
+            &id2,
+            &large_file_path.to_string_lossy(),
+            "large.bin",
+            10 * 1024 * 1024,
+            262144,
+            &file_hash,
+        )?;
 
         let (ft_tx1, ft_rx1) = flume::unbounded::<cdus_common::FileMessage>(); // S -> R
         let (ft_tx2, ft_rx2) = flume::unbounded::<cdus_common::FileMessage>(); // R -> S
-        
+
         struct IntegrationMockStream {
             tx: flume::Sender<cdus_common::FileMessage>,
             rx: flume::Receiver<cdus_common::FileMessage>,
         }
         impl crate::file_transfer::FileStream for IntegrationMockStream {
-            fn write_message(&mut self, msg: &cdus_common::FileMessage) -> Result<(), anyhow::Error> { self.tx.send(msg.clone()).map_err(|e| anyhow::anyhow!(e)) }
-            fn read_message(&mut self) -> Result<cdus_common::FileMessage, anyhow::Error> { self.rx.recv().map_err(|e| anyhow::anyhow!(e)) }
-            fn read_message_timeout(&mut self, timeout: Duration) -> Result<cdus_common::FileMessage, anyhow::Error> { self.rx.recv_timeout(timeout).map_err(|e| anyhow::anyhow!(e)) }
+            fn write_message(
+                &mut self,
+                msg: &cdus_common::FileMessage,
+            ) -> Result<(), anyhow::Error> {
+                self.tx.send(msg.clone()).map_err(|e| anyhow::anyhow!(e))
+            }
+            fn read_message(&mut self) -> Result<cdus_common::FileMessage, anyhow::Error> {
+                self.rx.recv().map_err(|e| anyhow::anyhow!(e))
+            }
+            fn read_message_timeout(
+                &mut self,
+                timeout: Duration,
+            ) -> Result<cdus_common::FileMessage, anyhow::Error> {
+                self.rx
+                    .recv_timeout(timeout)
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
         }
 
-        let stream1 = Box::new(IntegrationMockStream { tx: ft_tx1, rx: ft_rx2 });
-        let stream2 = Box::new(IntegrationMockStream { tx: ft_tx2, rx: ft_rx1 });
+        let stream1 = Box::new(IntegrationMockStream {
+            tx: ft_tx1,
+            rx: ft_rx2,
+        });
+        let stream2 = Box::new(IntegrationMockStream {
+            tx: ft_tx2,
+            rx: ft_rx1,
+        });
 
         let s_id = transfer_id.clone();
         let s_store = Arc::clone(&store1);
         let s_manager = Arc::clone(&ftm1);
         thread::spawn(move || {
-            crate::file_transfer::handle_outgoing_transfer(stream1, s_store, s_id, crate::file_transfer::SessionKey([0u8; 32]), s_manager)
+            crate::file_transfer::handle_outgoing_transfer(
+                stream1,
+                s_store,
+                s_id,
+                crate::file_transfer::SessionKey([0u8; 32]),
+                s_manager,
+            )
         });
 
         let r_store = Arc::clone(&store2);
         let r_manager = Arc::clone(&ftm2);
         let r_dir = dir2.path().to_path_buf();
         thread::spawn(move || {
-            crate::file_transfer::handle_incoming_transfer_with_manager(stream2, r_store, crate::file_transfer::SessionKey([0u8; 32]), r_dir, flume::unbounded().0, r_manager, id1)
+            crate::file_transfer::handle_incoming_transfer_with_manager(
+                stream2,
+                r_store,
+                crate::file_transfer::SessionKey([0u8; 32]),
+                r_dir,
+                flume::unbounded().0,
+                r_manager,
+                id1,
+            )
         });
 
         // Trigger acceptance so it starts "working"
@@ -810,7 +949,10 @@ mod tests {
 
         // 3. Test Clipboard while transfer is running in background
         let start = std::time::Instant::now();
-        sm1.broadcast(SyncMessage::ClipboardUpdate { content: "test".to_string(), timestamp: 999 });
+        sm1.broadcast(SyncMessage::ClipboardUpdate {
+            content: "test".to_string(),
+            timestamp: 999,
+        });
 
         let mut received = false;
         while let Ok(msg) = rx2.recv_timeout(Duration::from_millis(1000)) {
@@ -820,8 +962,14 @@ mod tests {
                 break;
             }
         }
-        assert!(received, "Clipboard should arrive even if file transfer is running");
-        assert!(start.elapsed() < Duration::from_millis(1000), "Clipboard should be fast even during file transfer");
+        assert!(
+            received,
+            "Clipboard should arrive even if file transfer is running"
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(1000),
+            "Clipboard should be fast even during file transfer"
+        );
 
         Ok(())
     }
@@ -836,9 +984,14 @@ mod tests {
         let sm = Arc::new(SyncManager::new());
         let tm = Arc::new(TurnManager::new().unwrap());
         let (node_id, priv_key) = store.get_or_create_identity(dir.path()).unwrap();
-        
-        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), flume::unbounded().0));
-        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
+
+        let ftm = Arc::new(FileTransferManager::new(
+            Arc::clone(&store),
+            flume::unbounded().0,
+        ));
+        let lm = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap(),
+        );
         let pm = PairingManager::new(
             Arc::clone(&store),
             tx,
@@ -847,14 +1000,23 @@ mod tests {
             5601,
             Arc::clone(&ap),
             sm,
-            Arc::new(RelayManager::new(node_id.clone(), "http://localhost".to_string(), flume::unbounded().0).0),
+            Arc::new(
+                RelayManager::new(
+                    node_id.clone(),
+                    "http://localhost".to_string(),
+                    flume::unbounded().0,
+                )
+                .0,
+            ),
             tm,
             lm,
         );
 
         // 1. Manually mark a device as paired in the store
         let remote_id = "remote_node_id".to_string();
-        store.add_paired_device(&remote_id, "Remote Device", None).unwrap();
+        store
+            .add_paired_device(&remote_id, "Remote Device", None)
+            .unwrap();
 
         // 2. Scan a QR for that device
         let payload = format!("cdus://pair?id={}&s=secret&l=Remote", remote_id);
@@ -862,8 +1024,10 @@ mod tests {
 
         // 3. Verify result is Ok and IPC message is sent
         assert!(result.is_ok());
-        
-        let msg = rx.recv_timeout(Duration::from_secs(1)).expect("Should receive IPC message");
+
+        let msg = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("Should receive IPC message");
         match msg {
             IpcMessage::AlreadyPaired { node_id, label } => {
                 assert_eq!(node_id, remote_id);
@@ -888,8 +1052,13 @@ mod tests {
         let (id1, priv1) = store1.get_or_create_identity(dir1.path()).unwrap();
         let (id2, priv2) = store2.get_or_create_identity(dir2.path()).unwrap();
 
-        let ftm1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), flume::unbounded().0));
-        let lm1 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx1.clone(), Arc::clone(&store1), ftm1).unwrap());
+        let ftm1 = Arc::new(FileTransferManager::new(
+            Arc::clone(&store1),
+            flume::unbounded().0,
+        ));
+        let lm1 = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx1.clone(), Arc::clone(&store1), ftm1).unwrap(),
+        );
         let pm1 = Arc::new(PairingManager::new(
             Arc::clone(&store1),
             tx1,
@@ -898,13 +1067,25 @@ mod tests {
             5701,
             Arc::new(Mutex::new(None)),
             Arc::new(SyncManager::new()),
-            Arc::new(RelayManager::new(id1.clone(), "http://localhost".to_string(), flume::unbounded().0).0),
+            Arc::new(
+                RelayManager::new(
+                    id1.clone(),
+                    "http://localhost".to_string(),
+                    flume::unbounded().0,
+                )
+                .0,
+            ),
             Arc::new(TurnManager::new().unwrap()),
             lm1,
         ));
 
-        let ftm2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), flume::unbounded().0));
-        let lm2 = Arc::new(Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2).unwrap());
+        let ftm2 = Arc::new(FileTransferManager::new(
+            Arc::clone(&store2),
+            flume::unbounded().0,
+        ));
+        let lm2 = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx2.clone(), Arc::clone(&store2), ftm2).unwrap(),
+        );
         let pm2 = Arc::new(PairingManager::new(
             Arc::clone(&store2),
             tx2,
@@ -913,7 +1094,14 @@ mod tests {
             5702,
             Arc::new(Mutex::new(None)),
             Arc::new(SyncManager::new()),
-            Arc::new(RelayManager::new(id2.clone(), "http://localhost".to_string(), flume::unbounded().0).0),
+            Arc::new(
+                RelayManager::new(
+                    id2.clone(),
+                    "http://localhost".to_string(),
+                    flume::unbounded().0,
+                )
+                .0,
+            ),
             Arc::new(TurnManager::new().unwrap()),
             lm2,
         ));
@@ -936,11 +1124,15 @@ mod tests {
         });
 
         // 4. Verify Device 1 receives StalePairing message
-        let msg = rx1.recv_timeout(Duration::from_secs(2)).expect("Should receive IPC message");
+        let msg = rx1
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Should receive IPC message");
         match msg {
             IpcMessage::Log(ref s) if s.contains("Manual pairing initiated") => {
                 // Skip the initial log message and wait for the actual result
-                let msg2 = rx1.recv_timeout(Duration::from_secs(2)).expect("Should receive second IPC message");
+                let msg2 = rx1
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("Should receive second IPC message");
                 match msg2 {
                     IpcMessage::StalePairing { ref node_id, .. } => {
                         assert_eq!(node_id, &id2);
@@ -969,7 +1161,9 @@ mod tests {
 
         let (p_tx, _p_rx) = flume::unbounded();
         let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
-        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
+        let lm = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap(),
+        );
 
         let (relay, _) = RelayManager::new(
             "test".to_string(),
@@ -993,7 +1187,7 @@ mod tests {
         // 1. Append a clipboard item and toggle it as local_only = true
         let payload = "Private Password".to_string();
         let _ = store.append_event(payload.as_bytes(), "Local").unwrap();
-        
+
         let history = store.get_recent_events(1).unwrap();
         assert_eq!(history.len(), 1);
         let item_id = history[0].id;
@@ -1052,7 +1246,9 @@ mod tests {
 
         let (p_tx, _p_rx) = flume::unbounded();
         let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
-        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
+        let lm = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap(),
+        );
 
         let (relay, _) = RelayManager::new(
             "test".to_string(),
@@ -1086,7 +1282,9 @@ mod tests {
         };
 
         let (tx_in, rx_in) = flume::unbounded();
-        tx_in.send(IpcMessage::NotificationMirrored(payload.clone())).unwrap();
+        tx_in
+            .send(IpcMessage::NotificationMirrored(payload.clone()))
+            .unwrap();
 
         // Run daemon loop to process IpcMessage::NotificationMirrored
         daemon_loop(
@@ -1142,11 +1340,18 @@ mod tests {
                 got_response = true;
             }
         }
-        assert!(got_response, "Should have received ActiveNotificationsResponse");
+        assert!(
+            got_response,
+            "Should have received ActiveNotificationsResponse"
+        );
 
         // 3. Simulate dismissing a notification (client clicked dismiss in UI)
         let (tx_in_3, rx_in_3) = flume::unbounded();
-        tx_in_3.send(IpcMessage::DismissNotification { key: "test_key_123".to_string() }).unwrap();
+        tx_in_3
+            .send(IpcMessage::DismissNotification {
+                key: "test_key_123".to_string(),
+            })
+            .unwrap();
 
         // Run daemon loop to process DismissNotification
         daemon_loop(
@@ -1186,7 +1391,9 @@ mod tests {
 
         let (p_tx, _p_rx) = flume::unbounded();
         let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
-        let lm = Arc::new(Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap());
+        let lm = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap(),
+        );
 
         let (relay, _) = RelayManager::new(
             "test".to_string(),
@@ -1220,7 +1427,12 @@ mod tests {
 
         // Simulate unlocking the clipboard item
         let (tx_in, rx_in) = flume::unbounded();
-        tx_in.send(IpcMessage::ToggleLocalOnly { id: item_id, local_only: false }).unwrap();
+        tx_in
+            .send(IpcMessage::ToggleLocalOnly {
+                id: item_id,
+                local_only: false,
+            })
+            .unwrap();
 
         // Run daemon loop
         daemon_loop(
@@ -1244,7 +1456,9 @@ mod tests {
         assert!(!history[0].local_only);
 
         // Verify that SyncMessage::ClipboardUpdate was broadcasted to our peer
-        let received_msg = peer_rx.recv_timeout(std::time::Duration::from_millis(500)).unwrap();
+        let received_msg = peer_rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .unwrap();
         match received_msg {
             SyncMessage::ClipboardUpdate { content, timestamp } => {
                 assert_eq!(content, payload);

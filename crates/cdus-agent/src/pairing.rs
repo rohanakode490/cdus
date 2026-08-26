@@ -2,11 +2,11 @@ use crate::store::Store;
 use anyhow::Result;
 use cdus_common::{IpcMessage, SyncMessage, TransportType};
 use flume::Sender;
+use parking_lot::Mutex;
 use snow::{params::NoiseParams, Builder, HandshakeState, TransportState};
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
-use parking_lot::Mutex;
 use std::thread;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
@@ -203,10 +203,9 @@ impl PairingManager {
                     } else {
                         "Unknown Device".to_string()
                     };
-                    let _ = self.ipc_tx.send(IpcMessage::StalePairing {
-                        node_id,
-                        label,
-                    });
+                    let _ = self
+                        .ipc_tx
+                        .send(IpcMessage::StalePairing { node_id, label });
                 }
                 let mut ap = self.active_pairing.lock();
                 *ap = None;
@@ -254,9 +253,12 @@ impl PairingManager {
                 if let Ok(Some(device)) = self.store.get_paired_device(&source_uuid) {
                     remote_static = device.static_key;
                 }
-                
+
                 if let Some(ref rs) = remote_static {
-                    info!("Using known static key for IK responder via relay: {}", source_uuid);
+                    info!(
+                        "Using known static key for IK responder via relay: {}",
+                        source_uuid
+                    );
                     builder = builder.remote_public_key(rs);
                 } else {
                     warn!("Received IK handshake from unknown/unpaired device {} via relay. It will likely fail decryption.", source_uuid);
@@ -268,15 +270,20 @@ impl PairingManager {
             let mut initiator_payload_buf = [0u8; 1024];
             match noise.read_message(noise_data, &mut initiator_payload_buf) {
                 Ok(payload_len) => {
-                    info!("Decrypted Noise message 1 from relay using {}", if use_ik { "IK" } else { "XX" });
-                    
+                    info!(
+                        "Decrypted Noise message 1 from relay using {}",
+                        if use_ik { "IK" } else { "XX" }
+                    );
+
                     let mut initiator_label = "Unknown Device".to_string();
                     let mut remote_node_id = source_uuid.clone();
                     let mut initiator_payload_opt: Option<HandshakePayload> = None;
 
                     if use_ik && payload_len > 0 {
                         let payload_slice = &initiator_payload_buf[..payload_len];
-                        if let Ok(initiator_payload) = serde_json::from_slice::<HandshakePayload>(payload_slice) {
+                        if let Ok(initiator_payload) =
+                            serde_json::from_slice::<HandshakePayload>(payload_slice)
+                        {
                             initiator_label = initiator_payload.label.clone();
                             remote_node_id = initiator_payload.node_id.clone();
                             initiator_payload_opt = Some(initiator_payload.clone());
@@ -293,14 +300,19 @@ impl PairingManager {
                     }
 
                     // Stale pairing check
-                    if let Some(HandshakeIntent::Reconnect) = initiator_payload_opt.as_ref().and_then(|p| p.intent.clone()) {
+                    if let Some(HandshakeIntent::Reconnect) = initiator_payload_opt
+                        .as_ref()
+                        .and_then(|p| p.intent.clone())
+                    {
                         if !self.is_device_paired(&remote_node_id) {
                             warn!("Stale pairing attempt from {}. Rejecting.", remote_node_id);
                             let err_sig = RelaySignal::PairingError {
                                 node_id: self.node_id.clone(),
                                 message: "stale".to_string(),
                             };
-                            let _ = self.relay_manager.send_signal(source_uuid, serde_json::to_vec(&err_sig).unwrap());
+                            let _ = self
+                                .relay_manager
+                                .send_signal(source_uuid, serde_json::to_vec(&err_sig).unwrap());
                             return Ok(());
                         }
                     }
@@ -313,9 +325,18 @@ impl PairingManager {
                     let self_payload = HandshakePayload {
                         label: self_label,
                         node_id: self.node_id.clone(),
-                        libp2p_addresses: self.libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
+                        libp2p_addresses: self
+                            .libp2p_manager
+                            .get_listen_addresses()
+                            .into_iter()
+                            .map(|a| a.to_string())
+                            .collect(),
                         oob_secret: self.active_oob_secret.lock().clone(),
-                        intent: Some(if use_ik { HandshakeIntent::Reconnect } else { HandshakeIntent::Pair }),
+                        intent: Some(if use_ik {
+                            HandshakeIntent::Reconnect
+                        } else {
+                            HandshakeIntent::Pair
+                        }),
                     };
                     let self_payload_bytes = serde_json::to_vec(&self_payload).unwrap();
                     let mut out_buf = [0u8; 1024];
@@ -342,7 +363,8 @@ impl PairingManager {
                                 pin = derive_pin(h);
                             }
 
-                            let is_paired = self.store.is_device_paired(&source_uuid).unwrap_or(false);
+                            let is_paired =
+                                self.store.is_device_paired(&source_uuid).unwrap_or(false);
                             let has_active_oob = self.active_oob_secret.lock().is_some();
 
                             *ap = Some(ActivePairingState {
@@ -357,7 +379,10 @@ impl PairingManager {
                             });
 
                             if is_paired || use_ik {
-                                info!("Auto-confirming relay pairing for known/IK device: {}", remote_node_id);
+                                info!(
+                                    "Auto-confirming relay pairing for known/IK device: {}",
+                                    remote_node_id
+                                );
                                 if let Some(ref state) = *ap {
                                     *state.confirmed.lock() = Some(true);
                                 }
@@ -439,12 +464,18 @@ impl PairingManager {
                                 // Stale pairing check
                                 if let Some(HandshakeIntent::Reconnect) = payload.intent {
                                     if !self.is_device_paired(&remote_node_id) {
-                                        warn!("Stale XX pairing attempt from {}. Rejecting.", remote_node_id);
+                                        warn!(
+                                            "Stale XX pairing attempt from {}. Rejecting.",
+                                            remote_node_id
+                                        );
                                         let err_sig = RelaySignal::PairingError {
                                             node_id: self.node_id.clone(),
                                             message: "stale".to_string(),
                                         };
-                                        let _ = self.relay_manager.send_signal(source_uuid, serde_json::to_vec(&err_sig).unwrap());
+                                        let _ = self.relay_manager.send_signal(
+                                            source_uuid,
+                                            serde_json::to_vec(&err_sig).unwrap(),
+                                        );
                                         drop(handshake_lock);
                                         *ap = None;
                                         return Ok(());
@@ -527,7 +558,10 @@ impl PairingManager {
                                     let target = self.target_oob_secret.lock();
                                     if let Some((ref node_id, ref secret)) = *target {
                                         if node_id == &state.remote_id {
-                                            info!("Using OOB secret for relay pairing with {}", state.remote_id);
+                                            info!(
+                                                "Using OOB secret for relay pairing with {}",
+                                                state.remote_id
+                                            );
                                             oob_secret = Some(secret.clone());
                                         }
                                     }
@@ -542,9 +576,18 @@ impl PairingManager {
                                 let self_payload = HandshakePayload {
                                     label: self_label,
                                     node_id: self.node_id.clone(),
-                                    libp2p_addresses: self.libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
+                                    libp2p_addresses: self
+                                        .libp2p_manager
+                                        .get_listen_addresses()
+                                        .into_iter()
+                                        .map(|a| a.to_string())
+                                        .collect(),
                                     oob_secret,
-                                    intent: Some(if is_reconnect { HandshakeIntent::Reconnect } else { HandshakeIntent::Pair }),
+                                    intent: Some(if is_reconnect {
+                                        HandshakeIntent::Reconnect
+                                    } else {
+                                        HandshakeIntent::Pair
+                                    }),
                                 };
                                 let self_payload_bytes = serde_json::to_vec(&self_payload).unwrap();
                                 let mut out_buf = [0u8; 1024];
@@ -570,7 +613,9 @@ impl PairingManager {
                                             );
 
                                             // Auto-confirm if already paired
-                                            if let Ok(true) = self.store.is_device_paired(&state.remote_id) {
+                                            if let Ok(true) =
+                                                self.store.is_device_paired(&state.remote_id)
+                                            {
                                                 info!("Device {} is already paired. Auto-confirming relay pairing.", state.remote_id);
                                                 let mut conf = state.confirmed.lock();
                                                 *conf = Some(true);
@@ -614,11 +659,7 @@ impl PairingManager {
                 let confirmed = state.confirmed.lock();
                 if let Some(true) = *confirmed {
                     // Start TURN session if we haven't already
-                    if !self
-                        .pending_turn_sessions
-                        .lock()
-                        .contains_key(&source_uuid)
-                    {
+                    if !self.pending_turn_sessions.lock().contains_key(&source_uuid) {
                         if let Ok(creds) = self.relay_manager.get_turn_credentials() {
                             match self.turn_manager.start_session(creds, Some(relayed_addr)) {
                                 Ok((conn, _handle)) => {
@@ -634,7 +675,8 @@ impl PairingManager {
                                     // Initiate sync session
                                     let mut hs = state.handshake.lock();
                                     if let Some(noise) = hs.take() {
-                                        let remote_static = noise.get_remote_static().map(|s| s.to_vec());
+                                        let remote_static =
+                                            noise.get_remote_static().map(|s| s.to_vec());
                                         if let Ok(transport) = noise.into_transport_mode() {
                                             let remote_node_id = state.remote_id.clone();
                                             let remote_label = state.remote_label.clone();
@@ -656,7 +698,6 @@ impl PairingManager {
                                                     store,
                                                     libp2p_manager,
                                                 ) {
-
                                                     error!(
                                                         "TURN sync session error for {}: {}",
                                                         remote_uuid, e
@@ -744,9 +785,10 @@ impl PairingManager {
                                     let sig = RelaySignal::TurnCandidate { relayed_addr };
                                     let sig_bytes = serde_json::to_vec(&sig).unwrap();
                                     if let Err(e) =
-                                        relay_manager.send_signal(remote_uuid.clone(), sig_bytes) {
-                                            error!("Failed to send TURN candidate via relay: {}", e);
-                                        }
+                                        relay_manager.send_signal(remote_uuid.clone(), sig_bytes)
+                                    {
+                                        error!("Failed to send TURN candidate via relay: {}", e);
+                                    }
 
                                     // The session will be started in handle_turn_candidate when peer responds
                                 }
@@ -824,7 +866,8 @@ impl PairingManager {
             Ok(n) => {
                 info!(
                     "Sending handshake initiation (step 1) to {} via relay using {}",
-                    target_uuid, if use_ik { "IK" } else { "XX" }
+                    target_uuid,
+                    if use_ik { "IK" } else { "XX" }
                 );
                 // Protocol Prefix: 0x00 = XX, 0x01 = IK
                 let prefix = if use_ik { 0x01 } else { 0x00 };
@@ -842,8 +885,12 @@ impl PairingManager {
                 }
 
                 let mut ap = self.active_pairing.lock();
-                let has_oob = self.target_oob_secret.lock().as_ref()
-                    .map(|(id, _)| id == &target_uuid).unwrap_or(false);
+                let has_oob = self
+                    .target_oob_secret
+                    .lock()
+                    .as_ref()
+                    .map(|(id, _)| id == &target_uuid)
+                    .unwrap_or(false);
 
                 *ap = Some(ActivePairingState {
                     pin: String::new(),
@@ -857,7 +904,10 @@ impl PairingManager {
                 });
 
                 if use_ik || has_oob {
-                    info!("Auto-confirming outgoing relay pairing for device: {}", target_uuid);
+                    info!(
+                        "Auto-confirming outgoing relay pairing for device: {}",
+                        target_uuid
+                    );
                     if let Some(ref state) = *ap {
                         *state.confirmed.lock() = Some(true);
                     }
@@ -938,7 +988,10 @@ impl PairingManager {
                     .relay_manager
                     .send_signal(target_uuid.clone(), sig_bytes)
                 {
-                    error!("Failed to send silent handshake initiation via relay: {}", e);
+                    error!(
+                        "Failed to send silent handshake initiation via relay: {}",
+                        e
+                    );
                     return;
                 }
 
@@ -962,63 +1015,82 @@ impl PairingManager {
 
     pub fn start_auto_reconnect_loop(self: Arc<Self>) {
         info!("Auto-reconnect loop started");
-        let mut last_attempts: std::collections::HashMap<String, std::time::Instant> = std::collections::HashMap::new();
-        
+        let mut last_attempts: std::collections::HashMap<String, std::time::Instant> =
+            std::collections::HashMap::new();
+
         loop {
             std::thread::sleep(std::time::Duration::from_secs(15));
-            
+
             let paired_devices = match self.store.get_paired_devices() {
                 Ok(devices) => devices,
                 Err(e) => {
-                    error!("Auto-reconnect loop: failed to retrieve paired devices: {}", e);
+                    error!(
+                        "Auto-reconnect loop: failed to retrieve paired devices: {}",
+                        e
+                    );
                     continue;
                 }
             };
-            
+
             for device in paired_devices {
                 let is_connected = self.sync_manager.is_connected(&device.node_id);
                 if !is_connected {
                     let should_retry = match last_attempts.get(&device.node_id) {
-                        Some(last_attempt) => last_attempt.elapsed() >= std::time::Duration::from_secs(30),
+                        Some(last_attempt) => {
+                            last_attempt.elapsed() >= std::time::Duration::from_secs(30)
+                        }
                         None => true,
                     };
-                    
+
                     if should_retry {
                         last_attempts.insert(device.node_id.clone(), std::time::Instant::now());
-                        info!("Auto-reconnect: initiating retry for offline paired device {}", device.node_id);
-                        
+                        info!(
+                            "Auto-reconnect: initiating retry for offline paired device {}",
+                            device.node_id
+                        );
+
                         let pm = Arc::clone(&self);
                         let target_uuid = device.node_id.clone();
                         let ips = device.last_known_ips.clone();
                         let port = device.last_known_port;
-                        
+
                         std::thread::spawn(move || {
                             // Verify the device is still paired before starting connection
                             if !pm.store.is_device_paired(&target_uuid).unwrap_or(false) {
-                                debug!("Auto-reconnect: device {} was unpaired, aborting reconnect", target_uuid);
+                                debug!(
+                                    "Auto-reconnect: device {} was unpaired, aborting reconnect",
+                                    target_uuid
+                                );
                                 return;
                             }
-                            
+
                             let mut success = false;
-                            
+
                             if let (Some(ip_list), Some(p)) = (ips, port) {
                                 for ip in ip_list {
                                     if let Ok(ip_addr) = ip.parse() {
                                         let addr = std::net::SocketAddr::new(ip_addr, p);
                                         // Re-check before each connection attempt
-                                        if !pm.store.is_device_paired(&target_uuid).unwrap_or(false) {
+                                        if !pm.store.is_device_paired(&target_uuid).unwrap_or(false)
+                                        {
                                             return;
                                         }
-                                        debug!("Auto-reconnect: trying LAN connection for {} at {}", target_uuid, addr);
+                                        debug!(
+                                            "Auto-reconnect: trying LAN connection for {} at {}",
+                                            target_uuid, addr
+                                        );
                                         if pm.initiate_pairing(addr, Some(target_uuid.clone())) {
-                                            info!("Auto-reconnect: LAN connection to {} succeeded", target_uuid);
+                                            info!(
+                                                "Auto-reconnect: LAN connection to {} succeeded",
+                                                target_uuid
+                                            );
                                             success = true;
                                             break;
                                         }
                                     }
                                 }
                             }
-                            
+
                             if !success {
                                 if pm.store.is_device_paired(&target_uuid).unwrap_or(false) {
                                     debug!("Auto-reconnect: LAN connection failed or unavailable for {}, falling back to remote relay...", target_uuid);
@@ -1080,8 +1152,6 @@ impl PairingManager {
                             active_oob_secret,
                             target_oob_secret,
                         ) {
-
-
                             error!("Error in incoming connection: {}", e);
                         }
                     });
@@ -1107,7 +1177,8 @@ impl PairingManager {
             let addr_str = addr.to_string();
             // Extract IP from multiaddr e.g. /ip4/192.168.1.5/tcp/12345
             if let Some(ip) = addr_str.split('/').nth(2) {
-                if !ips.contains(&ip.to_string()) && ip != "127.0.0.1" && !ip.starts_with("172.17.") {
+                if !ips.contains(&ip.to_string()) && ip != "127.0.0.1" && !ip.starts_with("172.17.")
+                {
                     ips.push(ip.to_string());
                 }
             }
@@ -1128,13 +1199,17 @@ impl PairingManager {
         *self.target_oob_secret.lock() = Some((node_id, secret));
     }
 
-    pub fn parse_qr_payload(&self, payload: &str) -> Result<(String, String, String, u16, Vec<String>)> {
+    pub fn parse_qr_payload(
+        &self,
+        payload: &str,
+    ) -> Result<(String, String, String, u16, Vec<String>)> {
         let url = url::Url::parse(payload).map_err(|_| anyhow::anyhow!("Invalid QR format"))?;
         if url.scheme() != "cdus" {
             return Err(anyhow::anyhow!("Not a CDUS pairing QR"));
         }
-        
-        let is_pair = url.path() == "/pair" || url.host_str() == Some("pair") || url.path() == "pair";
+
+        let is_pair =
+            url.path() == "/pair" || url.host_str() == Some("pair") || url.path() == "pair";
         if !is_pair {
             return Err(anyhow::anyhow!("Invalid CDUS QR path"));
         }
@@ -1151,7 +1226,13 @@ impl PairingManager {
                 "s" => secret = value.into_owned(),
                 "l" => label = value.into_owned(),
                 "p" => port = value.parse().unwrap_or(5200),
-                "a" => ips = value.split(',').map(|s| s.to_string()).filter(|s| !s.is_empty()).collect(),
+                "a" => {
+                    ips = value
+                        .split(',')
+                        .map(|s| s.to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                }
                 _ => {}
             }
         }
@@ -1172,10 +1253,9 @@ impl PairingManager {
                 "QR scan for {} ({}) — already paired, nothing to do.",
                 label, node_id
             );
-            let _ = self.ipc_tx.send(IpcMessage::AlreadyPaired {
-                node_id,
-                label,
-            });
+            let _ = self
+                .ipc_tx
+                .send(IpcMessage::AlreadyPaired { node_id, label });
             return Ok(());
         }
 
@@ -1184,11 +1264,15 @@ impl PairingManager {
 
         // Start pairing attempt
         self.initiate_remote_pairing(node_id);
-        
+
         Ok(())
     }
 
-    pub fn initiate_pairing(&self, target_addr: SocketAddr, target_node_id: Option<String>) -> bool {
+    pub fn initiate_pairing(
+        &self,
+        target_addr: SocketAddr,
+        target_node_id: Option<String>,
+    ) -> bool {
         let stream = match TcpStream::connect_timeout(&target_addr, Duration::from_secs(5)) {
             Ok(s) => s,
             Err(e) => {
@@ -1283,7 +1367,11 @@ fn run_turn_sync_session(
     }
 
     if !pex_records.is_empty() {
-        info!("Sending PEX update ({} peers) to {} via TURN", pex_records.len(), label);
+        info!(
+            "Sending PEX update ({} peers) to {} via TURN",
+            pex_records.len(),
+            label
+        );
         let pex_msg = SyncMessage::PeerExchange { peers: pex_records };
         if let Ok(data) = pex_msg.to_vec() {
             let mut out = vec![0u8; data.len() + 100];
@@ -1297,8 +1385,14 @@ fn run_turn_sync_session(
     if let Ok(Some(ts_str)) = store.get_state("last_sync_timestamp") {
         if let Ok(ts) = ts_str.parse::<u64>() {
             if let Ok(Some(content)) = store.get_state("last_clipboard_content") {
-                info!("Sending initial clipboard update on connection to {} via TURN: timestamp={}", label, ts);
-                let sync_msg = SyncMessage::ClipboardUpdate { content, timestamp: ts };
+                info!(
+                    "Sending initial clipboard update on connection to {} via TURN: timestamp={}",
+                    label, ts
+                );
+                let sync_msg = SyncMessage::ClipboardUpdate {
+                    content,
+                    timestamp: ts,
+                };
                 if let Ok(data) = sync_msg.to_vec() {
                     let mut out = vec![0u8; data.len() + 100];
                     if let Ok(n) = transport.write_message(&data, &mut out) {
@@ -1344,7 +1438,8 @@ fn run_turn_sync_session(
                                 for peer in peers {
                                     if let Ok(peer_id) = peer.node_id.parse::<libp2p::PeerId>() {
                                         for addr_str in peer.addresses {
-                                            if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                                            if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>()
+                                            {
                                                 libp2p_manager.inject_address(peer_id, addr);
                                             }
                                         }
@@ -1378,7 +1473,10 @@ fn run_turn_sync_session(
                             break;
                         }
                         if is_disconnect {
-                            info!("Sent Disconnect to peer {} via TURN, closing session", label);
+                            info!(
+                                "Sent Disconnect to peer {} via TURN, closing session",
+                                label
+                            );
                             break;
                         }
                     }
@@ -1389,7 +1487,10 @@ fn run_turn_sync_session(
                 }
             }
             Err(flume::TryRecvError::Disconnected) => {
-                info!("Outgoing channel disconnected, closing TURN sync session for {}", label);
+                info!(
+                    "Outgoing channel disconnected, closing TURN sync session for {}",
+                    label
+                );
                 break;
             }
             Err(flume::TryRecvError::Empty) => {}
@@ -1482,7 +1583,11 @@ fn handle_incoming_connection_inner(
                 return Err(anyhow::anyhow!("IK message truncated ID"));
             }
             let node_id = String::from_utf8_lossy(&data[2..2 + id_len]).to_string();
-            ("Noise_IK_25519_ChaChaPoly_BLAKE2s", &data[2 + id_len..], Some(node_id))
+            (
+                "Noise_IK_25519_ChaChaPoly_BLAKE2s",
+                &data[2 + id_len..],
+                Some(node_id),
+            )
         } else {
             // XX Pattern: [0x00, noise_msg]
             ("Noise_XX_25519_ChaChaPoly_BLAKE2s", &data[1..], None)
@@ -1505,12 +1610,18 @@ fn handle_incoming_connection_inner(
             if let Ok(Some(device)) = store.get_paired_device(node_id) {
                 remote_static = device.static_key;
             }
-            
+
             if let Some(ref rs) = remote_static {
-                info!("Using known static key for IK responder (direct): {}", node_id);
+                info!(
+                    "Using known static key for IK responder (direct): {}",
+                    node_id
+                );
                 builder = builder.remote_public_key(rs);
             } else {
-                warn!("Received IK handshake from unknown device hint: {}", node_id);
+                warn!(
+                    "Received IK handshake from unknown device hint: {}",
+                    node_id
+                );
             }
         }
     }
@@ -1529,12 +1640,16 @@ fn handle_incoming_connection_inner(
     let self_payload = HandshakePayload {
         label: self_label.clone(),
         node_id: self_node_id.clone(),
-        libp2p_addresses: libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
+        libp2p_addresses: libp2p_manager
+            .get_listen_addresses()
+            .into_iter()
+            .map(|a| a.to_string())
+            .collect(),
         oob_secret: active_oob_secret.lock().clone(),
         intent: None, // Responder doesn't need to send intent
     };
     let self_payload_bytes = serde_json::to_vec(&self_payload).map_err(|e| anyhow::anyhow!(e))?;
-    
+
     // In IK, the responder can send a payload in Message 2
     let n = noise
         .write_message(&self_payload_bytes, &mut buf)
@@ -1618,16 +1733,19 @@ fn handle_incoming_connection_inner(
                 }
             }
         }
-        
+
         if remote_node_id.is_empty() {
-             warn!("IK connection from unknown static key and no payload. Aborting.");
-             return Err(anyhow::anyhow!("Unknown IK initiator"));
+            warn!("IK connection from unknown static key and no payload. Aborting.");
+            return Err(anyhow::anyhow!("Unknown IK initiator"));
         }
     }
 
     // Verify Node ID
     if remote_node_id.is_empty() || remote_node_id.parse::<libp2p::PeerId>().is_err() {
-        error!("Remote node provided an invalid or missing Peer ID: {}", remote_node_id);
+        error!(
+            "Remote node provided an invalid or missing Peer ID: {}",
+            remote_node_id
+        );
         return Err(anyhow::anyhow!("Invalid Peer ID format"));
     }
 
@@ -1655,7 +1773,10 @@ fn handle_incoming_connection_inner(
     // Stale pairing check
     if let Some(HandshakeIntent::Reconnect) = initiator_intent {
         if !is_paired {
-            warn!("Stale LAN pairing attempt from {}. Rejecting.", remote_node_id);
+            warn!(
+                "Stale LAN pairing attempt from {}. Rejecting.",
+                remote_node_id
+            );
             // Send error code 0xFF framed
             write_ws_framed(&mut ws, &mut transport, &[0xFF])?;
             return Err(anyhow::anyhow!("Stale pairing"));
@@ -1665,157 +1786,168 @@ fn handle_incoming_connection_inner(
     if is_paired {
         info!(
             "Trusted device {} ({}) connected via {}. Auto-confirming sync session.",
-            initiator_label, remote_node_id, if use_ik { "IK" } else { "XX" }
+            initiator_label,
+            remote_node_id,
+            if use_ik { "IK" } else { "XX" }
         );
         // Even if already paired, update the static key if we just got a new one
-        let _ = store.add_paired_device(&remote_node_id, &initiator_label, remote_static.as_deref());
+        let _ =
+            store.add_paired_device(&remote_node_id, &initiator_label, remote_static.as_deref());
     } else {
-            info!(
-                "New device {} ({}) requesting pairing. PIN: {}",
-                initiator_label, remote_node_id, pin
-            );
+        info!(
+            "New device {} ({}) requesting pairing. PIN: {}",
+            initiator_label, remote_node_id, pin
+        );
 
-            // Check if OOB secret matches (but still require manual confirmation)
-            let mut _oob_matched = false;
-            {
-                let mut active = active_oob_secret.lock();
-                if let Some(ref secret) = *active {
-                    if let Some(ref initiator_secret) = initiator_oob_secret {
-                        if secret == initiator_secret {
-                            info!("OOB pairing: secret matched!");
-                            _oob_matched = true;
-                        } else {
-                            warn!("OOB pairing: secret mismatch! initiator sent {}, expected {}", initiator_secret, secret);
-                            // We could reject here, but letting it proceed to PIN check is also safe
-                            // as long as we don't auto-confirm.
-                        }
+        // Check if OOB secret matches (but still require manual confirmation)
+        let mut _oob_matched = false;
+        {
+            let mut active = active_oob_secret.lock();
+            if let Some(ref secret) = *active {
+                if let Some(ref initiator_secret) = initiator_oob_secret {
+                    if secret == initiator_secret {
+                        info!("OOB pairing: secret matched!");
+                        _oob_matched = true;
+                    } else {
+                        warn!(
+                            "OOB pairing: secret mismatch! initiator sent {}, expected {}",
+                            initiator_secret, secret
+                        );
+                        // We could reject here, but letting it proceed to PIN check is also safe
+                        // as long as we don't auto-confirm.
                     }
                 }
-                // Clear active secret after connection attempt (one-time use)
-                *active = None;
             }
+            // Clear active secret after connection attempt (one-time use)
+            *active = None;
+        }
 
-            // Update state for UI
-            let confirmed = Arc::new(Mutex::new(None));
-            {
-                let mut ap = active_pairing.lock();
-                *ap = Some(ActivePairingState {
-                    pin: pin.clone(),
-                    is_initiator: false,
-                    remote_id: remote_node_id.clone(),
-                    remote_label: initiator_label.clone(),
-                    confirmed: Arc::clone(&confirmed),
-                    handshake: Arc::new(Mutex::new(None)),
-                    silent: false, // Always show modal for first-time pairing
-                    is_reconnect: false,
-                });
-            }
-
-            // Wait for both local and remote confirmation
-            let mut local_confirmed = false;
-            let mut remote_confirmed = false;
-
-            let _ = ws
-                .get_ref()
-                .set_read_timeout(Some(Duration::from_millis(100)));
-
-            loop {
-                // Check local confirmation
-                {
-                    let res = confirmed.lock();
-                    if let Some(accepted) = *res {
-                        if accepted {
-                            if !local_confirmed {
-                                info!("Local user confirmed. Sending acceptance to initiator.");
-                                write_ws_framed(&mut ws, &mut transport, &[1])?;
-                                local_confirmed = true;
-                                // Give it a moment to send before possibly closing or transitioning
-                                thread::sleep(Duration::from_millis(200));
-                            }
-                        } else {
-                            info!("Local user rejected pairing.");
-                            let _ = write_ws_framed(&mut ws, &mut transport, &[0]);
-                            break;
-                        }
-                    }
-                }
-
-                // Check remote confirmation
-                match read_ws_framed(&mut ws, &mut transport) {
-                    Ok(data) => {
-                        if !data.is_empty() && data[0] == 1 {
-                            info!("Remote initiator confirmed pairing.");
-                            remote_confirmed = true;
-                        } else {
-                            info!("Remote initiator rejected or closed pairing.");
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        if e.kind() != std::io::ErrorKind::WouldBlock
-                            && e.kind() != std::io::ErrorKind::TimedOut
-                        {
-                            error!(
-                                "Connection lost while waiting for pairing confirmation: {}",
-                                e
-                            );
-                            break;
-                        }
-                    }
-                }
-
-                if local_confirmed && remote_confirmed {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(100));
-            }
-
-            // Clear UI state
-            {
-                let mut ap = active_pairing.lock();
-                *ap = None;
-            }
-
-            if !local_confirmed || !remote_confirmed {
-                return Err(anyhow::anyhow!("Pairing failed or rejected"));
-            }
-
-            info!("Both sides confirmed. Pairing successful.");
-            let _ = store.add_paired_device(&remote_node_id, &initiator_label, remote_static.as_deref());
-            let _ = ipc_tx.send(IpcMessage::PairingResult {
-                success: true,
-                node_id: remote_node_id.clone(),
-                label: initiator_label.clone(),
-                error: None,
+        // Update state for UI
+        let confirmed = Arc::new(Mutex::new(None));
+        {
+            let mut ap = active_pairing.lock();
+            *ap = Some(ActivePairingState {
+                pin: pin.clone(),
+                is_initiator: false,
+                remote_id: remote_node_id.clone(),
+                remote_label: initiator_label.clone(),
+                confirmed: Arc::clone(&confirmed),
+                handshake: Arc::new(Mutex::new(None)),
+                silent: false, // Always show modal for first-time pairing
+                is_reconnect: false,
             });
         }
 
-        // If we reach here, we are either trusted (skipped loop) or pairing was confirmed (loop finished)
-        // Wait! We STILL need to send/receive the confirmation bytes even if trusted, 
-        // to keep the protocol consistent!
-        if is_paired {
-             // Send our confirmation
-             write_ws_framed(&mut ws, &mut transport, &[1])?;
-             // Wait for remote confirmation
-             let _ = ws.get_ref().set_read_timeout(Some(Duration::from_secs(2)));
-             match read_ws_framed(&mut ws, &mut transport) {
-                 Ok(data) if !data.is_empty() && data[0] == 1 => {
-                     info!("Remote side also trusted us. Session established.");
-                 }
-                 _ => return Err(anyhow::anyhow!("Remote side did not confirm trusted session")),
-             }
+        // Wait for both local and remote confirmation
+        let mut local_confirmed = false;
+        let mut remote_confirmed = false;
+
+        let _ = ws
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(100)));
+
+        loop {
+            // Check local confirmation
+            {
+                let res = confirmed.lock();
+                if let Some(accepted) = *res {
+                    if accepted {
+                        if !local_confirmed {
+                            info!("Local user confirmed. Sending acceptance to initiator.");
+                            write_ws_framed(&mut ws, &mut transport, &[1])?;
+                            local_confirmed = true;
+                            // Give it a moment to send before possibly closing or transitioning
+                            thread::sleep(Duration::from_millis(200));
+                        }
+                    } else {
+                        info!("Local user rejected pairing.");
+                        let _ = write_ws_framed(&mut ws, &mut transport, &[0]);
+                        break;
+                    }
+                }
+            }
+
+            // Check remote confirmation
+            match read_ws_framed(&mut ws, &mut transport) {
+                Ok(data) => {
+                    if !data.is_empty() && data[0] == 1 {
+                        info!("Remote initiator confirmed pairing.");
+                        remote_confirmed = true;
+                    } else {
+                        info!("Remote initiator rejected or closed pairing.");
+                        break;
+                    }
+                }
+                Err(e) => {
+                    if e.kind() != std::io::ErrorKind::WouldBlock
+                        && e.kind() != std::io::ErrorKind::TimedOut
+                    {
+                        error!(
+                            "Connection lost while waiting for pairing confirmation: {}",
+                            e
+                        );
+                        break;
+                    }
+                }
+            }
+
+            if local_confirmed && remote_confirmed {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
         }
 
-        run_sync_session(
-            ws,
-            transport,
-            remote_node_id.clone(),
-            initiator_label.clone(),
-            sync_manager,
-            ipc_tx,
-            store,
-            libp2p_manager,
-        )?;
+        // Clear UI state
+        {
+            let mut ap = active_pairing.lock();
+            *ap = None;
+        }
+
+        if !local_confirmed || !remote_confirmed {
+            return Err(anyhow::anyhow!("Pairing failed or rejected"));
+        }
+
+        info!("Both sides confirmed. Pairing successful.");
+        let _ =
+            store.add_paired_device(&remote_node_id, &initiator_label, remote_static.as_deref());
+        let _ = ipc_tx.send(IpcMessage::PairingResult {
+            success: true,
+            node_id: remote_node_id.clone(),
+            label: initiator_label.clone(),
+            error: None,
+        });
+    }
+
+    // If we reach here, we are either trusted (skipped loop) or pairing was confirmed (loop finished)
+    // Wait! We STILL need to send/receive the confirmation bytes even if trusted,
+    // to keep the protocol consistent!
+    if is_paired {
+        // Send our confirmation
+        write_ws_framed(&mut ws, &mut transport, &[1])?;
+        // Wait for remote confirmation
+        let _ = ws.get_ref().set_read_timeout(Some(Duration::from_secs(2)));
+        match read_ws_framed(&mut ws, &mut transport) {
+            Ok(data) if !data.is_empty() && data[0] == 1 => {
+                info!("Remote side also trusted us. Session established.");
+            }
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Remote side did not confirm trusted session"
+                ))
+            }
+        }
+    }
+
+    run_sync_session(
+        ws,
+        transport,
+        remote_node_id.clone(),
+        initiator_label.clone(),
+        sync_manager,
+        ipc_tx,
+        store,
+        libp2p_manager,
+    )?;
 
     Ok(())
 }
@@ -1921,7 +2053,11 @@ fn handle_outgoing_connection_inner(
         Some(HandshakePayload {
             label: self_label.clone(),
             node_id: self_node_id.clone(),
-            libp2p_addresses: libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
+            libp2p_addresses: libp2p_manager
+                .get_listen_addresses()
+                .into_iter()
+                .map(|a| a.to_string())
+                .collect(),
             oob_secret: None,
             intent: Some(HandshakeIntent::Reconnect),
         })
@@ -1938,7 +2074,7 @@ fn handle_outgoing_connection_inner(
     let n = noise
         .write_message(&initiator_payload_bytes, &mut buf)
         .map_err(|e| anyhow::anyhow!(e))?;
-    
+
     let mut prefixed_msg = vec![prefix];
     if use_ik {
         let node_id_bytes = self_node_id.as_bytes();
@@ -2016,9 +2152,17 @@ fn handle_outgoing_connection_inner(
             let self_payload = HandshakePayload {
                 label: self_label.clone(),
                 node_id: self_node_id.clone(),
-                libp2p_addresses: libp2p_manager.get_listen_addresses().into_iter().map(|a| a.to_string()).collect(),
+                libp2p_addresses: libp2p_manager
+                    .get_listen_addresses()
+                    .into_iter()
+                    .map(|a| a.to_string())
+                    .collect(),
                 oob_secret: oob_secret.clone(),
-                intent: Some(if is_reconnect { HandshakeIntent::Reconnect } else { HandshakeIntent::Pair }),
+                intent: Some(if is_reconnect {
+                    HandshakeIntent::Reconnect
+                } else {
+                    HandshakeIntent::Pair
+                }),
             };
             let self_payload_bytes =
                 serde_json::to_vec(&self_payload).map_err(|e| anyhow::anyhow!(e))?;
@@ -2055,7 +2199,11 @@ fn handle_outgoing_connection_inner(
                 responder_label, remote_node_id
             );
             // Even if already paired, update the static key if we just got a new one
-            let _ = store.add_paired_device(&remote_node_id, &responder_label, remote_static.as_deref());
+            let _ = store.add_paired_device(
+                &remote_node_id,
+                &responder_label,
+                remote_static.as_deref(),
+            );
         } else {
             info!(
                 "Initiating pairing with {} ({}). PIN: {}",
@@ -2142,7 +2290,11 @@ fn handle_outgoing_connection_inner(
 
             if local_confirmed && remote_confirmed {
                 info!("Both sides confirmed. Pairing successful.");
-                let _ = store.add_paired_device(&remote_node_id, &responder_label, remote_static.as_deref());
+                let _ = store.add_paired_device(
+                    &remote_node_id,
+                    &responder_label,
+                    remote_static.as_deref(),
+                );
                 let _ = ipc_tx.send(IpcMessage::PairingResult {
                     success: true,
                     node_id: remote_node_id.clone(),
@@ -2166,29 +2318,33 @@ fn handle_outgoing_connection_inner(
 
         // If trusted, exchange confirmation bytes
         if is_paired {
-             // Send our confirmation
-             write_ws_framed(&mut ws, &mut transport, &[1])?;
-             // Wait for remote confirmation
-             let _ = ws.get_ref().set_read_timeout(Some(Duration::from_secs(2)));
-             match read_ws_framed(&mut ws, &mut transport) {
-                 Ok(data) if !data.is_empty() && data[0] == 1 => {
-                     info!("Remote side also trusted us. Session established.");
-                 }
-                 Ok(data) if !data.is_empty() && data[0] == 0xFF => {
-                     warn!("Remote device rejected reconnection (stale pairing).");
-                     let label = if let Ok(Some(device)) = store.get_paired_device(&remote_node_id) {
-                         device.label
-                     } else {
-                         responder_label.clone()
-                     };
-                     let _ = ipc_tx.send(IpcMessage::StalePairing {
-                         node_id: remote_node_id.clone(),
-                         label,
-                     });
-                     return Err(anyhow::anyhow!("Stale pairing"));
-                 }
-                 _ => return Err(anyhow::anyhow!("Remote side did not confirm trusted session")),
-             }
+            // Send our confirmation
+            write_ws_framed(&mut ws, &mut transport, &[1])?;
+            // Wait for remote confirmation
+            let _ = ws.get_ref().set_read_timeout(Some(Duration::from_secs(2)));
+            match read_ws_framed(&mut ws, &mut transport) {
+                Ok(data) if !data.is_empty() && data[0] == 1 => {
+                    info!("Remote side also trusted us. Session established.");
+                }
+                Ok(data) if !data.is_empty() && data[0] == 0xFF => {
+                    warn!("Remote device rejected reconnection (stale pairing).");
+                    let label = if let Ok(Some(device)) = store.get_paired_device(&remote_node_id) {
+                        device.label
+                    } else {
+                        responder_label.clone()
+                    };
+                    let _ = ipc_tx.send(IpcMessage::StalePairing {
+                        node_id: remote_node_id.clone(),
+                        label,
+                    });
+                    return Err(anyhow::anyhow!("Stale pairing"));
+                }
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Remote side did not confirm trusted session"
+                    ))
+                }
+            }
         }
 
         run_sync_session(
@@ -2266,7 +2422,11 @@ fn run_sync_session(
     }
 
     if !pex_records.is_empty() {
-        info!("Sending PEX update ({} peers) to {}", pex_records.len(), label);
+        info!(
+            "Sending PEX update ({} peers) to {}",
+            pex_records.len(),
+            label
+        );
         let pex_msg = SyncMessage::PeerExchange { peers: pex_records };
         if let Ok(data) = pex_msg.to_vec() {
             let _ = write_ws_framed(&mut ws, &mut transport, &data);
@@ -2277,8 +2437,14 @@ fn run_sync_session(
     if let Ok(Some(ts_str)) = store.get_state("last_sync_timestamp") {
         if let Ok(ts) = ts_str.parse::<u64>() {
             if let Ok(Some(content)) = store.get_state("last_clipboard_content") {
-                info!("Sending initial clipboard update on connection to {}: timestamp={}", label, ts);
-                let sync_msg = SyncMessage::ClipboardUpdate { content, timestamp: ts };
+                info!(
+                    "Sending initial clipboard update on connection to {}: timestamp={}",
+                    label, ts
+                );
+                let sync_msg = SyncMessage::ClipboardUpdate {
+                    content,
+                    timestamp: ts,
+                };
                 if let Ok(data) = sync_msg.to_vec() {
                     let _ = write_ws_framed(&mut ws, &mut transport, &data);
                 }
@@ -2324,7 +2490,10 @@ fn run_sync_session(
                             }
                         }
                         SyncMessage::Disconnect => {
-                            info!("Received Disconnect request from peer {}, closing session", label);
+                            info!(
+                                "Received Disconnect request from peer {}, closing session",
+                                label
+                            );
                             break;
                         }
                     }
@@ -2352,7 +2521,10 @@ fn run_sync_session(
                 }
             }
             Err(flume::TryRecvError::Disconnected) => {
-                info!("Outgoing channel disconnected, closing sync session for {}", label);
+                info!(
+                    "Outgoing channel disconnected, closing sync session for {}",
+                    label
+                );
                 break;
             }
             Err(flume::TryRecvError::Empty) => {}

@@ -1,21 +1,27 @@
+use crate::store::Store;
 use anyhow::{anyhow, Result};
 use blake3;
+use cdus_common::{
+    ChunkAck, ChunkFrame, FileMessage, ProgressEvent, TransferAcceptance, TransferComplete,
+    TransferError, TransferRequest,
+};
+use chacha20poly1305::{
+    aead::{Aead, KeyInit},
+    ChaCha20Poly1305, Key, Nonce,
+};
+use flume::{Receiver, Sender};
+use futures::{AsyncReadExt, AsyncWriteExt};
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, aead::{Aead, KeyInit}};
-use crate::store::Store;
-use cdus_common::{FileMessage, TransferRequest, TransferAcceptance, ChunkFrame, ChunkAck, TransferComplete, TransferError, ProgressEvent};
-use flume::{Sender, Receiver};
-use tracing::{info, error, debug};
-use futures::{AsyncReadExt, AsyncWriteExt};
-use std::collections::HashMap;
-use parking_lot::Mutex;
 use sysinfo::Disks;
+use tracing::{debug, error, info};
 
 /// Metadata for a single chunk of a file
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,14 +63,23 @@ impl FileTransferManager {
     }
 
     pub fn handle_decision(&self, transfer_id: &str, accepted: bool) {
-        info!("FileTransferManager: user decision for {}: accepted={}", transfer_id, accepted);
+        info!(
+            "FileTransferManager: user decision for {}: accepted={}",
+            transfer_id, accepted
+        );
         let mut decisions = self.pending_decisions.lock();
         let tx_opt: Option<Sender<bool>> = decisions.remove(transfer_id);
         if let Some(tx) = tx_opt {
-            info!("FileTransferManager: found pending decision for {}, sending {}", transfer_id, accepted);
+            info!(
+                "FileTransferManager: found pending decision for {}, sending {}",
+                transfer_id, accepted
+            );
             let _ = tx.send(accepted);
         } else {
-            error!("FileTransferManager: no pending decision found for {}", transfer_id);
+            error!(
+                "FileTransferManager: no pending decision found for {}",
+                transfer_id
+            );
         }
     }
 
@@ -78,7 +93,7 @@ impl FileTransferManager {
     pub fn register_transfer(&self, transfer_id: String) -> (Receiver<()>, Receiver<()>) {
         let (cancel_tx, cancel_rx) = flume::bounded(1);
         let (crash_tx, crash_rx) = flume::bounded(1);
-        
+
         {
             let mut tokens = self.cancel_tokens.lock();
             tokens.insert(transfer_id.clone(), cancel_tx);
@@ -87,7 +102,7 @@ impl FileTransferManager {
             let mut tokens = self.crash_tokens.lock();
             tokens.insert(transfer_id.clone(), crash_tx);
         }
-        
+
         // Update power lock
         let mut active = self.active_transfers.lock();
         *active += 1;
@@ -106,7 +121,7 @@ impl FileTransferManager {
                 Err(e) => error!("Failed to acquire power lock: {}", e),
             }
         }
-        
+
         (cancel_rx, crash_rx)
     }
 
@@ -123,7 +138,7 @@ impl FileTransferManager {
             let mut triggers = self.crash_triggers.lock();
             triggers.remove(transfer_id);
         }
-        
+
         // Update power lock
         let mut active = self.active_transfers.lock();
         if *active > 0 {
@@ -150,14 +165,20 @@ impl FileTransferManager {
     pub fn cancel_all_transfers_for_peer(&self, peer_id: &str) {
         if let Ok(transfers) = self.db.get_active_transfers_for_peer(peer_id) {
             for t in transfers {
-                info!("Cancelling active transfer {} for disconnected peer {}", t.transfer_id, peer_id);
+                info!(
+                    "Cancelling active transfer {} for disconnected peer {}",
+                    t.transfer_id, peer_id
+                );
                 self.cancel_transfer(&t.transfer_id);
             }
         }
     }
 
     pub fn simulate_crash(&self, transfer_id: &str) {
-        info!("FileTransferManager: SIMULATING HARD CRASH for {}", transfer_id);
+        info!(
+            "FileTransferManager: SIMULATING HARD CRASH for {}",
+            transfer_id
+        );
         // In a real system we'd just return an error, but for testing auto-resume after process death:
         #[cfg(not(test))]
         std::process::exit(42);
@@ -171,7 +192,10 @@ impl FileTransferManager {
     }
 
     pub fn set_crash_trigger(&self, transfer_id: String, offset: u64) {
-        info!("FileTransferManager: setting crash trigger for {} at {} bytes", transfer_id, offset);
+        info!(
+            "FileTransferManager: setting crash trigger for {} at {} bytes",
+            transfer_id, offset
+        );
         let mut triggers = self.crash_triggers.lock();
         triggers.insert(transfer_id, offset);
     }
@@ -184,7 +208,10 @@ impl FileTransferManager {
 
         if let Some(offset) = trigger_offset {
             if current_offset >= offset {
-                info!("FileTransferManager: current offset {} >= trigger {}, firing crash", current_offset, offset);
+                info!(
+                    "FileTransferManager: current offset {} >= trigger {}, firing crash",
+                    current_offset, offset
+                );
                 {
                     let mut triggers = self.crash_triggers.lock();
                     triggers.remove(transfer_id);
@@ -199,14 +226,15 @@ impl SessionKey {
     pub fn encrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
         let key = Key::from_slice(&self.0);
         let cipher = ChaCha20Poly1305::new(key);
-        
+
         let mut nonce_bytes = [0u8; 12];
         rand::Rng::fill(&mut rand::thread_rng(), &mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
-        
-        let ciphertext = cipher.encrypt(nonce, data)
+
+        let ciphertext = cipher
+            .encrypt(nonce, data)
             .map_err(|e| anyhow!("Encryption failed: {}", e))?;
-            
+
         let mut result = nonce_bytes.to_vec();
         result.extend(ciphertext);
         Ok(result)
@@ -220,8 +248,9 @@ impl SessionKey {
         let key = Key::from_slice(&self.0);
         let cipher = ChaCha20Poly1305::new(key);
         let nonce = Nonce::from_slice(nonce_bytes);
-        
-        cipher.decrypt(nonce, ciphertext)
+
+        cipher
+            .decrypt(nonce, ciphertext)
             .map_err(|e| anyhow!("Decryption failed: {}", e))
     }
 }
@@ -247,7 +276,7 @@ impl Libp2pFileStream {
             let mut in_rx_stream = in_rx.into_stream();
 
             info!("Libp2pWorker: started background tasks for stream");
-            
+
             let write_task = async move {
                 while let Some(msg) = futures::StreamExt::next(&mut in_rx_stream).await {
                     match msg.to_vec() {
@@ -285,17 +314,19 @@ impl Libp2pFileStream {
                         break;
                     }
                     let len = u32::from_be_bytes(len_bytes) as usize;
-                    
+
                     let mut data = vec![0u8; len];
                     if let Err(e) = read_half.read_exact(&mut data).await {
                         error!("Libp2pWorker: read body error: {}", e);
                         break;
                     }
-                    
+
                     match FileMessage::from_slice(&data) {
                         Ok(msg) => {
                             if let Err(_) = out_tx.send_async(msg).await {
-                                info!("Libp2pWorker: output channel closed, shutting down read task");
+                                info!(
+                                    "Libp2pWorker: output channel closed, shutting down read task"
+                                );
                                 break;
                             }
                         }
@@ -312,37 +343,57 @@ impl Libp2pFileStream {
             info!("Libp2pWorker: background tasks completed");
         });
 
-        Libp2pFileStream { tx: in_tx, rx: out_rx }
+        Libp2pFileStream {
+            tx: in_tx,
+            rx: out_rx,
+        }
     }
 }
 
 impl FileStream for Libp2pFileStream {
     fn write_message(&mut self, msg: &FileMessage) -> Result<()> {
         match msg {
-            FileMessage::Chunk(ref c) => debug!("Libp2pStream: queueing Chunk(index={}, offset={})", c.chunk_index, c.byte_offset),
+            FileMessage::Chunk(ref c) => debug!(
+                "Libp2pStream: queueing Chunk(index={}, offset={})",
+                c.chunk_index, c.byte_offset
+            ),
             _ => debug!("Libp2pStream: queueing message {:?}", msg),
         }
-        self.tx.send(msg.clone()).map_err(|e| anyhow!("Failed to send to worker: {}", e))
+        self.tx
+            .send(msg.clone())
+            .map_err(|e| anyhow!("Failed to send to worker: {}", e))
     }
 
     fn read_message(&mut self) -> Result<FileMessage> {
         debug!("Libp2pStream: waiting to read message from channel...");
-        let msg = self.rx.recv().map_err(|e| anyhow!("Failed to read from worker: {}", e))?;
+        let msg = self
+            .rx
+            .recv()
+            .map_err(|e| anyhow!("Failed to read from worker: {}", e))?;
         match msg {
-            FileMessage::Chunk(ref c) => debug!("Libp2pStream: received Chunk(index={}, offset={}) from channel", c.chunk_index, c.byte_offset),
+            FileMessage::Chunk(ref c) => debug!(
+                "Libp2pStream: received Chunk(index={}, offset={}) from channel",
+                c.chunk_index, c.byte_offset
+            ),
             _ => debug!("Libp2pStream: received message: {:?}", msg),
         }
         Ok(msg)
     }
 
     fn read_message_timeout(&mut self, timeout: Duration) -> Result<FileMessage> {
-        debug!("Libp2pStream: waiting to read message from channel (timeout={:?})...", timeout);
+        debug!(
+            "Libp2pStream: waiting to read message from channel (timeout={:?})...",
+            timeout
+        );
         let msg = self.rx.recv_timeout(timeout).map_err(|e| match e {
             flume::RecvTimeoutError::Timeout => anyhow!("Read timeout"),
             flume::RecvTimeoutError::Disconnected => anyhow!("Worker closed: Disconnected"),
         })?;
         match msg {
-            FileMessage::Chunk(ref c) => debug!("Libp2pStream: received Chunk(index={}, offset={}) from channel", c.chunk_index, c.byte_offset),
+            FileMessage::Chunk(ref c) => debug!(
+                "Libp2pStream: received Chunk(index={}, offset={}) from channel",
+                c.chunk_index, c.byte_offset
+            ),
             _ => debug!("Libp2pStream: received message: {:?}", msg),
         }
         Ok(msg)
@@ -355,7 +406,9 @@ pub fn hash_file(path: &Path) -> Result<String> {
     let mut buf = vec![0u8; 1024 * 1024]; // 1MB read buffer
     loop {
         let n = file.read(&mut buf)?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         hasher.update(&buf[..n]);
     }
     Ok(hasher.finalize().to_hex().to_string())
@@ -367,7 +420,11 @@ pub fn compute_chunk_plan(total_bytes: u64, chunk_size: u32) -> Vec<ChunkMeta> {
     let mut index = 0u32;
     while offset < total_bytes {
         let length = std::cmp::min(chunk_size as u64, total_bytes - offset) as u32;
-        chunks.push(ChunkMeta { index, offset, length });
+        chunks.push(ChunkMeta {
+            index,
+            offset,
+            length,
+        });
         offset += length as u64;
         index += 1;
     }
@@ -390,7 +447,10 @@ pub fn safe_destination_path(download_dir: &Path, file_name: &str) -> Result<Pat
     while dest.exists() {
         let path = Path::new(&safe_name);
         let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-        let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+        let ext = path
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
         dest = download_dir.join(format!("{} ({}){}", stem, counter, ext));
         counter += 1;
     }
@@ -398,14 +458,19 @@ pub fn safe_destination_path(download_dir: &Path, file_name: &str) -> Result<Pat
 }
 
 pub fn cleanup_stale_transfers(db: &Store) -> Result<()> {
-    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
     let cutoff = now_ms - (7 * 24 * 60 * 60 * 1000); // 7 days
     let stale = db.get_transfers_older_than(cutoff, &["paused", "pending"])?;
     for transfer in stale {
         info!("Cleaning up stale transfer: {}", transfer.transfer_id);
         if !transfer.file_path.is_empty() {
             let part_path = PathBuf::from(&transfer.file_path).with_extension("cdus.part");
-            if part_path.exists() { let _ = std::fs::remove_file(part_path); }
+            if part_path.exists() {
+                let _ = std::fs::remove_file(part_path);
+            }
         }
         db.update_transfer_status(&transfer.transfer_id, "failed")?;
     }
@@ -421,9 +486,19 @@ pub fn handle_incoming_transfer_with_manager(
     manager: Arc<FileTransferManager>,
     peer_id: String,
 ) -> Result<()> {
-    info!("handle_incoming_transfer_with_manager started for peer {}", peer_id);
+    info!(
+        "handle_incoming_transfer_with_manager started for peer {}",
+        peer_id
+    );
     let mut stream = stream;
-    let res = handle_incoming_transfer_inner(&mut *stream, Arc::clone(&db), session_key, download_dir, Arc::clone(&manager), &peer_id);
+    let res = handle_incoming_transfer_inner(
+        &mut *stream,
+        Arc::clone(&db),
+        session_key,
+        download_dir,
+        Arc::clone(&manager),
+        &peer_id,
+    );
     if let Err(ref e) = res {
         error!("Incoming transfer failed: {}", e);
     }
@@ -466,41 +541,60 @@ fn handle_incoming_transfer_inner(
     let transfer_id = req.transfer_id.clone();
     let is_benchmark = transfer_id == BENCHMARK_ID;
 
-    info!("Received TransferRequest for {} ({} bytes). Processing...", transfer_id, req.total_bytes);
+    info!(
+        "Received TransferRequest for {} ({} bytes). Processing...",
+        transfer_id, req.total_bytes
+    );
 
     if !is_benchmark {
         let disks = Disks::new_with_refreshed_list();
-        let available_space = disks.iter()
+        let available_space = disks
+            .iter()
             .filter(|d| download_dir.starts_with(d.mount_point()))
             .map(|d| d.available_space())
             .max()
             .unwrap_or(u64::MAX);
 
         if req.total_bytes > (available_space as f64 * 0.9) as u64 {
-            let _ = stream.write_message(&FileMessage::Error(TransferError { transfer_id: transfer_id.clone(), reason: "Insufficient disk space".to_string() }));
+            let _ = stream.write_message(&FileMessage::Error(TransferError {
+                transfer_id: transfer_id.clone(),
+                reason: "Insufficient disk space".to_string(),
+            }));
             return Err(anyhow!("Insufficient disk space"));
         }
     }
 
     if db.get_transfer(&transfer_id)?.is_none() {
-        db.create_transfer(&transfer_id, "incoming", peer_id, "", &req.file_name, req.total_bytes, req.chunk_size, &req.file_hash)?;
-        
+        db.create_transfer(
+            &transfer_id,
+            "incoming",
+            peer_id,
+            "",
+            &req.file_name,
+            req.total_bytes,
+            req.chunk_size,
+            &req.file_hash,
+        )?;
+
         // Populate chunk plan for tracking
         if !is_benchmark {
             let chunk_plan = compute_chunk_plan(req.total_bytes, req.chunk_size);
-            let db_chunks: Vec<(u32, String, u64, u32)> = chunk_plan.iter().map(|c| (c.index, String::new(), c.offset, c.length)).collect();
+            let db_chunks: Vec<(u32, String, u64, u32)> = chunk_plan
+                .iter()
+                .map(|c| (c.index, String::new(), c.offset, c.length))
+                .collect();
             db.insert_chunks_batch(&transfer_id, &db_chunks)?;
         }
     }
 
     let decision_rx = manager.add_pending_decision(transfer_id.clone());
     let (cancel_rx, crash_rx) = manager.register_transfer(transfer_id.clone());
-    manager.progress_tx.send(ProgressEvent::IncomingRequest { 
-        transfer_id: transfer_id.clone(), 
+    manager.progress_tx.send(ProgressEvent::IncomingRequest {
+        transfer_id: transfer_id.clone(),
         node_id: peer_id.to_string(),
-        file_name: req.file_name.clone(), 
-        total_bytes: req.total_bytes, 
-        sender_label: req.sender_label.clone() 
+        file_name: req.file_name.clone(),
+        total_bytes: req.total_bytes,
+        sender_label: req.sender_label.clone(),
     })?;
 
     info!("Waiting for user decision on transfer {}", transfer_id);
@@ -510,10 +604,10 @@ fn handle_incoming_transfer_inner(
     } else {
         match decision_rx.recv_timeout(Duration::from_secs(120)) {
             Ok(a) => a,
-            Err(_) => { 
+            Err(_) => {
                 error!("User decision timeout for {}", transfer_id);
-                manager.unregister_transfer(&transfer_id); 
-                return Err(anyhow!("User decision timeout")); 
+                manager.unregister_transfer(&transfer_id);
+                return Err(anyhow!("User decision timeout"));
             }
         }
     };
@@ -528,7 +622,11 @@ fn handle_incoming_transfer_inner(
                 // Query missing chunks for selective resume
                 let missing = db.get_incomplete_chunks(&transfer_id)?;
                 if !missing.is_empty() {
-                    info!("Resuming {} with {} missing chunks", transfer_id, missing.len());
+                    info!(
+                        "Resuming {} with {} missing chunks",
+                        transfer_id,
+                        missing.len()
+                    );
                     missing_chunks = Some(missing);
                 } else {
                     info!("Resuming {} from {} bytes", transfer_id, resume_from);
@@ -538,7 +636,12 @@ fn handle_incoming_transfer_inner(
     }
 
     info!("Sending Acceptance message for {}", transfer_id);
-    stream.write_message(&FileMessage::Acceptance(TransferAcceptance { transfer_id: transfer_id.clone(), accepted, resume_from, missing_chunks }))?;
+    stream.write_message(&FileMessage::Acceptance(TransferAcceptance {
+        transfer_id: transfer_id.clone(),
+        accepted,
+        resume_from,
+        missing_chunks,
+    }))?;
     if !accepted {
         db.update_transfer_status(&transfer_id, "declined")?;
         manager.unregister_transfer(&transfer_id);
@@ -550,11 +653,14 @@ fn handle_incoming_transfer_inner(
     } else {
         safe_destination_path(&download_dir, &req.file_name)?
     };
-    
+
     let part_path = dest_path.with_extension("cdus.part");
     if !is_benchmark {
         let conn = db.state_conn.lock();
-        conn.execute("UPDATE file_transfers SET file_path = ?1 WHERE transfer_id = ?2", (dest_path.to_string_lossy(), &transfer_id))?;
+        conn.execute(
+            "UPDATE file_transfers SET file_path = ?1 WHERE transfer_id = ?2",
+            (dest_path.to_string_lossy(), &transfer_id),
+        )?;
     }
 
     let mut file_opt = if !is_benchmark {
@@ -563,26 +669,33 @@ fn handle_incoming_transfer_inner(
             .create(true)
             .truncate(false)
             .open(&part_path)?;
-        if resume_from > 0 { f.seek(SeekFrom::Start(resume_from))?; }
+        if resume_from > 0 {
+            f.seek(SeekFrom::Start(resume_from))?;
+        }
         Some(f)
     } else {
         None
     };
 
     db.update_transfer_status(&transfer_id, "in_progress")?;
-    manager.progress_tx.send(ProgressEvent::Started { 
-        transfer_id: transfer_id.clone(), 
+    manager.progress_tx.send(ProgressEvent::Started {
+        transfer_id: transfer_id.clone(),
         file_name: req.file_name.clone(),
-        total_bytes: req.total_bytes, 
-        is_outgoing: false 
+        total_bytes: req.total_bytes,
+        is_outgoing: false,
     })?;
 
     info!("Starting receive loop for {}", transfer_id);
     let mut timeout_count = 0;
     let loop_res = loop {
         if cancel_rx.try_recv().is_ok() {
-            info!("Incoming transfer {} cancelled by user (receiver loop)", transfer_id);
-            let _ = stream.write_message(&FileMessage::Cancel { transfer_id: transfer_id.clone() });
+            info!(
+                "Incoming transfer {} cancelled by user (receiver loop)",
+                transfer_id
+            );
+            let _ = stream.write_message(&FileMessage::Cancel {
+                transfer_id: transfer_id.clone(),
+            });
             break Ok(());
         }
         if crash_rx.try_recv().is_ok() {
@@ -595,13 +708,21 @@ fn handle_incoming_transfer_inner(
                 timeout_count = 0;
                 let plaintext = match session_key.decrypt(&chunk.data) {
                     Ok(p) => p,
-                    Err(e) => { error!("Decryption failed for {}: {}", transfer_id, e); break Err(e); }
+                    Err(e) => {
+                        error!("Decryption failed for {}: {}", transfer_id, e);
+                        break Err(e);
+                    }
                 };
                 let computed_hash = blake3::hash(&plaintext).to_hex().to_string();
                 if computed_hash != chunk.chunk_hash {
-                    let _ = stream.write_message(&FileMessage::Error(TransferError { transfer_id: transfer_id.clone(), reason: format!("chunk {} hash mismatch", chunk.chunk_index) }));
+                    let _ = stream.write_message(&FileMessage::Error(TransferError {
+                        transfer_id: transfer_id.clone(),
+                        reason: format!("chunk {} hash mismatch", chunk.chunk_index),
+                    }));
                     db.update_transfer_status_error(&transfer_id, "chunk hash mismatch")?;
-                    if !is_benchmark { let _ = fs::remove_file(&part_path); }
+                    if !is_benchmark {
+                        let _ = fs::remove_file(&part_path);
+                    }
                     break Err(anyhow!("Chunk hash mismatch"));
                 }
                 if let Some(ref mut f) = file_opt {
@@ -613,12 +734,16 @@ fn handle_incoming_transfer_inner(
                 db.update_bytes_confirmed(&transfer_id, new_confirmed)?;
                 db.mark_chunk_verified(&transfer_id, chunk.chunk_index)?;
                 manager.check_crash_trigger(&transfer_id, new_confirmed);
-                let _ = manager.progress_tx.send(ProgressEvent::Progress { 
-                    transfer_id: transfer_id.clone(), 
+                let _ = manager.progress_tx.send(ProgressEvent::Progress {
+                    transfer_id: transfer_id.clone(),
                     bytes_confirmed: new_confirmed,
-                    total_bytes: req.total_bytes
+                    total_bytes: req.total_bytes,
                 });
-                if let Err(e) = stream.write_message(&FileMessage::Ack(ChunkAck { transfer_id: transfer_id.clone(), chunk_index: chunk.chunk_index, bytes_confirmed: new_confirmed })) {
+                if let Err(e) = stream.write_message(&FileMessage::Ack(ChunkAck {
+                    transfer_id: transfer_id.clone(),
+                    chunk_index: chunk.chunk_index,
+                    bytes_confirmed: new_confirmed,
+                })) {
                     error!("Failed to send ACK for {}: {}", transfer_id, e);
                     break Err(e);
                 }
@@ -632,7 +757,10 @@ fn handle_incoming_transfer_inner(
 
                     let actual_hash = hash_file(&part_path)?;
                     if actual_hash != complete.file_hash {
-                        let _ = stream.write_message(&FileMessage::Error(TransferError { transfer_id: transfer_id.clone(), reason: "whole file hash mismatch".into() }));
+                        let _ = stream.write_message(&FileMessage::Error(TransferError {
+                            transfer_id: transfer_id.clone(),
+                            reason: "whole file hash mismatch".into(),
+                        }));
                         db.update_transfer_status_error(&transfer_id, "file hash mismatch")?;
                         let _ = fs::remove_file(&part_path);
                         break Err(anyhow!("Whole file hash mismatch"));
@@ -640,28 +768,62 @@ fn handle_incoming_transfer_inner(
                     fs::rename(&part_path, &dest_path)?;
                 }
                 db.update_transfer_status(&transfer_id, "complete")?;
-                let _ = stream.write_message(&FileMessage::Ack(ChunkAck { transfer_id: transfer_id.clone(), chunk_index: u32::MAX, bytes_confirmed: req.total_bytes }));
-                let _ = manager.progress_tx.send(ProgressEvent::Complete { transfer_id: transfer_id.clone(), dest_path });
+                let _ = stream.write_message(&FileMessage::Ack(ChunkAck {
+                    transfer_id: transfer_id.clone(),
+                    chunk_index: u32::MAX,
+                    bytes_confirmed: req.total_bytes,
+                }));
+                let _ = manager.progress_tx.send(ProgressEvent::Complete {
+                    transfer_id: transfer_id.clone(),
+                    dest_path,
+                });
                 break Ok(());
             }
-            Ok(FileMessage::Cancel { .. }) => { info!("Incoming transfer {} cancelled by remote", transfer_id); break Ok(()); }
-            Ok(FileMessage::Error(e)) => { error!("Incoming transfer {} remote error: {}", transfer_id, e.reason); db.update_transfer_status_error(&transfer_id, &e.reason)?; break Err(anyhow!("Remote error: {}", e.reason)); }
-            Ok(_) => { timeout_count = 0; continue; }
-            Err(e) if e.to_string().to_lowercase().contains("timeout") || e.to_string().to_lowercase().contains("timed out") || e.to_string().to_lowercase().contains("deadline has elapsed") => {
+            Ok(FileMessage::Cancel { .. }) => {
+                info!("Incoming transfer {} cancelled by remote", transfer_id);
+                break Ok(());
+            }
+            Ok(FileMessage::Error(e)) => {
+                error!(
+                    "Incoming transfer {} remote error: {}",
+                    transfer_id, e.reason
+                );
+                db.update_transfer_status_error(&transfer_id, &e.reason)?;
+                break Err(anyhow!("Remote error: {}", e.reason));
+            }
+            Ok(_) => {
+                timeout_count = 0;
+                continue;
+            }
+            Err(e)
+                if e.to_string().to_lowercase().contains("timeout")
+                    || e.to_string().to_lowercase().contains("timed out")
+                    || e.to_string()
+                        .to_lowercase()
+                        .contains("deadline has elapsed") =>
+            {
                 timeout_count += 1;
                 if timeout_count >= MAX_TIMEOUT_RETRIES {
-                    error!("Incoming transfer {} timed out after {} retries", transfer_id, timeout_count);
+                    error!(
+                        "Incoming transfer {} timed out after {} retries",
+                        transfer_id, timeout_count
+                    );
                     break Err(anyhow!("Transfer timed out"));
                 }
                 continue;
             }
-            Err(e) => { error!("Incoming transfer {} stream error: {}", transfer_id, e); break Err(e); }
+            Err(e) => {
+                error!("Incoming transfer {} stream error: {}", transfer_id, e);
+                break Err(e);
+            }
         }
     };
 
     manager.unregister_transfer(&transfer_id);
     if let Ok(Some(rec)) = db.get_transfer(&transfer_id) {
-        if rec.status == "in_progress" { db.update_transfer_status(&transfer_id, "paused")?; }
+        if rec.status == "in_progress" {
+            db.update_transfer_status(&transfer_id, "paused")?;
+        }
     }
     loop_res
 }
@@ -675,10 +837,20 @@ pub fn handle_outgoing_transfer(
 ) -> Result<()> {
     info!("handle_outgoing_transfer started for {}", transfer_id);
     let (cancel_rx, crash_rx) = manager.register_transfer(transfer_id.clone());
-    let res = handle_outgoing_transfer_inner(&mut *stream, Arc::clone(&db), transfer_id.clone(), session_key, Arc::clone(&manager), cancel_rx, crash_rx);
+    let res = handle_outgoing_transfer_inner(
+        &mut *stream,
+        Arc::clone(&db),
+        transfer_id.clone(),
+        session_key,
+        Arc::clone(&manager),
+        cancel_rx,
+        crash_rx,
+    );
     manager.unregister_transfer(&transfer_id);
     if let Ok(Some(rec)) = db.get_transfer(&transfer_id) {
-        if rec.status == "in_progress" || rec.status == "awaiting_acceptance" { db.update_transfer_status(&transfer_id, "paused")?; }
+        if rec.status == "in_progress" || rec.status == "awaiting_acceptance" {
+            db.update_transfer_status(&transfer_id, "paused")?;
+        }
     }
     res
 }
@@ -693,32 +865,43 @@ fn handle_outgoing_transfer_inner(
     crash_rx: Receiver<()>,
 ) -> Result<()> {
     info!("handle_outgoing_transfer_inner started for {}", transfer_id);
-    let record = db.get_transfer(&transfer_id)?.ok_or_else(|| anyhow!("Transfer not found in DB"))?;
+    let record = db
+        .get_transfer(&transfer_id)?
+        .ok_or_else(|| anyhow!("Transfer not found in DB"))?;
     let is_benchmark = transfer_id == BENCHMARK_ID;
-    
+
     let mut file_opt = if !is_benchmark {
         let file_path = PathBuf::from(&record.file_path);
         Some(File::open(&file_path)?)
     } else {
         None
     };
-    
+
     let chunk_plan = compute_chunk_plan(record.total_bytes as u64, record.chunk_size as u32);
-    let db_chunks: Vec<(u32, String, u64, u32)> = chunk_plan.iter().map(|c| (c.index, String::new(), c.offset, c.length)).collect();
+    let db_chunks: Vec<(u32, String, u64, u32)> = chunk_plan
+        .iter()
+        .map(|c| (c.index, String::new(), c.offset, c.length))
+        .collect();
     db.insert_chunks_batch(&transfer_id, &db_chunks)?;
 
-    let sender_label = db.get_state("device_name").unwrap_or(None).unwrap_or_else(|| "This Device".to_string());
-    info!("Sending TransferRequest for {} with sender_label '{}'", transfer_id, sender_label);
-    stream.write_message(&FileMessage::Request(TransferRequest { 
-        transfer_id: transfer_id.clone(), 
-        file_name: record.file_name.clone(), 
-        total_bytes: record.total_bytes as u64, 
-        chunk_size: record.chunk_size as u32, 
-        file_hash: record.file_hash.clone(), 
-        sender_label 
+    let sender_label = db
+        .get_state("device_name")
+        .unwrap_or(None)
+        .unwrap_or_else(|| "This Device".to_string());
+    info!(
+        "Sending TransferRequest for {} with sender_label '{}'",
+        transfer_id, sender_label
+    );
+    stream.write_message(&FileMessage::Request(TransferRequest {
+        transfer_id: transfer_id.clone(),
+        file_name: record.file_name.clone(),
+        total_bytes: record.total_bytes as u64,
+        chunk_size: record.chunk_size as u32,
+        file_hash: record.file_hash.clone(),
+        sender_label,
     }))?;
     db.update_transfer_status(&transfer_id, "awaiting_acceptance")?;
-    
+
     info!("Waiting for Acceptance message for {}...", transfer_id);
     let acceptance = match stream.read_message_timeout(Duration::from_secs(120))? {
         FileMessage::Acceptance(a) => a,
@@ -732,15 +915,17 @@ fn handle_outgoing_transfer_inner(
     }
 
     let resume_from = acceptance.resume_from;
-    let missing_chunks_set: Option<std::collections::HashSet<u32>> = acceptance.missing_chunks.map(|list| list.into_iter().collect());
-    
+    let missing_chunks_set: Option<std::collections::HashSet<u32>> = acceptance
+        .missing_chunks
+        .map(|list| list.into_iter().collect());
+
     db.update_bytes_confirmed(&transfer_id, resume_from)?;
     db.update_transfer_status(&transfer_id, "in_progress")?;
-    let _ = manager.progress_tx.send(ProgressEvent::Started { 
-        transfer_id: transfer_id.clone(), 
+    let _ = manager.progress_tx.send(ProgressEvent::Started {
+        transfer_id: transfer_id.clone(),
         file_name: record.file_name.clone(),
-        total_bytes: record.total_bytes as u64, 
-        is_outgoing: true 
+        total_bytes: record.total_bytes as u64,
+        is_outgoing: true,
     });
 
     let max_pending_acks: usize = 50;
@@ -749,7 +934,9 @@ fn handle_outgoing_transfer_inner(
     for chunk_meta in chunk_plan {
         if cancel_rx.try_recv().is_ok() {
             info!("Outgoing transfer {} cancelled by user", transfer_id);
-            let _ = stream.write_message(&FileMessage::Cancel { transfer_id: transfer_id.clone() });
+            let _ = stream.write_message(&FileMessage::Cancel {
+                transfer_id: transfer_id.clone(),
+            });
             thread::sleep(Duration::from_millis(50));
             return Ok(());
         }
@@ -760,21 +947,33 @@ fn handle_outgoing_transfer_inner(
 
         // Selective Resume Logic
         if let Some(ref missing) = missing_chunks_set {
-            if !missing.contains(&chunk_meta.index) { continue; }
+            if !missing.contains(&chunk_meta.index) {
+                continue;
+            }
         } else {
-            if chunk_meta.offset + chunk_meta.length as u64 <= resume_from { continue; }
+            if chunk_meta.offset + chunk_meta.length as u64 <= resume_from {
+                continue;
+            }
         }
 
         let mut timeout_count = 0;
         while pending_acks >= max_pending_acks {
             if cancel_rx.try_recv().is_ok() {
-                info!("Outgoing transfer {} cancelled by user (during flow control)", transfer_id);
-                let _ = stream.write_message(&FileMessage::Cancel { transfer_id: transfer_id.clone() });
+                info!(
+                    "Outgoing transfer {} cancelled by user (during flow control)",
+                    transfer_id
+                );
+                let _ = stream.write_message(&FileMessage::Cancel {
+                    transfer_id: transfer_id.clone(),
+                });
                 thread::sleep(Duration::from_millis(50));
                 return Ok(());
             }
             if crash_rx.try_recv().is_ok() {
-                error!("Outgoing transfer {} SIMULATED CRASH (during flow control)", transfer_id);
+                error!(
+                    "Outgoing transfer {} SIMULATED CRASH (during flow control)",
+                    transfer_id
+                );
                 return Err(anyhow!("SIMULATED_CRASH"));
             }
             match stream.read_message_timeout(Duration::from_secs(5)) {
@@ -782,24 +981,36 @@ fn handle_outgoing_transfer_inner(
                     timeout_count = 0;
                     pending_acks = pending_acks.saturating_sub(1);
                     db.update_bytes_confirmed(&transfer_id, a.bytes_confirmed)?;
-                    let _ = manager.progress_tx.send(ProgressEvent::Progress { 
-                        transfer_id: transfer_id.clone(), 
+                    let _ = manager.progress_tx.send(ProgressEvent::Progress {
+                        transfer_id: transfer_id.clone(),
                         bytes_confirmed: a.bytes_confirmed,
-                        total_bytes: record.total_bytes as u64
+                        total_bytes: record.total_bytes as u64,
                     });
                 }
                 Ok(FileMessage::Error(e)) => return Err(anyhow!("Receiver error: {}", e.reason)),
                 Ok(FileMessage::Cancel { .. }) => return Ok(()),
-                Err(e) if e.to_string().to_lowercase().contains("timeout") || e.to_string().to_lowercase().contains("timed out") || e.to_string().to_lowercase().contains("deadline has elapsed") => {
+                Err(e)
+                    if e.to_string().to_lowercase().contains("timeout")
+                        || e.to_string().to_lowercase().contains("timed out")
+                        || e.to_string()
+                            .to_lowercase()
+                            .contains("deadline has elapsed") =>
+                {
                     timeout_count += 1;
                     if timeout_count >= MAX_TIMEOUT_RETRIES {
-                        error!("Outgoing transfer {} timed out in flow control after {} retries", transfer_id, timeout_count);
+                        error!(
+                            "Outgoing transfer {} timed out in flow control after {} retries",
+                            transfer_id, timeout_count
+                        );
                         return Err(anyhow!("Transfer timed out"));
                     }
                     continue;
                 }
                 Err(e) => return Err(e),
-                _ => { timeout_count = 0; continue; }
+                _ => {
+                    timeout_count = 0;
+                    continue;
+                }
             }
         }
 
@@ -815,22 +1026,36 @@ fn handle_outgoing_transfer_inner(
 
         let chunk_hash = blake3::hash(&chunk_data).to_hex().to_string();
         let encrypted = session_key.encrypt(&chunk_data)?;
-        stream.write_message(&FileMessage::Chunk(ChunkFrame { transfer_id: transfer_id.clone(), chunk_index: chunk_meta.index, byte_offset: chunk_meta.offset, data: encrypted, chunk_hash }))?;
+        stream.write_message(&FileMessage::Chunk(ChunkFrame {
+            transfer_id: transfer_id.clone(),
+            chunk_index: chunk_meta.index,
+            byte_offset: chunk_meta.offset,
+            data: encrypted,
+            chunk_hash,
+        }))?;
         pending_acks += 1;
-        
+
         manager.check_crash_trigger(&transfer_id, chunk_meta.offset + chunk_meta.length as u64);
     }
 
     let mut timeout_count = 0;
     while pending_acks > 0 {
         if cancel_rx.try_recv().is_ok() {
-            info!("Outgoing transfer {} cancelled by user (during final drain)", transfer_id);
-            let _ = stream.write_message(&FileMessage::Cancel { transfer_id: transfer_id.clone() });
+            info!(
+                "Outgoing transfer {} cancelled by user (during final drain)",
+                transfer_id
+            );
+            let _ = stream.write_message(&FileMessage::Cancel {
+                transfer_id: transfer_id.clone(),
+            });
             thread::sleep(Duration::from_millis(50));
             return Ok(());
         }
         if crash_rx.try_recv().is_ok() {
-            error!("Outgoing transfer {} SIMULATED CRASH (during final drain)", transfer_id);
+            error!(
+                "Outgoing transfer {} SIMULATED CRASH (during final drain)",
+                transfer_id
+            );
             return Err(anyhow!("SIMULATED_CRASH"));
         }
         match stream.read_message_timeout(Duration::from_secs(5)) {
@@ -838,36 +1063,61 @@ fn handle_outgoing_transfer_inner(
                 timeout_count = 0;
                 pending_acks = pending_acks.saturating_sub(1);
                 db.update_bytes_confirmed(&transfer_id, a.bytes_confirmed)?;
-                let _ = manager.progress_tx.send(ProgressEvent::Progress { 
-                    transfer_id: transfer_id.clone(), 
+                let _ = manager.progress_tx.send(ProgressEvent::Progress {
+                    transfer_id: transfer_id.clone(),
                     bytes_confirmed: a.bytes_confirmed,
-                    total_bytes: record.total_bytes as u64
+                    total_bytes: record.total_bytes as u64,
                 });
             }
             Ok(FileMessage::Error(e)) => return Err(anyhow!("Receiver error: {}", e.reason)),
             Ok(FileMessage::Cancel { .. }) => return Ok(()),
-            Err(e) if e.to_string().to_lowercase().contains("timeout") || e.to_string().to_lowercase().contains("timed out") || e.to_string().to_lowercase().contains("deadline has elapsed") => {
+            Err(e)
+                if e.to_string().to_lowercase().contains("timeout")
+                    || e.to_string().to_lowercase().contains("timed out")
+                    || e.to_string()
+                        .to_lowercase()
+                        .contains("deadline has elapsed") =>
+            {
                 timeout_count += 1;
                 if timeout_count >= MAX_TIMEOUT_RETRIES {
-                    error!("Outgoing transfer {} timed out in final drain after {} retries", transfer_id, timeout_count);
+                    error!(
+                        "Outgoing transfer {} timed out in final drain after {} retries",
+                        transfer_id, timeout_count
+                    );
                     return Err(anyhow!("Transfer timed out"));
                 }
                 continue;
             }
             Err(e) => return Err(e),
-            _ => { timeout_count = 0; continue; }
+            _ => {
+                timeout_count = 0;
+                continue;
+            }
         }
     }
 
-    stream.write_message(&FileMessage::Complete(TransferComplete { transfer_id: transfer_id.clone(), file_hash: record.file_hash.clone() }))?;
+    stream.write_message(&FileMessage::Complete(TransferComplete {
+        transfer_id: transfer_id.clone(),
+        file_hash: record.file_hash.clone(),
+    }))?;
     match stream.read_message_timeout(Duration::from_secs(60))? {
         FileMessage::Ack(_) => {
             db.update_transfer_status(&transfer_id, "complete")?;
-            let _ = manager.progress_tx.send(ProgressEvent::Complete { transfer_id, dest_path: if is_benchmark { PathBuf::from("/dev/null") } else { PathBuf::from(&record.file_path) } });
+            let _ = manager.progress_tx.send(ProgressEvent::Complete {
+                transfer_id,
+                dest_path: if is_benchmark {
+                    PathBuf::from("/dev/null")
+                } else {
+                    PathBuf::from(&record.file_path)
+                },
+            });
         }
         FileMessage::Error(e) => {
             db.update_transfer_status_error(&transfer_id, &e.reason)?;
-            let _ = manager.progress_tx.send(ProgressEvent::Failed { transfer_id, reason: e.reason });
+            let _ = manager.progress_tx.send(ProgressEvent::Failed {
+                transfer_id,
+                reason: e.reason,
+            });
         }
         _ => return Err(anyhow!("Unexpected final message")),
     }
@@ -878,9 +1128,9 @@ fn handle_outgoing_transfer_inner(
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::thread;
     use tempfile::tempdir;
     use uuid::Uuid;
-    use std::thread;
 
     struct MockFileStream {
         tx: Sender<FileMessage>,
@@ -890,7 +1140,9 @@ mod tests {
     impl FileStream for MockFileStream {
         fn write_message(&mut self, msg: &FileMessage) -> Result<()> {
             info!("MockFileStream: writing message {:?}", msg);
-            self.tx.send(msg.clone()).map_err(|_| anyhow!("Stream closed"))
+            self.tx
+                .send(msg.clone())
+                .map_err(|_| anyhow!("Stream closed"))
         }
         fn read_message(&mut self) -> Result<FileMessage> {
             self.rx.recv().map_err(|_| anyhow!("Stream closed"))
@@ -923,15 +1175,42 @@ mod tests {
         let manager1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), prog_tx1));
         let manager2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), prog_tx2));
         let transfer_id = Uuid::new_v4().to_string();
-        store1.create_transfer(&transfer_id, "outgoing", "peer-2", &file_path.to_string_lossy(), "test.bin", file_content.len() as u64, 1024, &file_hash)?;
+        store1.create_transfer(
+            &transfer_id,
+            "outgoing",
+            "peer-2",
+            &file_path.to_string_lossy(),
+            "test.bin",
+            file_content.len() as u64,
+            1024,
+            &file_hash,
+        )?;
         let t_id_clone = transfer_id.clone();
         let store1_c = Arc::clone(&store1);
         let manager1_c = Arc::clone(&manager1);
-        let sender_thread = thread::spawn(move || { handle_outgoing_transfer(stream1, store1_c, t_id_clone, SessionKey([0u8; 32]), manager1_c) });
+        let sender_thread = thread::spawn(move || {
+            handle_outgoing_transfer(
+                stream1,
+                store1_c,
+                t_id_clone,
+                SessionKey([0u8; 32]),
+                manager1_c,
+            )
+        });
         let store2_c = Arc::clone(&store2);
         let manager2_c = Arc::clone(&manager2);
         let download_dir = dir2.path().to_path_buf();
-        let receiver_thread = thread::spawn(move || { handle_incoming_transfer_with_manager(stream2, store2_c, SessionKey([0u8; 32]), download_dir, flume::unbounded().0, manager2_c, "peer-1".to_string()) });
+        let receiver_thread = thread::spawn(move || {
+            handle_incoming_transfer_with_manager(
+                stream2,
+                store2_c,
+                SessionKey([0u8; 32]),
+                download_dir,
+                flume::unbounded().0,
+                manager2_c,
+                "peer-1".to_string(),
+            )
+        });
         thread::sleep(Duration::from_millis(200));
         manager2.handle_decision(&transfer_id, true);
         sender_thread.join().unwrap()?;
@@ -940,8 +1219,14 @@ mod tests {
         assert!(dest_path.exists());
         let received_content = std::fs::read(dest_path)?;
         assert_eq!(received_content, file_content);
-        assert_eq!(store1.get_transfer(&transfer_id)?.unwrap().status, "complete");
-        assert_eq!(store2.get_transfer(&transfer_id)?.unwrap().status, "complete");
+        assert_eq!(
+            store1.get_transfer(&transfer_id)?.unwrap().status,
+            "complete"
+        );
+        assert_eq!(
+            store2.get_transfer(&transfer_id)?.unwrap().status,
+            "complete"
+        );
         Ok(())
     }
 
@@ -966,15 +1251,42 @@ mod tests {
         let manager1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), prog_tx1));
         let manager2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), prog_tx2));
         let transfer_id = Uuid::new_v4().to_string();
-        store1.create_transfer(&transfer_id, "outgoing", "peer-2", &file_path.to_string_lossy(), "large_test.bin", file_content.len() as u64, 262144, &file_hash)?;
+        store1.create_transfer(
+            &transfer_id,
+            "outgoing",
+            "peer-2",
+            &file_path.to_string_lossy(),
+            "large_test.bin",
+            file_content.len() as u64,
+            262144,
+            &file_hash,
+        )?;
         let t_id_clone = transfer_id.clone();
         let store1_c = Arc::clone(&store1);
         let manager1_c = Arc::clone(&manager1);
-        let sender_thread = thread::spawn(move || { handle_outgoing_transfer(stream1, store1_c, t_id_clone, SessionKey([0u8; 32]), manager1_c) });
+        let sender_thread = thread::spawn(move || {
+            handle_outgoing_transfer(
+                stream1,
+                store1_c,
+                t_id_clone,
+                SessionKey([0u8; 32]),
+                manager1_c,
+            )
+        });
         let store2_c = Arc::clone(&store2);
         let manager2_c = Arc::clone(&manager2);
         let download_dir = dir2.path().to_path_buf();
-        let receiver_thread = thread::spawn(move || { handle_incoming_transfer_with_manager(stream2, store2_c, SessionKey([0u8; 32]), download_dir, flume::unbounded().0, manager2_c, "peer-1".to_string()) });
+        let receiver_thread = thread::spawn(move || {
+            handle_incoming_transfer_with_manager(
+                stream2,
+                store2_c,
+                SessionKey([0u8; 32]),
+                download_dir,
+                flume::unbounded().0,
+                manager2_c,
+                "peer-1".to_string(),
+            )
+        });
         thread::sleep(Duration::from_millis(200));
         manager2.handle_decision(&transfer_id, true);
         sender_thread.join().unwrap()?;
@@ -1002,7 +1314,16 @@ mod tests {
         let part_path = dest_path.with_extension("cdus.part");
         let first_part = b"first part content ";
         std::fs::write(&part_path, first_part)?;
-        store2.create_transfer(&transfer_id, "incoming", "peer-1", &dest_path.to_string_lossy(), "resume_test.bin", file_content.len() as u64, 1024, &file_hash)?;
+        store2.create_transfer(
+            &transfer_id,
+            "incoming",
+            "peer-1",
+            &dest_path.to_string_lossy(),
+            "resume_test.bin",
+            file_content.len() as u64,
+            1024,
+            &file_hash,
+        )?;
         store2.update_bytes_confirmed(&transfer_id, first_part.len() as u64)?;
         store2.update_transfer_status(&transfer_id, "paused")?;
         let (tx1, rx1) = flume::unbounded();
@@ -1013,15 +1334,42 @@ mod tests {
         let (prog_tx2, _prog_rx2) = flume::unbounded();
         let manager1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), prog_tx1));
         let manager2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), prog_tx2));
-        store1.create_transfer(&transfer_id, "outgoing", "peer-2", &file_path.to_string_lossy(), "resume_test.bin", file_content.len() as u64, 10, &file_hash)?;
+        store1.create_transfer(
+            &transfer_id,
+            "outgoing",
+            "peer-2",
+            &file_path.to_string_lossy(),
+            "resume_test.bin",
+            file_content.len() as u64,
+            10,
+            &file_hash,
+        )?;
         let t_id_clone = transfer_id.clone();
         let store1_c = Arc::clone(&store1);
         let manager1_c = Arc::clone(&manager1);
-        let sender_thread = thread::spawn(move || { handle_outgoing_transfer(stream1, store1_c, t_id_clone, SessionKey([0u8; 32]), manager1_c) });
+        let sender_thread = thread::spawn(move || {
+            handle_outgoing_transfer(
+                stream1,
+                store1_c,
+                t_id_clone,
+                SessionKey([0u8; 32]),
+                manager1_c,
+            )
+        });
         let store2_c = Arc::clone(&store2);
         let manager2_c = Arc::clone(&manager2);
         let download_dir = dir2.path().to_path_buf();
-        let receiver_thread = thread::spawn(move || { handle_incoming_transfer_with_manager(stream2, store2_c, SessionKey([0u8; 32]), download_dir, flume::unbounded().0, manager2_c, "peer-1".to_string()) });
+        let receiver_thread = thread::spawn(move || {
+            handle_incoming_transfer_with_manager(
+                stream2,
+                store2_c,
+                SessionKey([0u8; 32]),
+                download_dir,
+                flume::unbounded().0,
+                manager2_c,
+                "peer-1".to_string(),
+            )
+        });
         thread::sleep(Duration::from_millis(200));
         manager2.handle_decision(&transfer_id, true);
         sender_thread.join().unwrap()?;
@@ -1045,14 +1393,23 @@ mod tests {
         let store1 = Arc::new(Store::init(dir1.path())?);
         let store2 = Arc::new(Store::init(dir2.path())?);
         let transfer_id = Uuid::new_v4().to_string();
-        
-        store1.create_transfer(&transfer_id, "outgoing", "peer-2", &file_path.to_string_lossy(), "crash_test.bin", file_content.len() as u64, 262144, &file_hash)?;
-        
+
+        store1.create_transfer(
+            &transfer_id,
+            "outgoing",
+            "peer-2",
+            &file_path.to_string_lossy(),
+            "crash_test.bin",
+            file_content.len() as u64,
+            262144,
+            &file_hash,
+        )?;
+
         let (prog_tx1, _prog_rx1) = flume::unbounded();
         let (prog_tx2, _prog_rx2) = flume::unbounded();
         let manager1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), prog_tx1));
         let manager2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), prog_tx2));
-        
+
         let (tx1, rx1) = flume::unbounded();
         let (tx2, rx2) = flume::unbounded();
 
@@ -1065,15 +1422,21 @@ mod tests {
         }
         impl FileStream for CrashingStream {
             fn write_message(&mut self, msg: &FileMessage) -> Result<()> {
-                let res = self.tx.send(msg.clone()).map_err(|_| anyhow!("Stream closed"));
+                let res = self
+                    .tx
+                    .send(msg.clone())
+                    .map_err(|_| anyhow!("Stream closed"));
                 if let FileMessage::Chunk(c) = msg {
-                    if c.chunk_index == 1 { // crash after first chunk
+                    if c.chunk_index == 1 {
+                        // crash after first chunk
                         self.manager.simulate_crash(&self.transfer_id);
                     }
                 }
                 res
             }
-            fn read_message(&mut self) -> Result<FileMessage> { self.rx.recv().map_err(|_| anyhow!("Stream closed")) }
+            fn read_message(&mut self) -> Result<FileMessage> {
+                self.rx.recv().map_err(|_| anyhow!("Stream closed"))
+            }
             fn read_message_timeout(&mut self, timeout: Duration) -> Result<FileMessage> {
                 self.rx.recv_timeout(timeout).map_err(|e| match e {
                     flume::RecvTimeoutError::Timeout => anyhow!("Read timeout"),
@@ -1082,75 +1445,126 @@ mod tests {
             }
         }
 
-        let stream1 = Box::new(CrashingStream { tx: tx1, rx: rx2, manager: Arc::clone(&manager1), transfer_id: transfer_id.clone() });
+        let stream1 = Box::new(CrashingStream {
+            tx: tx1,
+            rx: rx2,
+            manager: Arc::clone(&manager1),
+            transfer_id: transfer_id.clone(),
+        });
         let stream2 = Box::new(MockFileStream { tx: tx2, rx: rx1 });
 
         let t_id_clone = transfer_id.clone();
         let store1_c = Arc::clone(&store1);
         let manager1_c = Arc::clone(&manager1);
-        let sender_thread = thread::spawn(move || { handle_outgoing_transfer(stream1, store1_c, t_id_clone, SessionKey([0u8; 32]), manager1_c) });
-        
+        let sender_thread = thread::spawn(move || {
+            handle_outgoing_transfer(
+                stream1,
+                store1_c,
+                t_id_clone,
+                SessionKey([0u8; 32]),
+                manager1_c,
+            )
+        });
+
         let store2_c = Arc::clone(&store2);
         let manager2_c = Arc::clone(&manager2);
         let download_dir = dir2.path().to_path_buf();
-        let receiver_thread = thread::spawn(move || { handle_incoming_transfer_with_manager(stream2, store2_c, SessionKey([0u8; 32]), download_dir, flume::unbounded().0, manager2_c, "peer-1".to_string()) });
-        
+        let receiver_thread = thread::spawn(move || {
+            handle_incoming_transfer_with_manager(
+                stream2,
+                store2_c,
+                SessionKey([0u8; 32]),
+                download_dir,
+                flume::unbounded().0,
+                manager2_c,
+                "peer-1".to_string(),
+            )
+        });
+
         thread::sleep(Duration::from_millis(200));
         manager2.handle_decision(&transfer_id, true);
-        
+
         // Sender should error with SIMULATED_CRASH
         let res = sender_thread.join().unwrap();
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().to_string(), "SIMULATED_CRASH");
-        
+
         // Receiver should error due to timeout or remote drop
         let _ = receiver_thread.join().unwrap();
-        
+
         // Give time for state to be saved
         thread::sleep(Duration::from_millis(200));
-        
+
         // Now resume
         let (tx3, rx3) = flume::unbounded();
         let (tx4, rx4) = flume::unbounded();
         let stream3 = Box::new(MockFileStream { tx: tx3, rx: rx4 });
         let stream4 = Box::new(MockFileStream { tx: tx4, rx: rx3 });
-        
+
         let t_id_clone2 = transfer_id.clone();
         let store1_c2 = Arc::clone(&store1);
         let manager1_c2 = Arc::clone(&manager1);
-        let sender_thread2 = thread::spawn(move || { handle_outgoing_transfer(stream3, store1_c2, t_id_clone2, SessionKey([0u8; 32]), manager1_c2) });
-        
+        let sender_thread2 = thread::spawn(move || {
+            handle_outgoing_transfer(
+                stream3,
+                store1_c2,
+                t_id_clone2,
+                SessionKey([0u8; 32]),
+                manager1_c2,
+            )
+        });
+
         let store2_c2 = Arc::clone(&store2);
         let manager2_c2 = Arc::clone(&manager2);
         let download_dir2 = dir2.path().to_path_buf();
-        let receiver_thread2 = thread::spawn(move || { handle_incoming_transfer_with_manager(stream4, store2_c2, SessionKey([0u8; 32]), download_dir2, flume::unbounded().0, manager2_c2, "peer-1".to_string()) });
-        
+        let receiver_thread2 = thread::spawn(move || {
+            handle_incoming_transfer_with_manager(
+                stream4,
+                store2_c2,
+                SessionKey([0u8; 32]),
+                download_dir2,
+                flume::unbounded().0,
+                manager2_c2,
+                "peer-1".to_string(),
+            )
+        });
+
         thread::sleep(Duration::from_millis(200));
         manager2.handle_decision(&transfer_id, true);
-        
+
         sender_thread2.join().unwrap()?;
         receiver_thread2.join().unwrap()?;
-        
+
         let dest_path = dir2.path().join("crash_test.bin");
         assert!(dest_path.exists());
         let received_content = std::fs::read(dest_path)?;
         assert_eq!(received_content, file_content);
-        
+
         Ok(())
     }
 
-    struct CorruptFileStream { tx: Sender<FileMessage>, rx: Receiver<FileMessage>, corrupt_index: u32 }
+    struct CorruptFileStream {
+        tx: Sender<FileMessage>,
+        rx: Receiver<FileMessage>,
+        corrupt_index: u32,
+    }
     impl FileStream for CorruptFileStream {
         fn write_message(&mut self, msg: &FileMessage) -> Result<()> {
             let mut final_msg = msg.clone();
             if let FileMessage::Chunk(ref mut chunk) = final_msg {
                 if chunk.chunk_index == self.corrupt_index {
-                    if !chunk.chunk_hash.is_empty() { chunk.chunk_hash = "corrupted-hash".to_string(); }
+                    if !chunk.chunk_hash.is_empty() {
+                        chunk.chunk_hash = "corrupted-hash".to_string();
+                    }
                 }
             }
-            self.tx.send(final_msg).map_err(|_| anyhow!("Stream closed"))
+            self.tx
+                .send(final_msg)
+                .map_err(|_| anyhow!("Stream closed"))
         }
-        fn read_message(&mut self) -> Result<FileMessage> { self.rx.recv().map_err(|_| anyhow!("Stream closed")) }
+        fn read_message(&mut self) -> Result<FileMessage> {
+            self.rx.recv().map_err(|_| anyhow!("Stream closed"))
+        }
         fn read_message_timeout(&mut self, timeout: Duration) -> Result<FileMessage> {
             self.rx.recv_timeout(timeout).map_err(|e| match e {
                 flume::RecvTimeoutError::Timeout => anyhow!("Read timeout"),
@@ -1172,41 +1586,84 @@ mod tests {
         let store2 = Arc::new(Store::init(dir2.path())?);
         let (tx1, rx1) = flume::unbounded();
         let (tx2, rx2) = flume::unbounded();
-        let stream1 = Box::new(CorruptFileStream { tx: tx1, rx: rx2, corrupt_index: 0 });
+        let stream1 = Box::new(CorruptFileStream {
+            tx: tx1,
+            rx: rx2,
+            corrupt_index: 0,
+        });
         let stream2 = Box::new(MockFileStream { tx: tx2, rx: rx1 });
         let (prog_tx1, _prog_rx1) = flume::unbounded();
         let (prog_tx2, _prog_rx2) = flume::unbounded();
         let manager1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), prog_tx1));
         let manager2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), prog_tx2));
         let transfer_id = Uuid::new_v4().to_string();
-        store1.create_transfer(&transfer_id, "outgoing", "peer-2", &file_path.to_string_lossy(), "corrupt_test.bin", file_content.len() as u64, 1024, &file_hash)?;
+        store1.create_transfer(
+            &transfer_id,
+            "outgoing",
+            "peer-2",
+            &file_path.to_string_lossy(),
+            "corrupt_test.bin",
+            file_content.len() as u64,
+            1024,
+            &file_hash,
+        )?;
         let t_id_clone = transfer_id.clone();
         let store1_c = Arc::clone(&store1);
         let manager1_c = Arc::clone(&manager1);
-        let sender_thread = thread::spawn(move || { handle_outgoing_transfer(stream1, store1_c, t_id_clone, SessionKey([0u8; 32]), manager1_c) });
+        let sender_thread = thread::spawn(move || {
+            handle_outgoing_transfer(
+                stream1,
+                store1_c,
+                t_id_clone,
+                SessionKey([0u8; 32]),
+                manager1_c,
+            )
+        });
         let store2_c = Arc::clone(&store2);
         let manager2_c = Arc::clone(&manager2);
         let download_dir = dir2.path().to_path_buf();
-        let receiver_thread = thread::spawn(move || { handle_incoming_transfer_with_manager(stream2, store2_c, SessionKey([0u8; 32]), download_dir, flume::unbounded().0, manager2_c, "peer-1".to_string()) });
+        let receiver_thread = thread::spawn(move || {
+            handle_incoming_transfer_with_manager(
+                stream2,
+                store2_c,
+                SessionKey([0u8; 32]),
+                download_dir,
+                flume::unbounded().0,
+                manager2_c,
+                "peer-1".to_string(),
+            )
+        });
         thread::sleep(Duration::from_millis(200));
         manager2.handle_decision(&transfer_id, true);
         let s_res = sender_thread.join().unwrap();
         assert!(s_res.is_err());
         let r_res = receiver_thread.join().unwrap();
         assert!(r_res.is_err());
-        assert!(r_res.unwrap_err().to_string().contains("Chunk hash mismatch"));
+        assert!(r_res
+            .unwrap_err()
+            .to_string()
+            .contains("Chunk hash mismatch"));
         assert_eq!(store2.get_transfer(&transfer_id)?.unwrap().status, "failed");
         Ok(())
     }
 
-    struct FinalHashCorruptStream { tx: Sender<FileMessage>, rx: Receiver<FileMessage> }
+    struct FinalHashCorruptStream {
+        tx: Sender<FileMessage>,
+        rx: Receiver<FileMessage>,
+    }
     impl FileStream for FinalHashCorruptStream {
         fn write_message(&mut self, msg: &FileMessage) -> Result<()> {
             let mut final_msg = msg.clone();
-            if let FileMessage::Complete(ref mut complete) = final_msg { complete.file_hash = "wrong-final-hash".to_string(); }
-            self.tx.send(final_msg).map_err(|_| anyhow!("Stream closed"))
+            if let FileMessage::Complete(ref mut complete) = final_msg {
+                complete.file_hash = "wrong-final-hash".to_string();
+            }
+            self.tx
+                .send(final_msg)
+                .map_err(|_| anyhow!("Stream closed"))
         }
-        fn read_message(&mut self) -> Result<FileMessage> { self.rx.recv().map_err(|_| anyhow!("Stream closed")) }
+        fn read_message(&mut self) -> Result<FileMessage> {
+            self.rx.recv().map_err(|_| anyhow!("Stream closed"))
+        }
         fn read_message_timeout(&mut self, timeout: Duration) -> Result<FileMessage> {
             self.rx.recv_timeout(timeout).map_err(|e| match e {
                 flume::RecvTimeoutError::Timeout => anyhow!("Read timeout"),
@@ -1235,21 +1692,51 @@ mod tests {
         let manager1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), prog_tx1));
         let manager2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), prog_tx2));
         let transfer_id = Uuid::new_v4().to_string();
-        store1.create_transfer(&transfer_id, "outgoing", "peer-2", &file_path.to_string_lossy(), "final_corrupt.bin", file_content.len() as u64, 1024, &file_hash)?;
+        store1.create_transfer(
+            &transfer_id,
+            "outgoing",
+            "peer-2",
+            &file_path.to_string_lossy(),
+            "final_corrupt.bin",
+            file_content.len() as u64,
+            1024,
+            &file_hash,
+        )?;
         let t_id_clone = transfer_id.clone();
         let store1_c = Arc::clone(&store1);
         let manager1_c = Arc::clone(&manager1);
-        let sender_thread = thread::spawn(move || { handle_outgoing_transfer(stream1, store1_c, t_id_clone, SessionKey([0u8; 32]), manager1_c) });
+        let sender_thread = thread::spawn(move || {
+            handle_outgoing_transfer(
+                stream1,
+                store1_c,
+                t_id_clone,
+                SessionKey([0u8; 32]),
+                manager1_c,
+            )
+        });
         let store2_c = Arc::clone(&store2);
         let manager2_c = Arc::clone(&manager2);
         let download_dir = dir2.path().to_path_buf();
-        let receiver_thread = thread::spawn(move || { handle_incoming_transfer_with_manager(stream2, store2_c, SessionKey([0u8; 32]), download_dir, flume::unbounded().0, manager2_c, "peer-1".to_string()) });
+        let receiver_thread = thread::spawn(move || {
+            handle_incoming_transfer_with_manager(
+                stream2,
+                store2_c,
+                SessionKey([0u8; 32]),
+                download_dir,
+                flume::unbounded().0,
+                manager2_c,
+                "peer-1".to_string(),
+            )
+        });
         thread::sleep(Duration::from_millis(200));
         manager2.handle_decision(&transfer_id, true);
         let _ = sender_thread.join().unwrap();
         let r_res = receiver_thread.join().unwrap();
         assert!(r_res.is_err());
-        assert!(r_res.unwrap_err().to_string().contains("Whole file hash mismatch"));
+        assert!(r_res
+            .unwrap_err()
+            .to_string()
+            .contains("Whole file hash mismatch"));
         assert_eq!(store2.get_transfer(&transfer_id)?.unwrap().status, "failed");
         let dest_path = dir2.path().join("final_corrupt.bin");
         let part_path = dest_path.with_extension("cdus.part");
@@ -1276,23 +1763,56 @@ mod tests {
         let manager1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), prog_tx1));
         let manager2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), prog_tx2));
         let transfer_id = Uuid::new_v4().to_string();
-        store1.create_transfer(&transfer_id, "outgoing", "peer-2", &file_path.to_string_lossy(), "decline_test.bin", 12, 1024, "fake-hash")?;
+        store1.create_transfer(
+            &transfer_id,
+            "outgoing",
+            "peer-2",
+            &file_path.to_string_lossy(),
+            "decline_test.bin",
+            12,
+            1024,
+            "fake-hash",
+        )?;
         let t_id_clone = transfer_id.clone();
         let store1_c = Arc::clone(&store1);
         let manager1_c = Arc::clone(&manager1);
-        let sender_thread = thread::spawn(move || { handle_outgoing_transfer(stream1, store1_c, t_id_clone, SessionKey([0u8; 32]), manager1_c) });
+        let sender_thread = thread::spawn(move || {
+            handle_outgoing_transfer(
+                stream1,
+                store1_c,
+                t_id_clone,
+                SessionKey([0u8; 32]),
+                manager1_c,
+            )
+        });
         let store2_c = Arc::clone(&store2);
         let manager2_c = Arc::clone(&manager2);
         let download_dir = dir2.path().to_path_buf();
-        let receiver_thread = thread::spawn(move || { handle_incoming_transfer_with_manager(stream2, store2_c, SessionKey([0u8; 32]), download_dir, flume::unbounded().0, manager2_c, "peer-1".to_string()) });
+        let receiver_thread = thread::spawn(move || {
+            handle_incoming_transfer_with_manager(
+                stream2,
+                store2_c,
+                SessionKey([0u8; 32]),
+                download_dir,
+                flume::unbounded().0,
+                manager2_c,
+                "peer-1".to_string(),
+            )
+        });
         thread::sleep(Duration::from_millis(200));
         manager2.handle_decision(&transfer_id, false);
         let s_res = sender_thread.join().unwrap();
         assert!(s_res.is_ok());
         let r_res = receiver_thread.join().unwrap();
         assert!(r_res.is_ok());
-        assert_eq!(store1.get_transfer(&transfer_id)?.unwrap().status, "declined");
-        assert_eq!(store2.get_transfer(&transfer_id)?.unwrap().status, "declined");
+        assert_eq!(
+            store1.get_transfer(&transfer_id)?.unwrap().status,
+            "declined"
+        );
+        assert_eq!(
+            store2.get_transfer(&transfer_id)?.unwrap().status,
+            "declined"
+        );
         let dest_path = dir2.path().join("decline_test.bin");
         let part_path = dest_path.with_extension("cdus.part");
         assert!(!part_path.exists());
@@ -1321,21 +1841,58 @@ mod tests {
         let manager1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), prog_tx1));
         let manager2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), prog_tx2));
         let transfer_id = Uuid::new_v4().to_string();
-        store1.create_transfer(&transfer_id, "outgoing", "peer-2", &file_path.to_string_lossy(), "cancel_test.bin", file_content.len() as u64, 262144, &file_hash)?;
+        store1.create_transfer(
+            &transfer_id,
+            "outgoing",
+            "peer-2",
+            &file_path.to_string_lossy(),
+            "cancel_test.bin",
+            file_content.len() as u64,
+            262144,
+            &file_hash,
+        )?;
         let t_id_clone = transfer_id.clone();
         let store1_c = Arc::clone(&store1);
         let manager1_clone = Arc::clone(&manager1);
-        let sender_thread = thread::spawn(move || { handle_outgoing_transfer(stream1, store1_c, t_id_clone, SessionKey([0u8; 32]), manager1_clone) });
+        let sender_thread = thread::spawn(move || {
+            handle_outgoing_transfer(
+                stream1,
+                store1_c,
+                t_id_clone,
+                SessionKey([0u8; 32]),
+                manager1_clone,
+            )
+        });
         let store2_c = Arc::clone(&store2);
         let manager2_clone = Arc::clone(&manager2);
         let download_dir = dir2.path().to_path_buf();
-        let receiver_thread = thread::spawn(move || { handle_incoming_transfer_with_manager(stream2, store2_c, SessionKey([0u8; 32]), download_dir, flume::unbounded().0, manager2_clone, "peer-1".to_string()) });
+        let receiver_thread = thread::spawn(move || {
+            handle_incoming_transfer_with_manager(
+                stream2,
+                store2_c,
+                SessionKey([0u8; 32]),
+                download_dir,
+                flume::unbounded().0,
+                manager2_clone,
+                "peer-1".to_string(),
+            )
+        });
         let mut ready = false;
-        while let Ok(event) = prog_rx2.recv_timeout(Duration::from_secs(5)) { if let ProgressEvent::IncomingRequest { .. } = event { ready = true; break; } }
+        while let Ok(event) = prog_rx2.recv_timeout(Duration::from_secs(5)) {
+            if let ProgressEvent::IncomingRequest { .. } = event {
+                ready = true;
+                break;
+            }
+        }
         assert!(ready, "Receiver never notified IncomingRequest");
         manager2.handle_decision(&transfer_id, true);
         let mut progress_seen = false;
-        while let Ok(event) = prog_rx2.recv_timeout(Duration::from_secs(5)) { if let ProgressEvent::Progress { .. } = event { progress_seen = true; break; } }
+        while let Ok(event) = prog_rx2.recv_timeout(Duration::from_secs(5)) {
+            if let ProgressEvent::Progress { .. } = event {
+                progress_seen = true;
+                break;
+            }
+        }
         assert!(progress_seen, "Never saw any progress before cancel");
         manager1.cancel_transfer(&transfer_id);
         let s_res = sender_thread.join().unwrap();
@@ -1354,18 +1911,18 @@ mod tests {
         let dir = tempdir()?;
         let download_dir = dir.path().to_path_buf();
         let file_name = "test.txt";
-        
+
         // Create existing file
         std::fs::write(download_dir.join(file_name), "existing")?;
-        
+
         let path = safe_destination_path(&download_dir, file_name)?;
         assert_eq!(path.file_name().unwrap().to_str().unwrap(), "test (1).txt");
-        
+
         // Create another existing file
         std::fs::write(download_dir.join("test (1).txt"), "existing 2")?;
         let path2 = safe_destination_path(&download_dir, file_name)?;
         assert_eq!(path2.file_name().unwrap().to_str().unwrap(), "test (2).txt");
-        
+
         Ok(())
     }
 
@@ -1373,12 +1930,15 @@ mod tests {
     fn test_stale_transfer_cleanup() -> Result<()> {
         let dir = tempdir()?;
         let store = Arc::new(Store::init(dir.path())?);
-        
+
         let transfer_id = "stale-id".to_string();
         // Create a record that is 8 days old
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
         let eight_days_ago = now - (8 * 24 * 60 * 60 * 1000);
-        
+
         {
             let conn = store.state_conn.lock();
             conn.execute(
@@ -1387,24 +1947,27 @@ mod tests {
                 (&transfer_id, eight_days_ago),
             )?;
         }
-        
+
         // Create dummy .part file
         let part_path = PathBuf::from("/some/path/file.txt.cdus.part");
         // We can't actually create it at that path if it's invalid, let's use temp dir
         let real_path = dir.path().join("stale.txt");
         let real_part_path = real_path.with_extension("cdus.part");
         std::fs::write(&real_part_path, "partial data")?;
-        
+
         {
             let conn = store.state_conn.lock();
-            conn.execute("UPDATE file_transfers SET file_path = ?1 WHERE transfer_id = ?2", (real_path.to_string_lossy(), &transfer_id))?;
+            conn.execute(
+                "UPDATE file_transfers SET file_path = ?1 WHERE transfer_id = ?2",
+                (real_path.to_string_lossy(), &transfer_id),
+            )?;
         }
 
         cleanup_stale_transfers(&store)?;
-        
+
         assert_eq!(store.get_transfer(&transfer_id)?.unwrap().status, "failed");
         assert!(!real_part_path.exists());
-        
+
         Ok(())
     }
 
@@ -1415,7 +1978,7 @@ mod tests {
         let store = Arc::new(Store::init(dir.path())?);
         let (prog_tx, _prog_rx) = flume::unbounded();
         let manager = Arc::new(FileTransferManager::new(Arc::clone(&store), prog_tx));
-        
+
         let mut handles = Vec::new();
 
         for i in 0..4 {
@@ -1429,7 +1992,18 @@ mod tests {
                 std::fs::write(&file_path, &file_content).unwrap();
                 let file_hash = blake3::hash(file_content.as_bytes()).to_hex().to_string();
 
-                store_c.create_transfer(&transfer_id, "outgoing", "peer", &file_path.to_string_lossy(), "test.bin", file_content.len() as u64, 1024, &file_hash).unwrap();
+                store_c
+                    .create_transfer(
+                        &transfer_id,
+                        "outgoing",
+                        "peer",
+                        &file_path.to_string_lossy(),
+                        "test.bin",
+                        file_content.len() as u64,
+                        1024,
+                        &file_hash,
+                    )
+                    .unwrap();
 
                 let (tx1, rx1) = flume::unbounded();
                 let (tx2, rx2) = flume::unbounded();
@@ -1440,14 +2014,28 @@ mod tests {
                 let s_store = Arc::clone(&store_c);
                 let s_manager = Arc::clone(&manager_c);
                 let sender = thread::spawn(move || {
-                    handle_outgoing_transfer(stream1, s_store, s_id, SessionKey([0u8; 32]), s_manager)
+                    handle_outgoing_transfer(
+                        stream1,
+                        s_store,
+                        s_id,
+                        SessionKey([0u8; 32]),
+                        s_manager,
+                    )
                 });
 
                 let r_store = Arc::clone(&store_c);
                 let r_manager = Arc::clone(&manager_c);
                 let r_dir = dir_c.path().to_path_buf();
                 let receiver = thread::spawn(move || {
-                    handle_incoming_transfer_with_manager(stream2, r_store, SessionKey([0u8; 32]), r_dir, flume::unbounded().0, r_manager, "peer".to_string())
+                    handle_incoming_transfer_with_manager(
+                        stream2,
+                        r_store,
+                        SessionKey([0u8; 32]),
+                        r_dir,
+                        flume::unbounded().0,
+                        r_manager,
+                        "peer".to_string(),
+                    )
                 });
 
                 thread::sleep(Duration::from_millis(200));
@@ -1473,7 +2061,7 @@ mod tests {
         let store = Arc::new(Store::init(dir.path())?);
         let (prog_tx, _prog_rx) = flume::unbounded();
         let manager = Arc::new(FileTransferManager::new(Arc::clone(&store), prog_tx));
-        
+
         let pool = threadpool::ThreadPool::new(4);
         let (start_tx, start_rx) = flume::unbounded();
         let started_count = Arc::new(Mutex::new(0));
@@ -1481,7 +2069,7 @@ mod tests {
         for i in 0..5 {
             let start_tx_c = start_tx.clone();
             let started_count_c = Arc::clone(&started_count);
-            
+
             pool.execute(move || {
                 {
                     let mut count = started_count_c.lock();
@@ -1492,7 +2080,7 @@ mod tests {
 
                 // Simulate a very slow transfer start
                 thread::sleep(Duration::from_millis(500));
-                
+
                 {
                     let mut count = started_count_c.lock();
                     *count -= 1;
@@ -1504,17 +2092,20 @@ mod tests {
         for _ in 0..4 {
             start_rx.recv_timeout(Duration::from_secs(1))?;
         }
-        
+
         // 5th should NOT have started yet
-        assert!(start_rx.try_recv().is_err(), "5th transfer should be queued");
+        assert!(
+            start_rx.try_recv().is_err(),
+            "5th transfer should be queued"
+        );
         assert_eq!(*started_count.lock(), 4);
 
         // Wait for one to finish
         thread::sleep(Duration::from_millis(600));
-        
+
         // 5th should now start
         let _ = start_rx.recv_timeout(Duration::from_secs(1))?;
-        
+
         pool.join();
         Ok(())
     }

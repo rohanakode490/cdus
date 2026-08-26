@@ -233,7 +233,8 @@ impl RelayManager {
                                         {
                                             // Normal timeout, continue
                                         } else {
-                                            let err_msg = format!("Connection lost (IO error: {})", e);
+                                            let err_msg =
+                                                format!("Connection lost (IO error: {})", e);
                                             error!("Relay: {}", err_msg);
                                             let _ = tx.send(IpcMessage::RelayStatus {
                                                 connected: false,

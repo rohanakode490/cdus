@@ -35,17 +35,19 @@ pub fn is_sensitive_content(text: &str) -> bool {
     if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
         return false;
     }
-    
+
     // Heuristic: If it looks like a password (mix of uppercase, lowercase, numbers/symbols, length 8-64)
     if trimmed.len() < 8 || trimmed.len() > 64 {
         return false;
     }
-    
+
     let has_upper = trimmed.chars().any(|c| c.is_ascii_uppercase());
     let has_lower = trimmed.chars().any(|c| c.is_ascii_lowercase());
     let has_digit = trimmed.chars().any(|c| c.is_ascii_digit());
-    let has_symbol = trimmed.chars().any(|c| c.is_ascii_punctuation() || "@#$%-+=_*^&".contains(c));
-    
+    let has_symbol = trimmed
+        .chars()
+        .any(|c| c.is_ascii_punctuation() || "@#$%-+=_*^&".contains(c));
+
     has_upper && has_lower && (has_digit || has_symbol)
 }
 
@@ -320,49 +322,49 @@ pub enum ProgressEvent {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct TransferRequest {
-    pub transfer_id:  String,   // UUID
-    pub file_name:    String,   // display name only
-    pub total_bytes:  u64,
-    pub chunk_size:   u32,      // sender's preferred chunk size
-    pub file_hash:    String,   // BLAKE3 hex of whole file
-    pub sender_label: String,   // "Rahul's Laptop" — shown in accept dialog
+    pub transfer_id: String, // UUID
+    pub file_name: String,   // display name only
+    pub total_bytes: u64,
+    pub chunk_size: u32,      // sender's preferred chunk size
+    pub file_hash: String,    // BLAKE3 hex of whole file
+    pub sender_label: String, // "Rahul's Laptop" — shown in accept dialog
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct TransferAcceptance {
-    pub transfer_id:    String,
-    pub accepted:       bool,
-    pub resume_from:    u64,           // byte offset — 0 for fresh, N for resume
+    pub transfer_id: String,
+    pub accepted: bool,
+    pub resume_from: u64, // byte offset — 0 for fresh, N for resume
     pub missing_chunks: Option<Vec<u32>>, // Specific chunk indices if sparse resume is needed
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ChunkFrame {
-    pub transfer_id:  String,
-    pub chunk_index:  u32,
-    pub byte_offset:  u64,
+    pub transfer_id: String,
+    pub chunk_index: u32,
+    pub byte_offset: u64,
     #[serde(with = "serde_bytes")]
-    pub data:         Vec<u8>,  // encrypted chunk payload
-    pub chunk_hash:   String,   // BLAKE3 of plaintext (verify after decrypt)
+    pub data: Vec<u8>, // encrypted chunk payload
+    pub chunk_hash: String, // BLAKE3 of plaintext (verify after decrypt)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ChunkAck {
-    pub transfer_id:  String,
-    pub chunk_index:  u32,
-    pub bytes_confirmed: u64,   // cumulative confirmed offset
+    pub transfer_id: String,
+    pub chunk_index: u32,
+    pub bytes_confirmed: u64, // cumulative confirmed offset
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct TransferComplete {
-    pub transfer_id:  String,
-    pub file_hash:    String,   // BLAKE3 of whole file — receiver verifies
+    pub transfer_id: String,
+    pub file_hash: String, // BLAKE3 of whole file — receiver verifies
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct TransferError {
-    pub transfer_id:  String,
-    pub reason:       String,
+    pub transfer_id: String,
+    pub reason: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -402,18 +404,11 @@ pub struct PeerExchangeRecord {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum SyncMessage {
-    ClipboardUpdate {
-        content: String,
-        timestamp: u64,
-    },
-    PeerExchange {
-        peers: Vec<PeerExchangeRecord>,
-    },
+    ClipboardUpdate { content: String, timestamp: u64 },
+    PeerExchange { peers: Vec<PeerExchangeRecord> },
     Disconnect,
     NotificationMirror(NotificationPayload),
-    NotificationDismiss {
-        key: String,
-    },
+    NotificationDismiss { key: String },
 }
 
 impl SyncMessage {

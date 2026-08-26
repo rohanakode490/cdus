@@ -1,12 +1,13 @@
 use cdus_common::IpcMessage;
 use flume::Sender;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::Arc; use parking_lot::Mutex;
+use std::sync::Arc;
 use std::thread;
-use tracing::{debug, error, info};
 #[cfg(target_os = "android")]
 use tracing::warn;
+use tracing::{debug, error, info};
 
 pub struct MdnsManager {
     daemon: ServiceDaemon,
@@ -122,8 +123,13 @@ impl MdnsManager {
 
         let mut registered = self.registered_services.lock();
         if let Some(existing) = registered.get(instance_name) {
-            if existing.get_port() == port && existing.get_properties() == service_info.get_properties() {
-                debug!("Service already registered with same info: {}", instance_name);
+            if existing.get_port() == port
+                && existing.get_properties() == service_info.get_properties()
+            {
+                debug!(
+                    "Service already registered with same info: {}",
+                    instance_name
+                );
                 return;
             }
             info!("Updating mDNS service registration for: {}", instance_name);
@@ -186,19 +192,20 @@ impl MdnsManager {
                                     .unwrap_or("Unknown")
                                     .to_string();
 
-                                let mut addresses: Vec<_> = info
-                                    .get_addresses()
-                                    .iter()
-                                    .cloned()
-                                    .collect();
+                                let mut addresses: Vec<_> =
+                                    info.get_addresses().iter().cloned().collect();
 
                                 // Rank addresses to prioritize LAN over virtual interfaces
                                 addresses.sort_by(|a, b| {
                                     let score = |addr: &std::net::IpAddr| {
                                         let ip_str = addr.to_string();
-                                        if ip_str.starts_with("192.168.") || ip_str.starts_with("10.") {
+                                        if ip_str.starts_with("192.168.")
+                                            || ip_str.starts_with("10.")
+                                        {
                                             100 // Common LAN
-                                        } else if ip_str.starts_with("172.") && !ip_str.starts_with("172.17.") {
+                                        } else if ip_str.starts_with("172.")
+                                            && !ip_str.starts_with("172.17.")
+                                        {
                                             90 // Possible LAN (excluding default Docker)
                                         } else if addr.is_loopback() {
                                             0 // Loopback
@@ -213,13 +220,11 @@ impl MdnsManager {
                                     score(b).cmp(&score(a))
                                 });
 
-                                let ips: Vec<String> = addresses.iter().map(|a| a.to_string()).collect();
+                                let ips: Vec<String> =
+                                    addresses.iter().map(|a| a.to_string()).collect();
                                 let port = info.get_port();
 
-                                info!(
-                                    "mDNS resolved service: {} at {:?}:{}",
-                                    label, ips, port
-                                );
+                                info!("mDNS resolved service: {} at {:?}:{}", label, ips, port);
 
                                 if !node_id.is_empty() && !ips.is_empty() {
                                     info!(

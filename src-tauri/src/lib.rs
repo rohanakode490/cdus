@@ -216,7 +216,10 @@ async fn clear_audit_logs() -> Result<String, String> {
 
 #[tauri::command]
 async fn append_audit_log(event_type: String, content: String) -> Result<String, String> {
-    let msg = IpcMessage::AppendAuditLog { event_type, content };
+    let msg = IpcMessage::AppendAuditLog {
+        event_type,
+        content,
+    };
     match send_ipc_message(msg)? {
         IpcMessage::Log(msg) => Ok(msg),
         _ => Err("Unexpected response from agent".to_string()),
@@ -270,7 +273,8 @@ async fn stop_scan() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn get_discovered_devices() -> Result<Vec<(String, String, String, Vec<String>, u16)>, String> {
+async fn get_discovered_devices() -> Result<Vec<(String, String, String, Vec<String>, u16)>, String>
+{
     let msg = IpcMessage::GetDiscovered;
     match send_ipc_message(msg)? {
         IpcMessage::DiscoveredResponse(list) => Ok(list),
@@ -384,7 +388,9 @@ async fn cancel_file_transfer(transfer_id: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn get_file_transfer_history(limit: u32) -> Result<Vec<cdus_common::FileTransferRecord>, String> {
+async fn get_file_transfer_history(
+    limit: u32,
+) -> Result<Vec<cdus_common::FileTransferRecord>, String> {
     let msg = IpcMessage::GetFileTransferHistory { limit };
     match send_ipc_message(msg)? {
         IpcMessage::FileTransferHistoryResponse(history) => Ok(common_history_to_tauri(history)),
@@ -437,7 +443,9 @@ async fn delete_file_permanently(transfer_id: String) -> Result<String, String> 
     }
 }
 
-fn common_history_to_tauri(history: Vec<cdus_common::FileTransferRecord>) -> Vec<cdus_common::FileTransferRecord> {
+fn common_history_to_tauri(
+    history: Vec<cdus_common::FileTransferRecord>,
+) -> Vec<cdus_common::FileTransferRecord> {
     history // They are already the same type now!
 }
 
@@ -472,9 +480,7 @@ fn read_text_preview(file_path: String) -> Result<String, String> {
             }
             Ok(preview)
         }
-        Err(_) => {
-            Ok("Binary file content".to_string())
-        }
+        Err(_) => Ok("Binary file content".to_string()),
     }
 }
 
@@ -552,7 +558,6 @@ async fn open_file_location(app: tauri::AppHandle, transfer_id: String) -> Resul
     Ok(())
 }
 
-
 fn update_tray_menu(app: &tauri::AppHandle) -> Result<(), String> {
     let history = match send_ipc_message(IpcMessage::GetHistory { limit: 5 }) {
         Ok(IpcMessage::HistoryResponse(h)) => h,
@@ -582,14 +587,22 @@ fn update_tray_menu(app: &tauri::AppHandle) -> Result<(), String> {
     } else {
         "Status: Offline"
     };
-    let status_i = MenuItem::with_id(app, "status", status_label, false, None::<&str>).map_err(|e| e.to_string())?;
+    let status_i = MenuItem::with_id(app, "status", status_label, false, None::<&str>)
+        .map_err(|e| e.to_string())?;
     menu_items.push(Box::new(status_i));
 
     let separator1 = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
     menu_items.push(Box::new(separator1));
 
     if history.is_empty() {
-        let empty_i = MenuItem::with_id(app, "empty_history", "Clipboard history is empty", false, None::<&str>).map_err(|e| e.to_string())?;
+        let empty_i = MenuItem::with_id(
+            app,
+            "empty_history",
+            "Clipboard history is empty",
+            false,
+            None::<&str>,
+        )
+        .map_err(|e| e.to_string())?;
         menu_items.push(Box::new(empty_i));
     } else {
         for (idx, item) in history.iter().enumerate() {
@@ -618,7 +631,8 @@ fn update_tray_menu(app: &tauri::AppHandle) -> Result<(), String> {
                 display_text,
                 true,
                 None::<&str>,
-            ).map_err(|e| e.to_string())?;
+            )
+            .map_err(|e| e.to_string())?;
             menu_items.push(Box::new(history_i));
         }
     }
@@ -626,13 +640,16 @@ fn update_tray_menu(app: &tauri::AppHandle) -> Result<(), String> {
     let separator2 = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
     menu_items.push(Box::new(separator2));
 
-    let show_i = MenuItem::with_id(app, "show_main", "Show Main Window", true, None::<&str>).map_err(|e| e.to_string())?;
+    let show_i = MenuItem::with_id(app, "show_main", "Show Main Window", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
     menu_items.push(Box::new(show_i));
 
-    let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>).map_err(|e| e.to_string())?;
+    let quit_i =
+        MenuItem::with_id(app, "quit", "Quit", true, None::<&str>).map_err(|e| e.to_string())?;
     menu_items.push(Box::new(quit_i));
 
-    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = menu_items.iter().map(|item| item.as_ref()).collect();
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+        menu_items.iter().map(|item| item.as_ref()).collect();
     let new_menu = Menu::with_items(app, &refs).map_err(|e| e.to_string())?;
 
     tray.set_menu(Some(new_menu)).map_err(|e| e.to_string())?;
@@ -651,12 +668,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 window.hide().unwrap();
                 #[cfg(target_os = "macos")]
-                window.app_handle().set_activation_policy(tauri::ActivationPolicy::Accessory);
+                window
+                    .app_handle()
+                    .set_activation_policy(tauri::ActivationPolicy::Accessory);
                 api.prevent_close();
             }
             _ => {}
@@ -710,11 +728,18 @@ pub fn run() {
                                     use arboard::Clipboard;
                                     if let Ok(mut cb) = Clipboard::new() {
                                         let mut text_to_copy = content.clone();
-                                        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
-                                            if let Some(typ) = json_val.get("type").and_then(|v| v.as_str()) {
+                                        if let Ok(json_val) =
+                                            serde_json::from_str::<serde_json::Value>(&content)
+                                        {
+                                            if let Some(typ) =
+                                                json_val.get("type").and_then(|v| v.as_str())
+                                            {
                                                 match typ {
                                                     "url" => {
-                                                        if let Some(url_val) = json_val.get("url").and_then(|v| v.as_str()) {
+                                                        if let Some(url_val) = json_val
+                                                            .get("url")
+                                                            .and_then(|v| v.as_str())
+                                                        {
                                                             text_to_copy = url_val.to_string();
                                                         }
                                                     }
@@ -808,10 +833,8 @@ pub fn run() {
                                                         } else {
                                                             "file-transfer-progress"
                                                         };
-                                                        let _ = app_handle_events.emit(
-                                                            event_name,
-                                                            (transfer_id, 0.0),
-                                                        );
+                                                        let _ = app_handle_events
+                                                            .emit(event_name, (transfer_id, 0.0));
                                                     }
                                                     ProgressEvent::Progress {
                                                         transfer_id,
@@ -819,7 +842,9 @@ pub fn run() {
                                                         total_bytes,
                                                     } => {
                                                         let progress = if total_bytes > 0 {
-                                                            (bytes_confirmed as f32 / total_bytes as f32) * 100.0
+                                                            (bytes_confirmed as f32
+                                                                / total_bytes as f32)
+                                                                * 100.0
                                                         } else {
                                                             0.0
                                                         };
@@ -829,11 +854,12 @@ pub fn run() {
                                                         );
                                                     }
                                                     ProgressEvent::Complete {
-                                                        transfer_id,
-                                                        ..
+                                                        transfer_id, ..
                                                     } => {
-                                                        let _ = app_handle_events
-                                                            .emit("file-transfer-complete", transfer_id);
+                                                        let _ = app_handle_events.emit(
+                                                            "file-transfer-complete",
+                                                            transfer_id,
+                                                        );
                                                     }
                                                     ProgressEvent::Failed {
                                                         transfer_id,
@@ -859,7 +885,10 @@ pub fn run() {
                                                 let _ = app_handle_events
                                                     .emit("file-transfer-complete", transfer_id);
                                             }
-                                            IpcMessage::FileTransferError { transfer_id, error } => {
+                                            IpcMessage::FileTransferError {
+                                                transfer_id,
+                                                error,
+                                            } => {
                                                 let _ = app_handle_events.emit(
                                                     "file-transfer-error",
                                                     (transfer_id, error),
@@ -879,9 +908,16 @@ pub fn run() {
                                                 let _ = app_handle_events
                                                     .emit("peer-connected", node_id);
                                             }
-                                            IpcMessage::PairingResult { success, node_id, label, error } => {
-                                                let _ = app_handle_events
-                                                    .emit("pairing-result", (success, node_id, label, error));
+                                            IpcMessage::PairingResult {
+                                                success,
+                                                node_id,
+                                                label,
+                                                error,
+                                            } => {
+                                                let _ = app_handle_events.emit(
+                                                    "pairing-result",
+                                                    (success, node_id, label, error),
+                                                );
                                             }
                                             IpcMessage::RelayStatus { connected, error } => {
                                                 let _ = app_handle_events

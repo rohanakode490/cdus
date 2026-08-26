@@ -1,10 +1,10 @@
 uniffi::setup_scaffolding!();
 
+use cdus_agent::file_transfer::FileTransferManager;
+use cdus_common::{IpcMessage, ProgressEvent, SyncMessage};
 use once_cell::sync::Lazy;
 use std::sync::{Arc, Mutex};
 use tracing::{error, info};
-use cdus_common::{IpcMessage, SyncMessage, ProgressEvent};
-use cdus_agent::file_transfer::FileTransferManager;
 
 #[uniffi::export]
 pub fn init_logging() {
@@ -63,9 +63,26 @@ pub trait ClipboardListener: Send + Sync {
 
 #[uniffi::export(callback_interface)]
 pub trait FileTransferListener: Send + Sync {
-    fn on_incoming_request(&self, node_id: String, transfer_id: String, file_name: String, total_bytes: u64, sender_label: String);
-    fn on_incoming_transfer_started(&self, transfer_id: String, file_name: String, total_bytes: u64);
-    fn on_outgoing_transfer_started(&self, transfer_id: String, file_name: String, total_bytes: u64);
+    fn on_incoming_request(
+        &self,
+        node_id: String,
+        transfer_id: String,
+        file_name: String,
+        total_bytes: u64,
+        sender_label: String,
+    );
+    fn on_incoming_transfer_started(
+        &self,
+        transfer_id: String,
+        file_name: String,
+        total_bytes: u64,
+    );
+    fn on_outgoing_transfer_started(
+        &self,
+        transfer_id: String,
+        file_name: String,
+        total_bytes: u64,
+    );
     fn on_transfer_progress(&self, transfer_id: String, progress: f32);
     fn on_transfer_complete(&self, transfer_id: String, dest_path: String);
     fn on_transfer_error(&self, transfer_id: String, error: String);
@@ -73,7 +90,13 @@ pub trait FileTransferListener: Send + Sync {
     fn on_peer_rejected(&self, node_id: String, transfer_id: String);
     fn on_peer_disconnected(&self, node_id: String);
     fn on_peer_connected(&self, node_id: String);
-    fn on_pairing_result(&self, success: bool, node_id: String, label: String, error: Option<String>);
+    fn on_pairing_result(
+        &self,
+        success: bool,
+        node_id: String,
+        label: String,
+        error: Option<String>,
+    );
     fn on_already_paired(&self, node_id: String, label: String);
     fn on_stale_pairing(&self, node_id: String, label: String);
     fn on_transfer_state_changed(&self, transfer_id: String, state: String);
@@ -124,13 +147,16 @@ static MDNS: Lazy<Arc<cdus_agent::mdns::MdnsManager>> =
 static DISCOVERED: Lazy<Arc<Mutex<Vec<DiscoveredDevice>>>> =
     Lazy::new(|| Arc::new(Mutex::new(Vec::new())));
 
-static PEER_MAP: Lazy<Arc<Mutex<std::collections::HashMap<String, (DiscoveredDevice, std::time::Instant)>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(std::collections::HashMap::new())));
+static PEER_MAP: Lazy<
+    Arc<Mutex<std::collections::HashMap<String, (DiscoveredDevice, std::time::Instant)>>>,
+> = Lazy::new(|| Arc::new(Mutex::new(std::collections::HashMap::new())));
 
-static LOCAL_NODE_ID: Lazy<std::sync::Mutex<String>> = Lazy::new(|| std::sync::Mutex::new(String::new()));
+static LOCAL_NODE_ID: Lazy<std::sync::Mutex<String>> =
+    Lazy::new(|| std::sync::Mutex::new(String::new()));
 
-static ACTIVE_PAIRING: Lazy<Arc<parking_lot::Mutex<Option<cdus_agent::pairing::ActivePairingState>>>> =
-    Lazy::new(|| Arc::new(parking_lot::Mutex::new(None)));
+static ACTIVE_PAIRING: Lazy<
+    Arc<parking_lot::Mutex<Option<cdus_agent::pairing::ActivePairingState>>>,
+> = Lazy::new(|| Arc::new(parking_lot::Mutex::new(None)));
 
 static PAIRING_MANAGER: Lazy<std::sync::Mutex<Option<Arc<cdus_agent::pairing::PairingManager>>>> =
     Lazy::new(|| std::sync::Mutex::new(None));
@@ -148,8 +174,7 @@ static RELAY_MANAGER: Lazy<Mutex<Option<Arc<cdus_agent::relay::RelayManager>>>> 
 static RELAY_RX: Lazy<Mutex<Option<flume::Receiver<cdus_agent::relay::SignalMessage>>>> =
     Lazy::new(|| Mutex::new(None));
 
-static AGENT_TX: Lazy<Mutex<Option<flume::Sender<IpcMessage>>>> =
-    Lazy::new(|| Mutex::new(None));
+static AGENT_TX: Lazy<Mutex<Option<flume::Sender<IpcMessage>>>> = Lazy::new(|| Mutex::new(None));
 
 #[uniffi::export]
 pub fn init_core(data_dir: String, device_name: String) -> String {
@@ -199,32 +224,53 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                     }
 
                     let label = store
-
                         .get_state("device_name")
                         .unwrap_or(None)
                         .unwrap_or_else(|| "Android Device".to_string());
-                    
+
                     let (tx, rx) = flume::unbounded();
                     *AGENT_TX.lock().unwrap() = Some(tx.clone());
 
                     let (p_tx, p_rx) = flume::unbounded();
-                    let transfer_manager = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
+                    let transfer_manager =
+                        Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
                     *TRANSFER_MANAGER.lock().unwrap() = Some(Arc::clone(&transfer_manager));
 
                     // Forward progress events to listeners
                     std::thread::spawn(move || {
                         while let Ok(event) = p_rx.recv() {
-                            if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                            if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
+                            {
                                 match event {
-                                    ProgressEvent::Started { transfer_id, file_name, total_bytes, is_outgoing } => {
+                                    ProgressEvent::Started {
+                                        transfer_id,
+                                        file_name,
+                                        total_bytes,
+                                        is_outgoing,
+                                    } => {
                                         if is_outgoing {
-                                            listener.on_outgoing_transfer_started(transfer_id.clone(), file_name, total_bytes);
+                                            listener.on_outgoing_transfer_started(
+                                                transfer_id.clone(),
+                                                file_name,
+                                                total_bytes,
+                                            );
                                         } else {
-                                            listener.on_incoming_transfer_started(transfer_id.clone(), file_name, total_bytes);
+                                            listener.on_incoming_transfer_started(
+                                                transfer_id.clone(),
+                                                file_name,
+                                                total_bytes,
+                                            );
                                         }
-                                        listener.on_transfer_state_changed(transfer_id, "started".to_string());
+                                        listener.on_transfer_state_changed(
+                                            transfer_id,
+                                            "started".to_string(),
+                                        );
                                     }
-                                    ProgressEvent::Progress { transfer_id, bytes_confirmed, total_bytes } => {
+                                    ProgressEvent::Progress {
+                                        transfer_id,
+                                        bytes_confirmed,
+                                        total_bytes,
+                                    } => {
                                         let progress = if total_bytes > 0 {
                                             (bytes_confirmed as f32 / total_bytes as f32) * 100.0
                                         } else {
@@ -232,16 +278,43 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                         };
                                         listener.on_transfer_progress(transfer_id, progress);
                                     }
-                                    ProgressEvent::Complete { transfer_id, dest_path } => {
-                                        listener.on_transfer_complete(transfer_id.clone(), dest_path.to_string_lossy().to_string());
-                                        listener.on_transfer_state_changed(transfer_id, "completed".to_string());
+                                    ProgressEvent::Complete {
+                                        transfer_id,
+                                        dest_path,
+                                    } => {
+                                        listener.on_transfer_complete(
+                                            transfer_id.clone(),
+                                            dest_path.to_string_lossy().to_string(),
+                                        );
+                                        listener.on_transfer_state_changed(
+                                            transfer_id,
+                                            "completed".to_string(),
+                                        );
                                     }
-                                    ProgressEvent::Failed { transfer_id, reason } => {
+                                    ProgressEvent::Failed {
+                                        transfer_id,
+                                        reason,
+                                    } => {
                                         listener.on_transfer_error(transfer_id.clone(), reason);
-                                        listener.on_transfer_state_changed(transfer_id, "failed".to_string());
+                                        listener.on_transfer_state_changed(
+                                            transfer_id,
+                                            "failed".to_string(),
+                                        );
                                     }
-                                    ProgressEvent::IncomingRequest { transfer_id, node_id, file_name, total_bytes, sender_label } => {
-                                        listener.on_incoming_request(node_id, transfer_id, file_name, total_bytes, sender_label);
+                                    ProgressEvent::IncomingRequest {
+                                        transfer_id,
+                                        node_id,
+                                        file_name,
+                                        total_bytes,
+                                        sender_label,
+                                    } => {
+                                        listener.on_incoming_request(
+                                            node_id,
+                                            transfer_id,
+                                            file_name,
+                                            total_bytes,
+                                            sender_label,
+                                        );
                                     }
                                 }
                             }
@@ -261,7 +334,7 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                     );
                     let relay = Arc::new(relay);
                     *RELAY_MANAGER.lock().unwrap() = Some(Arc::clone(&relay));
-                    
+
                     // Auto-start relay signaling loop
                     let relay_clone = Arc::clone(&relay);
                     std::thread::spawn(move || {
@@ -345,7 +418,9 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                     }
                                     let mut should_apply = true;
                                     if let Some(store) = STORE.lock().unwrap().as_ref() {
-                                        if let Ok(Some(last_ts_str)) = store.get_state("last_sync_timestamp") {
+                                        if let Ok(Some(last_ts_str)) =
+                                            store.get_state("last_sync_timestamp")
+                                        {
                                             if let Ok(last_ts) = last_ts_str.parse::<u64>() {
                                                 if timestamp <= last_ts {
                                                     should_apply = false;
@@ -353,11 +428,15 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                                 }
                                             }
                                         }
-                                        
+
                                         if should_apply {
                                             let _ = store.append_event(content.as_bytes(), &source);
-                                            let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
-                                            let _ = store.set_state("last_clipboard_content", &content);
+                                            let _ = store.set_state(
+                                                "last_sync_timestamp",
+                                                &timestamp.to_string(),
+                                            );
+                                            let _ =
+                                                store.set_state("last_clipboard_content", &content);
                                         }
                                     }
                                     if should_apply {
@@ -431,7 +510,9 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                         let mut list = DISCOVERED.lock().unwrap();
                                         list.retain(|d| d.node_id != node_id);
                                     }
-                                    if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                                    if let Some(listener) =
+                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
+                                    {
                                         listener.on_peer_connected(node_id);
                                     }
                                 }
@@ -444,31 +525,46 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                             lm.disconnect_peer(peer_id);
                                         }
                                     }
-                                    if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                                    if let Some(listener) =
+                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
+                                    {
                                         listener.on_peer_disconnected(node_id);
                                     }
                                 }
-                                IpcMessage::PairingResult { success, node_id, label, error } => {
+                                IpcMessage::PairingResult {
+                                    success,
+                                    node_id,
+                                    label,
+                                    error,
+                                } => {
                                     if success {
                                         let mut list = DISCOVERED.lock().unwrap();
                                         list.retain(|d| d.node_id != node_id);
                                     }
-                                    if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                                    if let Some(listener) =
+                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
+                                    {
                                         listener.on_pairing_result(success, node_id, label, error);
                                     }
                                 }
                                 IpcMessage::RelayStatus { connected, error } => {
-                                    if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                                    if let Some(listener) =
+                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
+                                    {
                                         listener.on_relay_status_changed(connected, error);
                                     }
                                 }
                                 IpcMessage::AlreadyPaired { node_id, label } => {
-                                    if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                                    if let Some(listener) =
+                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
+                                    {
                                         listener.on_already_paired(node_id, label);
                                     }
                                 }
                                 IpcMessage::StalePairing { node_id, label } => {
-                                    if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                                    if let Some(listener) =
+                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
+                                    {
                                         listener.on_stale_pairing(node_id, label);
                                     }
                                 }
@@ -476,8 +572,11 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                     // These are already handled by the SEPARATE progress forwarder thread spawned above
                                     // But we could also handle them here if we didn't have that.
                                 }
-                                IpcMessage::DismissNotification { key } | IpcMessage::NotificationDismissed { key } => {
-                                    if let Some(listener) = NOTIFICATION_LISTENER.lock().unwrap().as_ref() {
+                                IpcMessage::DismissNotification { key }
+                                | IpcMessage::NotificationDismissed { key } => {
+                                    if let Some(listener) =
+                                        NOTIFICATION_LISTENER.lock().unwrap().as_ref()
+                                    {
                                         listener.on_remote_dismiss_request(key);
                                     }
                                 }
@@ -547,28 +646,32 @@ pub fn send_file(node_id: String, path: String) {
     let store_opt = STORE.lock().unwrap();
     let lm_opt = LIBP2P_MANAGER.lock().unwrap();
     let tm_opt = TRANSFER_MANAGER.lock().unwrap();
-    
-    if let (Some(store), Some(lm), Some(tm)) = (store_opt.as_ref(), lm_opt.as_ref(), tm_opt.as_ref()) {
+
+    if let (Some(store), Some(lm), Some(tm)) =
+        (store_opt.as_ref(), lm_opt.as_ref(), tm_opt.as_ref())
+    {
         let store_clone = Arc::clone(store);
         let lm_clone = Arc::clone(lm);
         let tm_clone = Arc::clone(tm);
-        
+
         std::thread::spawn(move || {
             let file_name = path_buf.file_name().unwrap().to_string_lossy().to_string();
             let total_bytes = path_buf.metadata().unwrap().len();
             let file_hash = cdus_agent::file_transfer::hash_file(&path_buf).unwrap();
             let transfer_id = uuid::Uuid::new_v4().to_string();
-            
-            store_clone.create_transfer(
-                &transfer_id,
-                "outgoing",
-                &node_id,
-                &path_buf.to_string_lossy(),
-                &file_name,
-                total_bytes,
-                262144,
-                &file_hash,
-            ).unwrap();
+
+            store_clone
+                .create_transfer(
+                    &transfer_id,
+                    "outgoing",
+                    &node_id,
+                    &path_buf.to_string_lossy(),
+                    &file_name,
+                    total_bytes,
+                    262144,
+                    &file_hash,
+                )
+                .unwrap();
 
             if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
                 match lm_clone.open_file_stream(peer_id) {
@@ -584,12 +687,15 @@ pub fn send_file(node_id: String, path: String) {
                     }
                     Err(e) => {
                         error!("Failed to open file stream to {}: {}", peer_id, e);
-                        let _ = tm_clone.progress_tx.send(ProgressEvent::Failed { 
-                            transfer_id, 
-                            reason: format!("Connection failed: {}", e) 
+                        let _ = tm_clone.progress_tx.send(ProgressEvent::Failed {
+                            transfer_id,
+                            reason: format!("Connection failed: {}", e),
                         });
-                        if e.to_string().contains("Dial error") || e.to_string().contains("no addresses") {
-                            if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+                        if e.to_string().contains("Dial error")
+                            || e.to_string().contains("no addresses")
+                        {
+                            if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
+                            {
                                 listener.on_peer_disconnected(node_id);
                             }
                         }
@@ -649,11 +755,10 @@ pub fn set_clipboard_item_local_only(id: i64, local_only: bool) {
                 let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
                 let _ = store.set_state("last_clipboard_content", &event.content);
                 if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
-                    pm.sync_manager
-                        .broadcast(SyncMessage::ClipboardUpdate {
-                            content: event.content,
-                            timestamp,
-                        });
+                    pm.sync_manager.broadcast(SyncMessage::ClipboardUpdate {
+                        content: event.content,
+                        timestamp,
+                    });
                 }
             }
         }
@@ -677,11 +782,16 @@ pub fn clear_clipboard_history() {
 #[uniffi::export]
 pub fn disconnect_device(node_id: String) {
     if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
-        if !pm.sync_manager.send_to_peer(&node_id, SyncMessage::Disconnect) {
+        if !pm
+            .sync_manager
+            .send_to_peer(&node_id, SyncMessage::Disconnect)
+        {
             pm.sync_manager.remove_peer(&node_id);
         }
         // Also broadcast peer disconnected event locally
-        cdus_agent::broadcast_event(IpcMessage::PeerDisconnected { node_id: node_id.clone() });
+        cdus_agent::broadcast_event(IpcMessage::PeerDisconnected {
+            node_id: node_id.clone(),
+        });
     }
     if let Some(tm) = TRANSFER_MANAGER.lock().unwrap().as_ref() {
         tm.cancel_all_transfers_for_peer(&node_id);
@@ -782,7 +892,10 @@ pub fn get_file_transfer_history(limit: u32) -> Vec<FileTransfer> {
 pub fn clear_finished_transfers() {
     if let Some(store) = STORE.lock().unwrap().as_ref() {
         if let Err(e) = store.clear_finished_transfers() {
-            error!("clear_finished_transfers: failed to clear from database: {:?}", e);
+            error!(
+                "clear_finished_transfers: failed to clear from database: {:?}",
+                e
+            );
         } else {
             info!("clear_finished_transfers: successfully cleared finished transfers");
         }
@@ -795,9 +908,15 @@ pub fn clear_finished_transfers() {
 pub fn delete_file_transfer(transfer_id: String) {
     if let Some(store) = STORE.lock().unwrap().as_ref() {
         if let Err(e) = store.delete_transfer(&transfer_id) {
-            error!("delete_file_transfer: failed to delete {} from database: {:?}", transfer_id, e);
+            error!(
+                "delete_file_transfer: failed to delete {} from database: {:?}",
+                transfer_id, e
+            );
         } else {
-            info!("delete_file_transfer: successfully deleted {} from database", transfer_id);
+            info!(
+                "delete_file_transfer: successfully deleted {} from database",
+                transfer_id
+            );
         }
     } else {
         error!("delete_file_transfer: STORE is None!");
@@ -826,7 +945,12 @@ pub fn get_paired_devices() -> Vec<PairedDevice> {
                         let is_online = sync_manager
                             .map(|sm| sm.is_connected(&record.node_id))
                             .unwrap_or(false)
-                            || peer_map.get(&record.node_id).map(|(_, instant)| instant.elapsed() < std::time::Duration::from_secs(30)).unwrap_or(false);
+                            || peer_map
+                                .get(&record.node_id)
+                                .map(|(_, instant)| {
+                                    instant.elapsed() < std::time::Duration::from_secs(30)
+                                })
+                                .unwrap_or(false);
                         PairedDevice {
                             node_id: record.node_id,
                             label: record.label,
@@ -869,7 +993,10 @@ pub fn initiate_pairing(node_id: String) {
         let device = {
             let discovered = DISCOVERED.lock().unwrap();
             let peer_map = PEER_MAP.lock().unwrap();
-            discovered.iter().find(|d| d.node_id == node_id).cloned()
+            discovered
+                .iter()
+                .find(|d| d.node_id == node_id)
+                .cloned()
                 .or_else(|| peer_map.get(&node_id).map(|(d, _)| d.clone()))
         };
 
@@ -888,9 +1015,12 @@ pub fn initiate_pairing(node_id: String) {
                     }
                 }
             }
-            
+
             if !success {
-                info!("FFI: mDNS failed for {}, falling back to relay", node_id_clone);
+                info!(
+                    "FFI: mDNS failed for {}, falling back to relay",
+                    node_id_clone
+                );
                 pm_clone.initiate_remote_pairing(node_id_clone);
             }
         });
@@ -935,20 +1065,26 @@ pub fn pair_with_qr(payload: String) {
                     }
                     return;
                 }
-                
+
                 info!("FFI: Scanned QR for {} ({}). IPs: {:?}, Port: {}. Setting OOB secret and attempting direct pairing.", label, node_id, ips, port);
                 pm.set_target_oob_secret(node_id.clone(), secret);
-                
+
                 // Pre-populate PEER_MAP with data from QR to bypass mDNS discovery delay
                 {
                     let mut peer_map = PEER_MAP.lock().unwrap();
-                    peer_map.insert(node_id.clone(), (DiscoveredDevice {
-                        node_id: node_id.clone(),
-                        label: label.clone(),
-                        os: "Unknown".to_string(),
-                        ips,
-                        port,
-                    }, std::time::Instant::now()));
+                    peer_map.insert(
+                        node_id.clone(),
+                        (
+                            DiscoveredDevice {
+                                node_id: node_id.clone(),
+                                label: label.clone(),
+                                os: "Unknown".to_string(),
+                                ips,
+                                port,
+                            },
+                            std::time::Instant::now(),
+                        ),
+                    );
                 }
 
                 should_initiate = true;
@@ -1101,14 +1237,16 @@ pub fn send_notification_mirror(
             is_ongoing,
             only_alert_once,
         };
-        pm.sync_manager.broadcast(SyncMessage::NotificationMirror(payload));
+        pm.sync_manager
+            .broadcast(SyncMessage::NotificationMirror(payload));
     }
 }
 
 #[uniffi::export]
 pub fn send_notification_dismiss(key: String) {
     if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
-        pm.sync_manager.broadcast(SyncMessage::NotificationDismiss { key });
+        pm.sync_manager
+            .broadcast(SyncMessage::NotificationDismiss { key });
     }
 }
 
@@ -1233,19 +1371,24 @@ pub fn submit_feedback(text: String, attach_logs: bool) {
             Ok(resp) if resp.status() == 200 => {
                 info!("FFI: Feedback uploaded successfully.");
                 if let Some(store) = STORE.lock().unwrap().as_ref() {
-                    let _ = store.append_audit_log("system", "User feedback uploaded successfully to relay");
+                    let _ = store
+                        .append_audit_log("system", "User feedback uploaded successfully to relay");
                 }
             }
             Ok(resp) => {
                 error!("FFI: Failed to upload feedback: status {}", resp.status());
                 if let Some(store) = STORE.lock().unwrap().as_ref() {
-                    let _ = store.append_audit_log("system", &format!("Failed to upload feedback: status {}", resp.status()));
+                    let _ = store.append_audit_log(
+                        "system",
+                        &format!("Failed to upload feedback: status {}", resp.status()),
+                    );
                 }
             }
             Err(e) => {
                 error!("FFI: Error uploading feedback: {}", e);
                 if let Some(store) = STORE.lock().unwrap().as_ref() {
-                    let _ = store.append_audit_log("system", &format!("Error uploading feedback: {}", e));
+                    let _ = store
+                        .append_audit_log("system", &format!("Error uploading feedback: {}", e));
                 }
             }
         }
@@ -1263,7 +1406,8 @@ pub fn set_telemetry_opt_in(opt_in: bool) {
 #[uniffi::export]
 pub fn get_telemetry_opt_in() -> bool {
     if let Some(store) = STORE.lock().unwrap().as_ref() {
-        store.get_state("telemetry_opt_in")
+        store
+            .get_state("telemetry_opt_in")
             .unwrap_or(None)
             .map(|val| val == "true")
             .unwrap_or(false)

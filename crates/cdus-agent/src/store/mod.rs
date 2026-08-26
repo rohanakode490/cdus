@@ -1,7 +1,7 @@
 use cdus_common::ClipboardEvent;
+use parking_lot::Mutex;
 use rusqlite::{Connection, OptionalExtension, Result};
 use std::path::Path;
-use parking_lot::Mutex;
 use tracing::info;
 
 pub struct Store {
@@ -153,10 +153,7 @@ impl Store {
 
         if !has_static_key {
             info!("Migrating paired_devices table: adding 'static_key' column...");
-            let _ = state_conn.execute(
-                "ALTER TABLE paired_devices ADD COLUMN static_key BLOB",
-                [],
-            );
+            let _ = state_conn.execute("ALTER TABLE paired_devices ADD COLUMN static_key BLOB", []);
         }
 
         // Phase 1.1: File Transfers tables in state.db
@@ -236,20 +233,17 @@ impl Store {
 
         // Populate search index if empty
         let is_empty: bool = search_conn
-            .query_row(
-                "SELECT count(*) FROM search_index",
-                [],
-                |row| {
-                    let count: i64 = row.get(0)?;
-                    Ok(count == 0)
-                },
-            )
+            .query_row("SELECT count(*) FROM search_index", [], |row| {
+                let count: i64 = row.get(0)?;
+                Ok(count == 0)
+            })
             .unwrap_or(true);
 
         if is_empty {
             info!("Search index is empty, performing initial population...");
             // Re-index devices
-            let mut stmt = state_conn.prepare("SELECT node_id, label FROM paired_devices WHERE node_id != 'unknown'")?;
+            let mut stmt = state_conn
+                .prepare("SELECT node_id, label FROM paired_devices WHERE node_id != 'unknown'")?;
             let dev_rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?;
@@ -272,7 +266,11 @@ impl Store {
             // Re-index clipboard events
             let mut stmt = events_conn.prepare("SELECT hash, payload, source FROM events")?;
             let event_rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?, row.get::<_, String>(2)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
             })?;
             for ev in event_rows {
                 if let Ok((hash, payload, source)) = ev {
@@ -294,7 +292,12 @@ impl Store {
                     } else {
                         format!("synced from {} • clipboard history", source)
                     };
-                    let mut content = format!("{} {} {}", title, source, if is_url { "url" } else { "text" });
+                    let mut content = format!(
+                        "{} {} {}",
+                        title,
+                        source,
+                        if is_url { "url" } else { "text" }
+                    );
                     if let Some(ref u) = url_to_parse {
                         if let Ok(url) = url::Url::parse(u) {
                             if let Some(host) = url.host_str() {
@@ -322,7 +325,9 @@ impl Store {
                 ))
             })?;
             for trans in trans_rows {
-                if let Ok((transfer_id, direction, peer_node_id, file_name, total_bytes, status)) = trans {
+                if let Ok((transfer_id, direction, peer_node_id, file_name, total_bytes, status)) =
+                    trans
+                {
                     let peer_label: String = state_conn
                         .query_row(
                             "SELECT label FROM paired_devices WHERE node_id = ?",
@@ -350,7 +355,10 @@ impl Store {
                     let subtitle = if direction == "outgoing" {
                         format!("Size: {} • sent to {} ({})", size_str, peer_label, status)
                     } else {
-                        format!("Size: {} • received from {} ({})", size_str, peer_label, status)
+                        format!(
+                            "Size: {} • received from {} ({})",
+                            size_str, peer_label, status
+                        )
                     };
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -416,9 +424,7 @@ impl Store {
                 [peer_node_id],
                 |row| row.get(0),
             )
-            .unwrap_or_else(|_| {
-                peer_node_id[..std::cmp::min(8, peer_node_id.len())].to_string()
-            });
+            .unwrap_or_else(|_| peer_node_id[..std::cmp::min(8, peer_node_id.len())].to_string());
 
         let size_str = {
             const KB: u64 = 1024;
@@ -453,16 +459,32 @@ impl Store {
         )?;
 
         // Index the file transfer
-        let _ = self.index_file_transfer(transfer_id, direction, &peer_label, file_name, total_bytes, "pending");
+        let _ = self.index_file_transfer(
+            transfer_id,
+            direction,
+            &peer_label,
+            file_name,
+            total_bytes,
+            "pending",
+        );
 
         Ok(())
     }
 
     pub fn delete_transfer(&self, transfer_id: &str) -> Result<()> {
         let conn = self.state_conn.lock();
-        let chunks_deleted = conn.execute("DELETE FROM file_chunks WHERE transfer_id = ?1", [transfer_id])?;
-        let transfers_deleted = conn.execute("DELETE FROM file_transfers WHERE transfer_id = ?1", [transfer_id])?;
-        info!("delete_transfer: ID='{}' -> chunks_deleted={}, transfers_deleted={}", transfer_id, chunks_deleted, transfers_deleted);
+        let chunks_deleted = conn.execute(
+            "DELETE FROM file_chunks WHERE transfer_id = ?1",
+            [transfer_id],
+        )?;
+        let transfers_deleted = conn.execute(
+            "DELETE FROM file_transfers WHERE transfer_id = ?1",
+            [transfer_id],
+        )?;
+        info!(
+            "delete_transfer: ID='{}' -> chunks_deleted={}, transfers_deleted={}",
+            transfer_id, chunks_deleted, transfers_deleted
+        );
 
         // Remove from search index
         let search_conn = self.search_conn.lock();
@@ -590,7 +612,14 @@ impl Store {
                     )?;
                 }
             }
-            let _ = self.index_file_transfer(transfer_id, &direction, &peer_label, &file_name, total_bytes, status);
+            let _ = self.index_file_transfer(
+                transfer_id,
+                &direction,
+                &peer_label,
+                &file_name,
+                total_bytes,
+                status,
+            );
         }
 
         Ok(())
@@ -669,7 +698,14 @@ impl Store {
                     ("sync", &log_content, now),
                 )?;
             }
-            let _ = self.index_file_transfer(transfer_id, &direction, &peer_label, &file_name, total_bytes, "failed");
+            let _ = self.index_file_transfer(
+                transfer_id,
+                &direction,
+                &peer_label,
+                &file_name,
+                total_bytes,
+                "failed",
+            );
         }
 
         Ok(())
@@ -808,10 +844,15 @@ impl Store {
         .optional()
     }
 
-    pub fn get_transfers_older_than(&self, cutoff_ms: i64, statuses: &[&str]) -> Result<Vec<TransferRecord>> {
+    pub fn get_transfers_older_than(
+        &self,
+        cutoff_ms: i64,
+        statuses: &[&str],
+    ) -> Result<Vec<TransferRecord>> {
         let conn = self.state_conn.lock();
 
-        let status_placeholders: String = statuses.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let status_placeholders: String =
+            statuses.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let query = format!(
             "SELECT transfer_id, direction, peer_node_id, file_path, file_name,
                     total_bytes, bytes_confirmed, chunk_size, file_hash, status,
@@ -896,11 +937,19 @@ impl Store {
             "DELETE FROM file_transfers WHERE status IN ('complete', 'failed', 'declined')",
             [],
         )?;
-        info!("clear_finished_transfers: deleted {} finished transfers", deleted);
+        info!(
+            "clear_finished_transfers: deleted {} finished transfers",
+            deleted
+        );
         Ok(())
     }
 
-    pub fn update_paired_device_network_info(&self, node_id: &str, ips: &[String], port: u16) -> Result<()> {
+    pub fn update_paired_device_network_info(
+        &self,
+        node_id: &str,
+        ips: &[String],
+        port: u16,
+    ) -> Result<()> {
         let conn = self.state_conn.lock();
         let ips_json = serde_json::to_string(ips).unwrap_or_default();
         conn.execute(
@@ -926,7 +975,9 @@ impl Store {
                 let prev_str = String::from_utf8_lossy(&prev_payload);
                 let current_str = String::from_utf8_lossy(payload);
                 if prev_str.trim() == current_str.trim() {
-                    info!("Payload is identical (trimmed) to the most recent event, skipping append.");
+                    info!(
+                        "Payload is identical (trimmed) to the most recent event, skipping append."
+                    );
                     return Ok(prev_hash);
                 }
             }
@@ -993,13 +1044,11 @@ impl Store {
     pub fn delete_event(&self, id: i64) -> Result<()> {
         let conn = self.events_conn.lock();
         let hash: Option<String> = conn
-            .query_row(
-                "SELECT hash FROM events WHERE id = ?",
-                [id],
-                |row| row.get(0),
-            )
+            .query_row("SELECT hash FROM events WHERE id = ?", [id], |row| {
+                row.get(0)
+            })
             .optional()?;
-        
+
         if let Some(hash_str) = hash {
             let search_conn = self.search_conn.lock();
             let _ = search_conn.execute("DELETE FROM search_index WHERE id = ?", [&hash_str]);
@@ -1012,18 +1061,20 @@ impl Store {
     pub fn clear_events(&self) -> Result<()> {
         let conn = self.events_conn.lock();
         conn.execute("DELETE FROM events", [])?;
-        
+
         let search_conn = self.search_conn.lock();
         let _ = search_conn.execute("DELETE FROM search_index WHERE item_type = 'clipboard'", []);
         Ok(())
     }
 
     pub fn prune_events(&self) -> Result<()> {
-        let limit = self.get_state("clipboard_limit")
+        let limit = self
+            .get_state("clipboard_limit")
             .unwrap_or(None)
             .and_then(|s| s.parse::<i64>().ok())
             .unwrap_or(50);
-        let days = self.get_state("clipboard_expiry_days")
+        let days = self
+            .get_state("clipboard_expiry_days")
             .unwrap_or(None)
             .and_then(|s| s.parse::<i32>().ok())
             .unwrap_or(7);
@@ -1032,7 +1083,10 @@ impl Store {
 
         // 1. Delete events older than expiry days
         conn.execute(
-            &format!("DELETE FROM events WHERE timestamp < datetime('now', '-{} days')", days),
+            &format!(
+                "DELETE FROM events WHERE timestamp < datetime('now', '-{} days')",
+                days
+            ),
             [],
         )?;
 
@@ -1056,13 +1110,17 @@ impl Store {
             }
             hashes
         };
-        
+
         let search_conn = self.search_conn.lock();
         if remaining_hashes.is_empty() {
-            let _ = search_conn.execute("DELETE FROM search_index WHERE item_type = 'clipboard'", []);
+            let _ =
+                search_conn.execute("DELETE FROM search_index WHERE item_type = 'clipboard'", []);
         } else {
             let vars = vec!["?"; remaining_hashes.len()].join(",");
-            let sql = format!("DELETE FROM search_index WHERE item_type = 'clipboard' AND id NOT IN ({})", vars);
+            let sql = format!(
+                "DELETE FROM search_index WHERE item_type = 'clipboard' AND id NOT IN ({})",
+                vars
+            );
             let params = rusqlite::params_from_iter(remaining_hashes.iter());
             let _ = search_conn.execute(&sql, params);
         }
@@ -1079,8 +1137,8 @@ impl Store {
 
         let event_iter = stmt.query_map([limit], |row| {
             let payload: Vec<u8> = row.get(1)?;
-            let content = String::from_utf8(payload)
-                .unwrap_or_else(|_| "[invalid utf8]".to_string());
+            let content =
+                String::from_utf8(payload).unwrap_or_else(|_| "[invalid utf8]".to_string());
             let is_sensitive = cdus_common::is_sensitive_content(&content);
             let local_only: bool = row.get(4)?;
             Ok(ClipboardEvent {
@@ -1123,8 +1181,8 @@ impl Store {
         )?;
         let mut event_iter = stmt.query_map([id], |row| {
             let payload: Vec<u8> = row.get(1)?;
-            let content = String::from_utf8(payload)
-                .unwrap_or_else(|_| "[invalid utf8]".to_string());
+            let content =
+                String::from_utf8(payload).unwrap_or_else(|_| "[invalid utf8]".to_string());
             let is_sensitive = cdus_common::is_sensitive_content(&content);
             let local_only: bool = row.get(4)?;
             Ok(ClipboardEvent {
@@ -1286,7 +1344,7 @@ impl Store {
 
         self.set_state("node_id", &node_id)?;
         self.set_state("id_migrated_v3", "true")?; // Bump version to v3
-        
+
         // Save to local database
         self.set_state("private_key", &hex::encode(&priv_bytes))?;
 
@@ -1307,7 +1365,12 @@ impl Store {
         Ok((node_id, priv_bytes))
     }
 
-    pub fn add_paired_device(&self, node_id: &str, label: &str, static_key: Option<&[u8]>) -> Result<()> {
+    pub fn add_paired_device(
+        &self,
+        node_id: &str,
+        label: &str,
+        static_key: Option<&[u8]>,
+    ) -> Result<()> {
         let conn = self.state_conn.lock();
         conn.execute(
             "INSERT INTO paired_devices (node_id, label, static_key) VALUES (?1, ?2, ?3)
@@ -1441,39 +1504,35 @@ impl Store {
         Ok(())
     }
 
-fn parse_clipboard_payload(payload_str: &str) -> (String, bool, Option<String>) {
-    let trimmed = payload_str.trim();
-    if trimmed.is_empty() {
-        return ("".to_string(), false, None);
-    }
+    fn parse_clipboard_payload(payload_str: &str) -> (String, bool, Option<String>) {
+        let trimmed = payload_str.trim();
+        if trimmed.is_empty() {
+            return ("".to_string(), false, None);
+        }
 
-    // Try parsing payload as resolved URL metadata JSON.
-    let mut resolved_url: Option<(String, String)> = None; // (title, url)
-    if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        if json_val["type"] == "url" {
-            let u = json_val["url"].as_str().unwrap_or("").to_string();
-            let t = json_val["title"].as_str().unwrap_or("").to_string();
-            let display_title = if t.trim().is_empty() {
-                u.clone()
-            } else {
-                t
-            };
-            resolved_url = Some((display_title, u));
+        // Try parsing payload as resolved URL metadata JSON.
+        let mut resolved_url: Option<(String, String)> = None; // (title, url)
+        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if json_val["type"] == "url" {
+                let u = json_val["url"].as_str().unwrap_or("").to_string();
+                let t = json_val["title"].as_str().unwrap_or("").to_string();
+                let display_title = if t.trim().is_empty() { u.clone() } else { t };
+                resolved_url = Some((display_title, u));
+            }
+        }
+
+        if let Some((t, u)) = resolved_url {
+            (t, true, Some(u))
+        } else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            (trimmed.to_string(), true, Some(trimmed.to_string()))
+        } else {
+            let mut preview = trimmed.chars().take(50).collect::<String>();
+            if trimmed.chars().count() > 50 {
+                preview.push_str("...");
+            }
+            (preview, false, None)
         }
     }
-
-    if let Some((t, u)) = resolved_url {
-        (t, true, Some(u))
-    } else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        (trimmed.to_string(), true, Some(trimmed.to_string()))
-    } else {
-        let mut preview = trimmed.chars().take(50).collect::<String>();
-        if trimmed.chars().count() > 50 {
-            preview.push_str("...");
-        }
-        (preview, false, None)
-    }
-}
 
     pub fn index_clipboard_item(&self, hash: &str, payload: &[u8], source: &str) -> Result<()> {
         let text = String::from_utf8_lossy(payload).to_string();
@@ -1497,7 +1556,12 @@ fn parse_clipboard_payload(payload_str: &str) -> (String, bool, Option<String>) 
             format!("synced from {} • clipboard history", source)
         };
 
-        let mut content = format!("{} {} {}", title, source, if is_url { "url" } else { "text" });
+        let mut content = format!(
+            "{} {} {}",
+            title,
+            source,
+            if is_url { "url" } else { "text" }
+        );
         if let Some(ref u) = url_to_parse {
             if let Ok(url) = url::Url::parse(u) {
                 if let Some(host) = url.host_str() {
@@ -1524,7 +1588,6 @@ fn parse_clipboard_payload(payload_str: &str) -> (String, bool, Option<String>) 
         total_bytes: u64,
         status: &str,
     ) -> Result<()> {
-
         let size_str = {
             const KB: u64 = 1024;
             const MB: u64 = 1024 * 1024;
@@ -1544,7 +1607,10 @@ fn parse_clipboard_payload(payload_str: &str) -> (String, bool, Option<String>) 
         let subtitle = if direction == "outgoing" {
             format!("Size: {} • sent to {} ({})", size_str, peer_label, status)
         } else {
-            format!("Size: {} • received from {} ({})", size_str, peer_label, status)
+            format!(
+                "Size: {} • received from {} ({})",
+                size_str, peer_label, status
+            )
         };
 
         let now = std::time::SystemTime::now()
@@ -1586,7 +1652,7 @@ fn parse_clipboard_payload(payload_str: &str) -> (String, bool, Option<String>) 
         let search_conn = self.search_conn.lock();
 
         let mut stmt = search_conn.prepare(
-            "SELECT id, item_type, title, subtitle, content, timestamp FROM search_index"
+            "SELECT id, item_type, title, subtitle, content, timestamp FROM search_index",
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -1605,7 +1671,8 @@ fn parse_clipboard_payload(payload_str: &str) -> (String, bool, Option<String>) 
             .unwrap()
             .as_millis() as i64;
 
-        let local_device_name = self.get_state("device_name")
+        let local_device_name = self
+            .get_state("device_name")
             .unwrap_or(None)
             .unwrap_or_else(|| "".to_string())
             .to_lowercase();
@@ -1627,7 +1694,8 @@ fn parse_clipboard_payload(payload_str: &str) -> (String, bool, Option<String>) 
                     ));
                 }
             }
-            scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            scored_results
+                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             let results: Vec<cdus_common::SearchResult> = scored_results
                 .into_iter()
                 .take(50)
@@ -1641,7 +1709,7 @@ fn parse_clipboard_payload(payload_str: &str) -> (String, bool, Option<String>) 
         for row in rows {
             if let Ok((id, item_type, title, subtitle, content, timestamp)) = row {
                 let content_str = content.unwrap_or_default();
-                
+
                 let mut relevance_score = 0.0;
                 let title_lower = title.to_lowercase();
                 let subtitle_lower = subtitle.to_lowercase();
@@ -1692,12 +1760,11 @@ fn parse_clipboard_payload(payload_str: &str) -> (String, bool, Option<String>) 
                 let recency_score = 30.0 / (1.0 + (age_seconds / 7200.0));
 
                 let mut proximity_score = 0.0;
-                let is_local = subtitle_lower.contains("local") 
+                let is_local = subtitle_lower.contains("local")
                     || content_lower.contains("local")
-                    || (!local_device_name.is_empty() && (
-                        subtitle_lower.contains(&local_device_name) 
-                        || content_lower.contains(&local_device_name)
-                    ));
+                    || (!local_device_name.is_empty()
+                        && (subtitle_lower.contains(&local_device_name)
+                            || content_lower.contains(&local_device_name)));
 
                 if is_local {
                     proximity_score += 15.0;
@@ -1803,16 +1870,18 @@ mod tests {
         let store = Store::init(dir.path()).unwrap();
 
         let transfer_id = "test-transfer-id";
-        store.create_transfer(
-            transfer_id,
-            "outgoing",
-            "peer-1",
-            "path/to/file",
-            "file.txt",
-            100,
-            10,
-            "hash"
-        ).unwrap();
+        store
+            .create_transfer(
+                transfer_id,
+                "outgoing",
+                "peer-1",
+                "path/to/file",
+                "file.txt",
+                100,
+                10,
+                "hash",
+            )
+            .unwrap();
 
         let history = store.get_transfer_history(10).unwrap();
         assert_eq!(history.len(), 1);
@@ -1833,7 +1902,9 @@ mod tests {
         assert_eq!(logs.len(), 0);
 
         // 2. Append logs
-        store.append_audit_log("sync", "Outgoing sync content").unwrap();
+        store
+            .append_audit_log("sync", "Outgoing sync content")
+            .unwrap();
         store.append_audit_log("pairing", "Device paired").unwrap();
 
         // 3. Get logs (newest first)
@@ -1869,7 +1940,9 @@ mod tests {
         assert_eq!(results[0].title, "My Phone");
 
         // 2. Test indexing clipboard item
-        let hash = store.append_event(b"Hello World from Antigravity!", "Local").unwrap();
+        let hash = store
+            .append_event(b"Hello World from Antigravity!", "Local")
+            .unwrap();
         let results = store.search("Antigravity").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].item_type, "clipboard");
@@ -1877,16 +1950,18 @@ mod tests {
         assert_eq!(results[0].id, hash);
 
         // 3. Test indexing file transfer
-        store.create_transfer(
-            "transfer-123",
-            "incoming",
-            "node-1",
-            "path/to/somefile.txt",
-            "somefile.txt",
-            5000000,
-            256,
-            "somehash"
-        ).unwrap();
+        store
+            .create_transfer(
+                "transfer-123",
+                "incoming",
+                "node-1",
+                "path/to/somefile.txt",
+                "somefile.txt",
+                5000000,
+                256,
+                "somehash",
+            )
+            .unwrap();
         let results = store.search("somefile").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].item_type, "file");
@@ -1913,13 +1988,19 @@ mod tests {
             "url": "https://google.com/search?q=antigravity",
             "title": "Google Search - Antigravity",
             "favicon": "data:image/png;base64,1234"
-        }).to_string();
-        let url_hash = store.append_event(url_payload.as_bytes(), "Remote").unwrap();
+        })
+        .to_string();
+        let url_hash = store
+            .append_event(url_payload.as_bytes(), "Remote")
+            .unwrap();
         let results = store.search("Search").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].item_type, "clipboard");
         assert_eq!(results[0].title, "Google Search - Antigravity");
-        assert_eq!(results[0].subtitle, "https://google.com/search?q=antigravity • synced from Remote");
+        assert_eq!(
+            results[0].subtitle,
+            "https://google.com/search?q=antigravity • synced from Remote"
+        );
         assert_eq!(results[0].id, url_hash);
 
         // Test searching by part of URL string
@@ -1934,7 +2015,8 @@ mod tests {
         let store = Store::init(dir.path()).unwrap();
 
         // Default should be None / false
-        let opt_in = store.get_state("telemetry_opt_in")
+        let opt_in = store
+            .get_state("telemetry_opt_in")
             .unwrap()
             .map(|val| val == "true")
             .unwrap_or(false);
@@ -1942,7 +2024,8 @@ mod tests {
 
         // Enable telemetry
         store.set_state("telemetry_opt_in", "true").unwrap();
-        let opt_in = store.get_state("telemetry_opt_in")
+        let opt_in = store
+            .get_state("telemetry_opt_in")
             .unwrap()
             .map(|val| val == "true")
             .unwrap_or(false);
@@ -1950,11 +2033,11 @@ mod tests {
 
         // Disable telemetry
         store.set_state("telemetry_opt_in", "false").unwrap();
-        let opt_in = store.get_state("telemetry_opt_in")
+        let opt_in = store
+            .get_state("telemetry_opt_in")
             .unwrap()
             .map(|val| val == "true")
             .unwrap_or(false);
         assert!(!opt_in);
     }
 }
-

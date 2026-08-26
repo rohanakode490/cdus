@@ -25,10 +25,12 @@ use crate::store::Store;
 pub static EVENT_BUS: Mutex<Vec<Sender<IpcMessage>>> = Mutex::new(Vec::new());
 
 use once_cell::sync::Lazy;
-pub static ACTIVE_NOTIFICATIONS: Lazy<Mutex<std::collections::HashMap<String, cdus_common::NotificationPayload>>> =
-    Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
-pub static LAST_ALERT_TIMESTAMPS: Lazy<Mutex<std::collections::HashMap<String, std::time::Instant>>> =
-    Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
+pub static ACTIVE_NOTIFICATIONS: Lazy<
+    Mutex<std::collections::HashMap<String, cdus_common::NotificationPayload>>,
+> = Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
+pub static LAST_ALERT_TIMESTAMPS: Lazy<
+    Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
 
 pub fn broadcast_event(msg: IpcMessage) {
     let mut bus = EVENT_BUS.lock();
@@ -116,7 +118,10 @@ pub fn daemon_loop(
                         }
 
                         let display_len = std::cmp::min(20, content.len());
-                        let _ = store.append_audit_log("sync", &format!("Outgoing clipboard sync: {}...", &content[..display_len]));
+                        let _ = store.append_audit_log(
+                            "sync",
+                            &format!("Outgoing clipboard sync: {}...", &content[..display_len]),
+                        );
 
                         let is_local = store.is_content_local_only(&content).unwrap_or(false);
                         if !is_local {
@@ -166,7 +171,14 @@ pub fn daemon_loop(
                         }
 
                         let display_len = std::cmp::min(20, content.len());
-                        let _ = store.append_audit_log("sync", &format!("Incoming clipboard sync from {}: {}...", source, &content[..display_len]));
+                        let _ = store.append_audit_log(
+                            "sync",
+                            &format!(
+                                "Incoming clipboard sync from {}: {}...",
+                                source,
+                                &content[..display_len]
+                            ),
+                        );
 
                         #[cfg(not(target_os = "android"))]
                         {
@@ -175,12 +187,19 @@ pub fn daemon_loop(
                                 let mut image_to_set = None;
                                 let mut raw_content_hash = String::new();
 
-                                if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
-                                    if let Some(typ) = json_val.get("type").and_then(|v| v.as_str()) {
+                                if let Ok(json_val) =
+                                    serde_json::from_str::<serde_json::Value>(&content)
+                                {
+                                    if let Some(typ) = json_val.get("type").and_then(|v| v.as_str())
+                                    {
                                         match typ {
                                             "image" => {
-                                                if let Some(data_url) = json_val.get("data").and_then(|v| v.as_str()) {
-                                                    if let Some(b64) = data_url.strip_prefix("data:image/png;base64,") {
+                                                if let Some(data_url) =
+                                                    json_val.get("data").and_then(|v| v.as_str())
+                                                {
+                                                    if let Some(b64) = data_url
+                                                        .strip_prefix("data:image/png;base64,")
+                                                    {
                                                         use base64::Engine;
                                                         if let Ok(png_bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
                                                             if let Ok(img_data) = decode_png_to_image(&png_bytes) {
@@ -192,7 +211,9 @@ pub fn daemon_loop(
                                                 }
                                             }
                                             "url" => {
-                                                if let Some(url_val) = json_val.get("url").and_then(|v| v.as_str()) {
+                                                if let Some(url_val) =
+                                                    json_val.get("url").and_then(|v| v.as_str())
+                                                {
                                                     raw_content_hash = url_val.to_string();
                                                     text_to_set = Some(url_val.to_string());
                                                 }
@@ -253,15 +274,29 @@ pub fn daemon_loop(
                     // Update global peer map for connection fallback
                     {
                         let mut map = peer_map.lock();
-                        map.insert(node_id.clone(), (label.clone(), os.clone(), ips.clone(), port, std::time::Instant::now()));
+                        map.insert(
+                            node_id.clone(),
+                            (
+                                label.clone(),
+                                os.clone(),
+                                ips.clone(),
+                                port,
+                                std::time::Instant::now(),
+                            ),
+                        );
                     }
 
                     let already_paired = store.is_device_paired(&node_id).unwrap_or(false);
 
                     if already_paired {
                         // Persist last known network info for reconnection
-                        if let Err(e) = store.update_paired_device_network_info(&node_id, &ips, port) {
-                            error!("Failed to update network info for paired device {}: {}", node_id, e);
+                        if let Err(e) =
+                            store.update_paired_device_network_info(&node_id, &ips, port)
+                        {
+                            error!(
+                                "Failed to update network info for paired device {}: {}",
+                                node_id, e
+                            );
                         }
                     } else {
                         let mut list = discovered_devices.lock();
@@ -275,7 +310,7 @@ pub fn daemon_loop(
                             ));
                         }
                     }
-                    
+
                     if !already_paired {
                         broadcast_event(IpcMessage::DeviceDiscovered {
                             node_id: node_id.clone(),
@@ -286,16 +321,44 @@ pub fn daemon_loop(
                         });
                     }
                 }
-                IpcMessage::PairingResult { success, node_id, label, error } => {
+                IpcMessage::PairingResult {
+                    success,
+                    node_id,
+                    label,
+                    error,
+                } => {
                     if success {
-                        info!("Pairing successful with {} ({}). Removing from discovery list.", label, node_id);
+                        info!(
+                            "Pairing successful with {} ({}). Removing from discovery list.",
+                            label, node_id
+                        );
                         let mut list = discovered_devices.lock();
                         list.retain(|(id, _, _, _, _)| id != &node_id);
-                        let _ = store.append_audit_log("pairing", &format!("Successfully paired with device '{}' (#{})", label, &node_id[..std::cmp::min(8, node_id.len())]));
+                        let _ = store.append_audit_log(
+                            "pairing",
+                            &format!(
+                                "Successfully paired with device '{}' (#{})",
+                                label,
+                                &node_id[..std::cmp::min(8, node_id.len())]
+                            ),
+                        );
                     } else {
-                        let _ = store.append_audit_log("pairing", &format!("Pairing failed with device '{}' (#{}): {}", label, &node_id[..std::cmp::min(8, node_id.len())], error.as_deref().unwrap_or("unknown")));
+                        let _ = store.append_audit_log(
+                            "pairing",
+                            &format!(
+                                "Pairing failed with device '{}' (#{}): {}",
+                                label,
+                                &node_id[..std::cmp::min(8, node_id.len())],
+                                error.as_deref().unwrap_or("unknown")
+                            ),
+                        );
                     }
-                    broadcast_event(IpcMessage::PairingResult { success, node_id, label, error });
+                    broadcast_event(IpcMessage::PairingResult {
+                        success,
+                        node_id,
+                        label,
+                        error,
+                    });
                 }
                 IpcMessage::RelayStatus { connected, error } => {
                     broadcast_event(IpcMessage::RelayStatus { connected, error });
@@ -349,7 +412,7 @@ pub fn daemon_loop(
                     let store_clone = Arc::clone(&store);
                     let libp2p_manager_clone = Arc::clone(&libp2p_manager);
                     let transfer_manager = libp2p_manager_clone.get_transfer_manager();
-                    
+
                     thread::spawn(move || {
                         let file_name = match path_buf.file_name() {
                             Some(n) => n.to_string_lossy().to_string(),
@@ -365,7 +428,7 @@ pub fn daemon_loop(
                                 return;
                             }
                         };
-                        
+
                         info!("Hashing file: {:?}", path_buf);
                         let file_hash = match crate::file_transfer::hash_file(&path_buf) {
                             Ok(h) => h,
@@ -374,9 +437,9 @@ pub fn daemon_loop(
                                 return;
                             }
                         };
-                        
+
                         let transfer_id = uuid::Uuid::new_v4().to_string();
-                        
+
                         if let Err(e) = store_clone.create_transfer(
                             &transfer_id,
                             "outgoing",
@@ -392,8 +455,8 @@ pub fn daemon_loop(
                         }
 
                         if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
-                             match libp2p_manager_clone.open_file_stream(peer_id) {
-                               Ok(wrapped_stream) => {
+                            match libp2p_manager_clone.open_file_stream(peer_id) {
+                                Ok(wrapped_stream) => {
                                     let session_key = crate::file_transfer::SessionKey([0u8; 32]);
                                     if let Err(e) = crate::file_transfer::handle_outgoing_transfer(
                                         Box::new(wrapped_stream),
@@ -407,12 +470,14 @@ pub fn daemon_loop(
                                 }
                                 Err(e) => {
                                     error!("Failed to open stream to {}: {}", peer_id, e);
-                                    let _ = transfer_manager.progress_tx.send(cdus_common::ProgressEvent::Failed { 
-                                        transfer_id: transfer_id.clone(), 
-                                        reason: format!("Connection failed: {}", e) 
-                                    });
+                                    let _ = transfer_manager.progress_tx.send(
+                                        cdus_common::ProgressEvent::Failed {
+                                            transfer_id: transfer_id.clone(),
+                                            reason: format!("Connection failed: {}", e),
+                                        },
+                                    );
                                 }
-                             }
+                            }
                         } else {
                             error!("Invalid PeerId: {}", node_id);
                         }
@@ -423,7 +488,7 @@ pub fn daemon_loop(
                     let store_clone = Arc::clone(&store);
                     let libp2p_manager_clone = Arc::clone(&libp2p_manager);
                     let transfer_manager = libp2p_manager_clone.get_transfer_manager();
-                    
+
                     thread::spawn(move || {
                         let transfer_id = "ffffffff-ffff-ffff-ffff-ffffffffffff".to_string();
                         let _ = store_clone.delete_transfer(&transfer_id);
@@ -443,8 +508,8 @@ pub fn daemon_loop(
                         }
 
                         if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
-                             match libp2p_manager_clone.open_file_stream(peer_id) {
-                               Ok(wrapped_stream) => {
+                            match libp2p_manager_clone.open_file_stream(peer_id) {
+                                Ok(wrapped_stream) => {
                                     let session_key = crate::file_transfer::SessionKey([0u8; 32]);
                                     if let Err(e) = crate::file_transfer::handle_outgoing_transfer(
                                         Box::new(wrapped_stream),
@@ -458,31 +523,46 @@ pub fn daemon_loop(
                                 }
                                 Err(e) => {
                                     error!("Failed to open benchmark stream to {}: {}", peer_id, e);
-                                    let _ = transfer_manager.progress_tx.send(cdus_common::ProgressEvent::Failed { 
-                                        transfer_id: transfer_id.clone(), 
-                                        reason: format!("Connection failed: {}", e) 
-                                    });
+                                    let _ = transfer_manager.progress_tx.send(
+                                        cdus_common::ProgressEvent::Failed {
+                                            transfer_id: transfer_id.clone(),
+                                            reason: format!("Connection failed: {}", e),
+                                        },
+                                    );
                                 }
-                             }
+                            }
                         } else {
                             error!("Invalid PeerId for benchmark: {}", node_id);
                         }
                     });
                 }
                 IpcMessage::AcceptFileTransfer { transfer_id } => {
-                    libp2p_manager.get_transfer_manager().handle_decision(&transfer_id, true);
+                    libp2p_manager
+                        .get_transfer_manager()
+                        .handle_decision(&transfer_id, true);
                 }
                 IpcMessage::RejectFileTransfer { transfer_id } => {
-                    libp2p_manager.get_transfer_manager().handle_decision(&transfer_id, false);
+                    libp2p_manager
+                        .get_transfer_manager()
+                        .handle_decision(&transfer_id, false);
                 }
                 IpcMessage::CancelFileTransfer { transfer_id } => {
-                    libp2p_manager.get_transfer_manager().cancel_transfer(&transfer_id);
+                    libp2p_manager
+                        .get_transfer_manager()
+                        .cancel_transfer(&transfer_id);
                 }
                 IpcMessage::SimulateCrash { transfer_id } => {
-                    libp2p_manager.get_transfer_manager().simulate_crash(&transfer_id);
+                    libp2p_manager
+                        .get_transfer_manager()
+                        .simulate_crash(&transfer_id);
                 }
-                IpcMessage::SetCrashTrigger { transfer_id, offset } => {
-                    libp2p_manager.get_transfer_manager().set_crash_trigger(transfer_id, offset);
+                IpcMessage::SetCrashTrigger {
+                    transfer_id,
+                    offset,
+                } => {
+                    libp2p_manager
+                        .get_transfer_manager()
+                        .set_crash_trigger(transfer_id, offset);
                 }
                 IpcMessage::ResumeFileTransfer { transfer_id } => {
                     let store_clone = Arc::clone(&store);
@@ -493,14 +573,17 @@ pub fn daemon_loop(
                                 if let Ok(peer_id) = record.peer_node_id.parse::<libp2p::PeerId>() {
                                     match libp2p_manager_clone.open_file_stream(peer_id) {
                                         Ok(wrapped_stream) => {
-                                            let session_key = crate::file_transfer::SessionKey([0u8; 32]);
-                                            if let Err(e) = crate::file_transfer::handle_outgoing_transfer(
-                                                Box::new(wrapped_stream),
-                                                store_clone,
-                                                transfer_id,
-                                                session_key,
-                                                libp2p_manager_clone.get_transfer_manager(),
-                                            ) {
+                                            let session_key =
+                                                crate::file_transfer::SessionKey([0u8; 32]);
+                                            if let Err(e) =
+                                                crate::file_transfer::handle_outgoing_transfer(
+                                                    Box::new(wrapped_stream),
+                                                    store_clone,
+                                                    transfer_id,
+                                                    session_key,
+                                                    libp2p_manager_clone.get_transfer_manager(),
+                                                )
+                                            {
                                                 error!("Resumed transfer failed: {}", e);
                                             }
                                         }
@@ -515,8 +598,14 @@ pub fn daemon_loop(
                         error!("Failed to find transfer {} to resume", transfer_id);
                     }
                 }
-                IpcMessage::FileTransferProgress { transfer_id, progress } => {
-                    broadcast_event(IpcMessage::FileTransferProgress { transfer_id, progress });
+                IpcMessage::FileTransferProgress {
+                    transfer_id,
+                    progress,
+                } => {
+                    broadcast_event(IpcMessage::FileTransferProgress {
+                        transfer_id,
+                        progress,
+                    });
                 }
                 IpcMessage::TestLibp2pRequest { peer_id } => {
                     if let Some(tx) = &libp2p_request_tx {
@@ -529,7 +618,8 @@ pub fn daemon_loop(
                                     timestamp: std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .unwrap()
-                                        .as_millis() as u64,
+                                        .as_millis()
+                                        as u64,
                                 },
                             ));
                         } else {
@@ -555,7 +645,9 @@ pub fn daemon_loop(
                     let should_alert = {
                         if payload.is_ongoing {
                             false
-                        } else if payload.only_alert_once && ACTIVE_NOTIFICATIONS.lock().contains_key(&payload.key) {
+                        } else if payload.only_alert_once
+                            && ACTIVE_NOTIFICATIONS.lock().contains_key(&payload.key)
+                        {
                             false
                         } else {
                             let mut alert_times = LAST_ALERT_TIMESTAMPS.lock();
@@ -577,11 +669,16 @@ pub fn daemon_loop(
                     if should_alert {
                         info!("Daemon mirroring notification: {:?}", payload);
                     } else {
-                        debug!("Daemon mirroring notification (silent update): {:?}", payload);
+                        debug!(
+                            "Daemon mirroring notification (silent update): {:?}",
+                            payload
+                        );
                     }
 
-                    ACTIVE_NOTIFICATIONS.lock().insert(payload.key.clone(), payload.clone());
-                    
+                    ACTIVE_NOTIFICATIONS
+                        .lock()
+                        .insert(payload.key.clone(), payload.clone());
+
                     #[cfg(not(target_os = "android"))]
                     {
                         if should_alert {
@@ -604,7 +701,7 @@ pub fn daemon_loop(
                     info!("Daemon processing remote dismiss: {}", key);
                     ACTIVE_NOTIFICATIONS.lock().remove(&key);
                     LAST_ALERT_TIMESTAMPS.lock().remove(&key);
-                    
+
                     #[cfg(target_os = "android")]
                     {
                         let _ = tx.send(IpcMessage::DismissNotification { key: key.clone() });

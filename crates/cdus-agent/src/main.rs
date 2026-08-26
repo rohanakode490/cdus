@@ -2,21 +2,22 @@ use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
 use flume::Sender;
 use interprocess::local_socket::LocalSocketListener;
+use parking_lot::Mutex;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
-use std::sync::Arc; use parking_lot::Mutex;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
 
-use cdus_agent::{broadcast_event, daemon_loop, EVENT_BUS};
-use cdus_common::{IpcMessage, SyncMessage, TransportType};
 use cdus_agent::libp2p_manager::Libp2pManager;
 use cdus_agent::mdns::MdnsManager;
 use cdus_agent::pairing::{ActivePairingState, PairingManager, SyncManager};
 use cdus_agent::relay::RelayManager;
 use cdus_agent::store::Store;
 use cdus_agent::turn_manager::TurnManager;
+use cdus_agent::{broadcast_event, daemon_loop, EVENT_BUS};
+use cdus_common::{IpcMessage, SyncMessage, TransportType};
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -34,7 +35,12 @@ struct Cli {
     #[arg(short, long, default_value = "5200", env = "CDUS_PORT")]
     port: u16,
 
-    #[arg(short, long, default_value = "/tmp/cdus-agent.sock", env = "CDUS_AGENT_SOCKET")]
+    #[arg(
+        short,
+        long,
+        default_value = "/tmp/cdus-agent.sock",
+        env = "CDUS_AGENT_SOCKET"
+    )]
     socket: String,
 
     #[arg(long, env = "CDUS_DATA_DIR")]
@@ -138,16 +144,26 @@ fn main() {
     thread::spawn(move || {
         loop {
             // Check opt-in
-            let opt_in = telemetry_store.get_state("telemetry_opt_in")
+            let opt_in = telemetry_store
+                .get_state("telemetry_opt_in")
                 .unwrap_or(None)
                 .map(|val| val == "true")
                 .unwrap_or(false);
 
             if opt_in {
                 // Gather anonymous metrics
-                let paired_count = telemetry_store.get_paired_devices().map(|d| d.len()).unwrap_or(0);
-                let recent_events_count = telemetry_store.get_recent_events(100).map(|e| e.len()).unwrap_or(0);
-                let transfer_count = telemetry_store.get_transfer_history(100).map(|h| h.len()).unwrap_or(0);
+                let paired_count = telemetry_store
+                    .get_paired_devices()
+                    .map(|d| d.len())
+                    .unwrap_or(0);
+                let recent_events_count = telemetry_store
+                    .get_recent_events(100)
+                    .map(|e| e.len())
+                    .unwrap_or(0);
+                let transfer_count = telemetry_store
+                    .get_transfer_history(100)
+                    .map(|h| h.len())
+                    .unwrap_or(0);
 
                 let payload = serde_json::json!({
                     "device_type": std::env::consts::OS,
@@ -181,7 +197,10 @@ fn main() {
     });
 
     let (progress_tx, progress_rx) = flume::unbounded();
-    let transfer_manager = Arc::new(cdus_agent::file_transfer::FileTransferManager::new(Arc::clone(&store), progress_tx));
+    let transfer_manager = Arc::new(cdus_agent::file_transfer::FileTransferManager::new(
+        Arc::clone(&store),
+        progress_tx,
+    ));
 
     // Start progress forwarder to broadcast events to all IPC clients
     let _progress_tx_for_forwarder = tx.clone();
@@ -270,8 +289,11 @@ fn main() {
     let discovered_devices = Arc::new(Mutex::new(
         Vec::<(String, String, String, Vec<String>, u16)>::new(),
     ));
-    let peer_map = Arc::new(Mutex::new(std::collections::HashMap::<String, (String, String, Vec<String>, u16, std::time::Instant)>::new()));
-    
+    let peer_map = Arc::new(Mutex::new(std::collections::HashMap::<
+        String,
+        (String, String, Vec<String>, u16, std::time::Instant),
+    >::new()));
+
     // Populate peer_map from store for paired devices to enable reconnection after restart
     if let Ok(paired_devices) = store.get_paired_devices() {
         let mut map = peer_map.lock();
@@ -353,7 +375,11 @@ fn main() {
                             Ok(0) => break,
                             Ok(n) => {
                                 let raw_json = String::from_utf8_lossy(&buffer[..n]);
-                                let is_noisy = raw_json.contains("Ping") || raw_json.contains("GetPairingStatus") || raw_json.contains("GetPairedDevices") || (raw_json.contains("GetState") && raw_json.contains("sync_enabled"));
+                                let is_noisy = raw_json.contains("Ping")
+                                    || raw_json.contains("GetPairingStatus")
+                                    || raw_json.contains("GetPairedDevices")
+                                    || (raw_json.contains("GetState")
+                                        && raw_json.contains("sync_enabled"));
                                 if is_noisy {
                                     debug!("IPC: Received raw: {}", raw_json);
                                 } else {
@@ -396,13 +422,11 @@ fn main() {
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                                 Err(e) => {
-                                                    let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log(format!(
-                                                            "Error generating QR: {}",
-                                                            e
-                                                        )),
-                                                    )
-                                                    .unwrap();
+                                                    let resp_bytes =
+                                                        serde_json::to_vec(&IpcMessage::Log(
+                                                            format!("Error generating QR: {}", e),
+                                                        ))
+                                                        .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                             }
@@ -410,15 +434,21 @@ fn main() {
                                         IpcMessage::SubmitFeedback { text, attach_logs } => {
                                             let node_id = relay_ipc.node_id().to_string();
                                             let relay_url = relay_ipc.relay_url().to_string();
-                                            
+
                                             let logs_str = if attach_logs {
                                                 match store_clone.get_audit_logs(100) {
-                                                    Ok(logs) => {
-                                                        logs.into_iter()
-                                                            .map(|l| format!("[{}] {}: {}", l.timestamp, l.event_type, l.content))
-                                                            .collect::<Vec<_>>()
-                                                            .join("\n")
-                                                    }
+                                                    Ok(logs) => logs
+                                                        .into_iter()
+                                                        .map(|l| {
+                                                            format!(
+                                                                "[{}] {}: {}",
+                                                                l.timestamp,
+                                                                l.event_type,
+                                                                l.content
+                                                            )
+                                                        })
+                                                        .collect::<Vec<_>>()
+                                                        .join("\n"),
                                                     Err(_) => "".to_string(),
                                                 }
                                             } else {
@@ -432,33 +462,43 @@ fn main() {
                                                     "content": text,
                                                     "logs": logs_str,
                                                 });
-                                                
+
                                                 let url = format!("{}/v1/feedback", relay_url);
                                                 info!("Uploading user feedback to {}...", url);
-                                                
+
                                                 let agent = ureq::AgentBuilder::new()
                                                     .timeout(std::time::Duration::from_secs(5))
                                                     .build();
-                                                    
+
                                                 match agent.post(&url).send_json(payload) {
                                                     Ok(resp) if resp.status() == 200 => {
                                                         info!("Feedback uploaded successfully.");
                                                         let _ = store_cb.append_audit_log("system", "User feedback uploaded successfully to relay");
                                                     }
                                                     Ok(resp) => {
-                                                        error!("Failed to upload feedback: status {}", resp.status());
+                                                        error!(
+                                                            "Failed to upload feedback: status {}",
+                                                            resp.status()
+                                                        );
                                                         let _ = store_cb.append_audit_log("system", &format!("Failed to upload feedback: status {}", resp.status()));
                                                     }
                                                     Err(e) => {
                                                         error!("Error uploading feedback: {}", e);
-                                                        let _ = store_cb.append_audit_log("system", &format!("Error uploading feedback: {}", e));
+                                                        let _ = store_cb.append_audit_log(
+                                                            "system",
+                                                            &format!(
+                                                                "Error uploading feedback: {}",
+                                                                e
+                                                            ),
+                                                        );
                                                     }
                                                 }
                                             });
 
-                                            let resp_bytes = serde_json::to_vec(
-                                                &IpcMessage::Log("Feedback queued for submission".to_string())
-                                            ).unwrap();
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
+                                                "Feedback queued for submission".to_string(),
+                                            ))
+                                            .unwrap();
                                             let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::SetTelemetryOptIn { opt_in } => {
@@ -466,40 +506,55 @@ fn main() {
                                             match store_clone.set_state("telemetry_opt_in", val) {
                                                 Ok(_) => {
                                                     let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log(format!("Telemetry opt-in set to {}", opt_in))
-                                                    ).unwrap();
+                                                        &IpcMessage::Log(format!(
+                                                            "Telemetry opt-in set to {}",
+                                                            opt_in
+                                                        )),
+                                                    )
+                                                    .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                                 Err(e) => {
                                                     let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log(format!("Error setting telemetry opt-in: {}", e))
-                                                    ).unwrap();
+                                                        &IpcMessage::Log(format!(
+                                                            "Error setting telemetry opt-in: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                             }
                                         }
                                         IpcMessage::GetTelemetryOptIn => {
-                                            let opt_in = store_clone.get_state("telemetry_opt_in")
+                                            let opt_in = store_clone
+                                                .get_state("telemetry_opt_in")
                                                 .unwrap_or(None)
                                                 .map(|val| val == "true")
                                                 .unwrap_or(false);
                                             let resp_bytes = serde_json::to_vec(
-                                                &IpcMessage::TelemetryOptInResponse(opt_in)
-                                            ).unwrap();
+                                                &IpcMessage::TelemetryOptInResponse(opt_in),
+                                            )
+                                            .unwrap();
                                             let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::Search { query } => {
                                             match store_clone.search(&query) {
                                                 Ok(results) => {
                                                     let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::SearchResponse(results)
-                                                    ).unwrap();
+                                                        &IpcMessage::SearchResponse(results),
+                                                    )
+                                                    .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                                 Err(e) => {
                                                     let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log(format!("Error performing search: {}", e))
-                                                    ).unwrap();
+                                                        &IpcMessage::Log(format!(
+                                                            "Error performing search: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                             }
@@ -508,56 +563,92 @@ fn main() {
                                             match store_clone.get_audit_logs(limit) {
                                                 Ok(logs) => {
                                                     let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::AuditLogsResponse(logs)
-                                                    ).unwrap();
+                                                        &IpcMessage::AuditLogsResponse(logs),
+                                                    )
+                                                    .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                                 Err(e) => {
                                                     let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log(format!("Error fetching audit logs: {}", e))
-                                                    ).unwrap();
+                                                        &IpcMessage::Log(format!(
+                                                            "Error fetching audit logs: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                             }
                                         }
                                         IpcMessage::GetActiveNotifications => {
-                                            let list: Vec<cdus_common::NotificationPayload> = cdus_agent::ACTIVE_NOTIFICATIONS.lock().values().cloned().collect();
-                                            let resp_bytes = serde_json::to_vec(&IpcMessage::ActiveNotificationsResponse(list)).unwrap();
+                                            let list: Vec<cdus_common::NotificationPayload> =
+                                                cdus_agent::ACTIVE_NOTIFICATIONS
+                                                    .lock()
+                                                    .values()
+                                                    .cloned()
+                                                    .collect();
+                                            let resp_bytes = serde_json::to_vec(
+                                                &IpcMessage::ActiveNotificationsResponse(list),
+                                            )
+                                            .unwrap();
                                             let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::DismissNotification { key } => {
-                                            let _ = tx_clone.send(IpcMessage::DismissNotification { key: key.clone() });
-                                            let resp_bytes = serde_json::to_vec(&IpcMessage::NotificationDismissed { key }).unwrap();
+                                            let _ =
+                                                tx_clone.send(IpcMessage::DismissNotification {
+                                                    key: key.clone(),
+                                                });
+                                            let resp_bytes = serde_json::to_vec(
+                                                &IpcMessage::NotificationDismissed { key },
+                                            )
+                                            .unwrap();
                                             let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::ClearAuditLogs => {
                                             match store_clone.clear_audit_logs() {
                                                 Ok(_) => {
-                                                    let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log("Audit logs cleared".to_string())
-                                                    ).unwrap();
+                                                    let resp_bytes =
+                                                        serde_json::to_vec(&IpcMessage::Log(
+                                                            "Audit logs cleared".to_string(),
+                                                        ))
+                                                        .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                                 Err(e) => {
                                                     let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log(format!("Error clearing audit logs: {}", e))
-                                                    ).unwrap();
+                                                        &IpcMessage::Log(format!(
+                                                            "Error clearing audit logs: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                             }
                                         }
-                                        IpcMessage::AppendAuditLog { event_type, content } => {
-                                            match store_clone.append_audit_log(&event_type, &content) {
+                                        IpcMessage::AppendAuditLog {
+                                            event_type,
+                                            content,
+                                        } => {
+                                            match store_clone
+                                                .append_audit_log(&event_type, &content)
+                                            {
                                                 Ok(_) => {
-                                                    let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log("Audit log appended".to_string())
-                                                    ).unwrap();
+                                                    let resp_bytes =
+                                                        serde_json::to_vec(&IpcMessage::Log(
+                                                            "Audit log appended".to_string(),
+                                                        ))
+                                                        .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                                 Err(e) => {
                                                     let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log(format!("Error appending audit log: {}", e))
-                                                    ).unwrap();
+                                                        &IpcMessage::Log(format!(
+                                                            "Error appending audit log: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                             }
@@ -588,19 +679,24 @@ fn main() {
                                             }
                                         }
                                         IpcMessage::DeleteFileTransfer { transfer_id } => {
-                                            info!("IPC: DeleteFileTransfer requested for ID: {}", transfer_id);
+                                            info!(
+                                                "IPC: DeleteFileTransfer requested for ID: {}",
+                                                transfer_id
+                                            );
                                             match store_clone.delete_transfer(&transfer_id) {
                                                 Ok(_) => {
                                                     let resp_bytes =
                                                         serde_json::to_vec(&IpcMessage::Log(
-                                                            "Transfer deleted"
-                                                                .to_string(),
+                                                            "Transfer deleted".to_string(),
                                                         ))
                                                         .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                                 Err(e) => {
-                                                    error!("IPC: Failed to delete transfer {}: {}", transfer_id, e);
+                                                    error!(
+                                                        "IPC: Failed to delete transfer {}: {}",
+                                                        transfer_id, e
+                                                    );
                                                     let resp_bytes = serde_json::to_vec(
                                                         &IpcMessage::Log(format!(
                                                             "Error deleting transfer: {}",
@@ -613,12 +709,18 @@ fn main() {
                                             }
                                         }
                                         IpcMessage::DeleteFilePermanently { transfer_id } => {
-                                            info!("IPC: DeleteFilePermanently requested for ID: {}", transfer_id);
+                                            info!(
+                                                "IPC: DeleteFilePermanently requested for ID: {}",
+                                                transfer_id
+                                            );
                                             let mut file_deleted = false;
                                             let mut file_path_str = String::new();
-                                            if let Ok(Some(transfer)) = store_clone.get_transfer(&transfer_id) {
+                                            if let Ok(Some(transfer)) =
+                                                store_clone.get_transfer(&transfer_id)
+                                            {
                                                 file_path_str = transfer.file_path.clone();
-                                                let path = std::path::Path::new(&transfer.file_path);
+                                                let path =
+                                                    std::path::Path::new(&transfer.file_path);
                                                 if path.exists() {
                                                     if let Err(e) = std::fs::remove_file(path) {
                                                         error!("Failed to delete physical file {:?}: {:?}", path, e);
@@ -638,7 +740,7 @@ fn main() {
                                                     };
                                                     let resp_bytes =
                                                         serde_json::to_vec(&IpcMessage::Log(msg))
-                                                        .unwrap();
+                                                            .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                                 Err(e) => {
@@ -658,12 +760,20 @@ fn main() {
                                             match pm_clone.parse_qr_payload(&payload) {
                                                 Ok((node_id, secret, label, port, ips)) => {
                                                     if pm_clone.is_device_paired(&node_id) {
-                                                        let _ = stream.write_all(&serde_json::to_vec(&IpcMessage::Log("Already paired".to_string())).unwrap());
+                                                        let _ = stream.write_all(
+                                                            &serde_json::to_vec(&IpcMessage::Log(
+                                                                "Already paired".to_string(),
+                                                            ))
+                                                            .unwrap(),
+                                                        );
                                                         continue;
                                                     }
 
                                                     info!("IPC: Scanned QR for {} ({}). IPs: {:?}, Port: {}. Setting OOB secret and starting direct pairing.", label, node_id, ips, port);
-                                                    pm_clone.set_target_oob_secret(node_id.clone(), secret);
+                                                    pm_clone.set_target_oob_secret(
+                                                        node_id.clone(),
+                                                        secret,
+                                                    );
 
                                                     // Pre-populate peer_map with data from QR
                                                     {
@@ -687,35 +797,53 @@ fn main() {
                                                         let mut success = false;
                                                         for ip in ips_inner {
                                                             if let Ok(ip_addr) = ip.parse() {
-                                                                let addr = SocketAddr::new(ip_addr, port);
-                                                                if pm_init.initiate_pairing(addr, Some(node_id_inner.clone())) {
+                                                                let addr =
+                                                                    SocketAddr::new(ip_addr, port);
+                                                                if pm_init.initiate_pairing(
+                                                                    addr,
+                                                                    Some(node_id_inner.clone()),
+                                                                ) {
                                                                     success = true;
                                                                     break;
                                                                 }
                                                             }
                                                         }
-                                                        
+
                                                         if !success {
                                                             info!("Direct connection failed for QR device {}, falling back to relay", node_id_inner);
-                                                            pm_init.initiate_remote_pairing(node_id_inner);
+                                                            pm_init.initiate_remote_pairing(
+                                                                node_id_inner,
+                                                            );
                                                         }
                                                     });
 
-                                                    let resp_bytes = serde_json::to_vec(&IpcMessage::Log("QR pairing process started".to_string())).unwrap();
+                                                    let resp_bytes =
+                                                        serde_json::to_vec(&IpcMessage::Log(
+                                                            "QR pairing process started"
+                                                                .to_string(),
+                                                        ))
+                                                        .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                                 Err(e) => {
-                                                    let resp_bytes = serde_json::to_vec(&IpcMessage::Log(format!("Error processing QR: {}", e))).unwrap();
+                                                    let resp_bytes =
+                                                        serde_json::to_vec(&IpcMessage::Log(
+                                                            format!("Error processing QR: {}", e),
+                                                        ))
+                                                        .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                             }
                                         }
                                         IpcMessage::StartScan => {
                                             info!("IPC: Received StartScan request. Registering device and starting discovery.");
-                                            mdns_clone.register_device(&node_id_clone, &label_clone, port);
+                                            mdns_clone.register_device(
+                                                &node_id_clone,
+                                                &label_clone,
+                                                port,
+                                            );
                                             {
-                                                let mut list =
-                                                    discovered_devices_clone.lock();
+                                                let mut list = discovered_devices_clone.lock();
                                                 list.clear();
                                             }
                                             mdns_clone.start_discovery(tx_clone.clone());
@@ -767,12 +895,18 @@ fn main() {
                                         IpcMessage::PairWith { node_id } => {
                                             let device_info = {
                                                 let list = discovered_devices_clone.lock();
-                                                let found_in_list = list.iter().find(|(id, _, _, _, _)| id == &node_id)
-                                                    .map(|(_, _, _, ips, port)| (ips.clone(), *port));
+                                                let found_in_list = list
+                                                    .iter()
+                                                    .find(|(id, _, _, _, _)| id == &node_id)
+                                                    .map(|(_, _, _, ips, port)| {
+                                                        (ips.clone(), *port)
+                                                    });
 
                                                 found_in_list.or_else(|| {
                                                     let map = peer_map_clone.lock();
-                                                    map.get(&node_id).map(|(_, _, ips, port, _)| (ips.clone(), *port))
+                                                    map.get(&node_id).map(|(_, _, ips, port, _)| {
+                                                        (ips.clone(), *port)
+                                                    })
                                                 })
                                             };
 
@@ -783,22 +917,31 @@ fn main() {
                                                     let mut success = false;
                                                     for ip in ips {
                                                         if let Ok(ip_addr) = ip.parse() {
-                                                            let addr = SocketAddr::new(ip_addr, port);
+                                                            let addr =
+                                                                SocketAddr::new(ip_addr, port);
                                                             info!("Attempting manual pairing with {} at {}", node_id_clone, addr);
-                                                            if pm_init.initiate_pairing(addr, Some(node_id_clone.clone())) {
+                                                            if pm_init.initiate_pairing(
+                                                                addr,
+                                                                Some(node_id_clone.clone()),
+                                                            ) {
                                                                 info!("Manual pairing initiated with {} at {}", node_id_clone, addr);
                                                                 success = true;
                                                                 break;
                                                             }
                                                         }
                                                     }
-                                                    
+
                                                     if !success {
                                                         info!("mDNS failed for {}, falling back to relay", node_id_clone);
-                                                        if pm_init.is_device_paired(&node_id_clone) {
-                                                            pm_init.reconnect_known_device(node_id_clone);
+                                                        if pm_init.is_device_paired(&node_id_clone)
+                                                        {
+                                                            pm_init.reconnect_known_device(
+                                                                node_id_clone,
+                                                            );
                                                         } else {
-                                                            pm_init.initiate_remote_pairing(node_id_clone);
+                                                            pm_init.initiate_remote_pairing(
+                                                                node_id_clone,
+                                                            );
                                                         }
                                                     }
                                                 });
@@ -815,9 +958,11 @@ fn main() {
                                                 thread::spawn(move || {
                                                     info!("Device {} not found in local discovery, trying relay", node_id_clone);
                                                     if pm_init.is_device_paired(&node_id_clone) {
-                                                        pm_init.reconnect_known_device(node_id_clone);
+                                                        pm_init
+                                                            .reconnect_known_device(node_id_clone);
                                                     } else {
-                                                        pm_init.initiate_remote_pairing(node_id_clone);
+                                                        pm_init
+                                                            .initiate_remote_pairing(node_id_clone);
                                                     }
                                                 });
                                                 let resp_bytes =
@@ -880,8 +1025,9 @@ fn main() {
                                             let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::AcceptFileTransfer { transfer_id } => {
-                                            let _ = tx_clone
-                                                .send(IpcMessage::AcceptFileTransfer { transfer_id });
+                                            let _ = tx_clone.send(IpcMessage::AcceptFileTransfer {
+                                                transfer_id,
+                                            });
                                             let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
                                                 "File transfer accepted".to_string(),
                                             ))
@@ -889,8 +1035,9 @@ fn main() {
                                             let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::RejectFileTransfer { transfer_id } => {
-                                            let _ = tx_clone
-                                                .send(IpcMessage::RejectFileTransfer { transfer_id });
+                                            let _ = tx_clone.send(IpcMessage::RejectFileTransfer {
+                                                transfer_id,
+                                            });
                                             let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
                                                 "File transfer rejected".to_string(),
                                             ))
@@ -898,8 +1045,9 @@ fn main() {
                                             let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::CancelFileTransfer { transfer_id } => {
-                                            let _ = tx_clone
-                                                .send(IpcMessage::CancelFileTransfer { transfer_id });
+                                            let _ = tx_clone.send(IpcMessage::CancelFileTransfer {
+                                                transfer_id,
+                                            });
                                             let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
                                                 "File transfer cancellation requested".to_string(),
                                             ))
@@ -974,7 +1122,8 @@ fn main() {
                                             }
                                         }
                                         IpcMessage::StartBenchmark { node_id } => {
-                                            let _ = tx_clone.send(IpcMessage::StartBenchmark { node_id });
+                                            let _ = tx_clone
+                                                .send(IpcMessage::StartBenchmark { node_id });
                                             let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
                                                 "Benchmark initiated".to_string(),
                                             ))
@@ -1004,15 +1153,23 @@ fn main() {
                                             }
                                         }
                                         IpcMessage::DisconnectDevice { node_id } => {
-                                            if !sync_manager_ipc.send_to_peer(&node_id, SyncMessage::Disconnect) {
+                                            if !sync_manager_ipc
+                                                .send_to_peer(&node_id, SyncMessage::Disconnect)
+                                            {
                                                 sync_manager_ipc.remove_peer(&node_id);
                                             }
-                                            transfer_manager_clone.cancel_all_transfers_for_peer(&node_id);
+                                            transfer_manager_clone
+                                                .cancel_all_transfers_for_peer(&node_id);
                                             if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
                                                 libp2p_manager_clone.disconnect_peer(peer_id);
                                             }
-                                            broadcast_event(IpcMessage::PeerDisconnected { node_id: node_id.clone() });
-                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log("Disconnected".to_string())).unwrap();
+                                            broadcast_event(IpcMessage::PeerDisconnected {
+                                                node_id: node_id.clone(),
+                                            });
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
+                                                "Disconnected".to_string(),
+                                            ))
+                                            .unwrap();
                                             let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::RevokeDevice { uuid } => {
@@ -1064,20 +1221,19 @@ fn main() {
                                         IpcMessage::DeleteHistoryItem { id } => {
                                             match store_clone.delete_event(id) {
                                                 Ok(_) => {
-                                                    let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log("Clipboard item deleted".to_string()),
-                                                    )
-                                                    .unwrap();
+                                                    let resp_bytes =
+                                                        serde_json::to_vec(&IpcMessage::Log(
+                                                            "Clipboard item deleted".to_string(),
+                                                        ))
+                                                        .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                                 Err(e) => {
-                                                    let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log(format!(
-                                                            "Error deleting item: {}",
-                                                            e
-                                                        )),
-                                                    )
-                                                    .unwrap();
+                                                    let resp_bytes =
+                                                        serde_json::to_vec(&IpcMessage::Log(
+                                                            format!("Error deleting item: {}", e),
+                                                        ))
+                                                        .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                             }
@@ -1086,23 +1242,39 @@ fn main() {
                                             match store_clone.set_local_only(id, local_only) {
                                                 Ok(_) => {
                                                     if !local_only {
-                                                        if let Ok(Some(event)) = store_clone.get_event_by_id(id) {
-                                                            let timestamp = std::time::SystemTime::now()
-                                                                .duration_since(std::time::UNIX_EPOCH)
-                                                                .unwrap_or_default()
-                                                                .as_millis() as u64;
-                                                            let _ = store_clone.set_state("last_sync_timestamp", &timestamp.to_string());
-                                                            let _ = store_clone.set_state("last_clipboard_content", &event.content);
-                                                            sync_manager_ipc.broadcast(SyncMessage::ClipboardUpdate {
-                                                                content: event.content,
-                                                                timestamp,
-                                                            });
+                                                        if let Ok(Some(event)) =
+                                                            store_clone.get_event_by_id(id)
+                                                        {
+                                                            let timestamp =
+                                                                std::time::SystemTime::now()
+                                                                    .duration_since(
+                                                                        std::time::UNIX_EPOCH,
+                                                                    )
+                                                                    .unwrap_or_default()
+                                                                    .as_millis()
+                                                                    as u64;
+                                                            let _ = store_clone.set_state(
+                                                                "last_sync_timestamp",
+                                                                &timestamp.to_string(),
+                                                            );
+                                                            let _ = store_clone.set_state(
+                                                                "last_clipboard_content",
+                                                                &event.content,
+                                                            );
+                                                            sync_manager_ipc.broadcast(
+                                                                SyncMessage::ClipboardUpdate {
+                                                                    content: event.content,
+                                                                    timestamp,
+                                                                },
+                                                            );
                                                         }
                                                     }
-                                                    let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log("Clipboard local_only toggled".to_string()),
-                                                    )
-                                                    .unwrap();
+                                                    let resp_bytes =
+                                                        serde_json::to_vec(&IpcMessage::Log(
+                                                            "Clipboard local_only toggled"
+                                                                .to_string(),
+                                                        ))
+                                                        .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                                 Err(e) => {
@@ -1120,10 +1292,11 @@ fn main() {
                                         IpcMessage::ClearHistory => {
                                             match store_clone.clear_events() {
                                                 Ok(_) => {
-                                                    let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log("Clipboard history cleared".to_string()),
-                                                    )
-                                                    .unwrap();
+                                                    let resp_bytes =
+                                                        serde_json::to_vec(&IpcMessage::Log(
+                                                            "Clipboard history cleared".to_string(),
+                                                        ))
+                                                        .unwrap();
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                                 Err(e) => {
@@ -1161,7 +1334,11 @@ fn main() {
                                             match store_clone.set_state(&key, &value) {
                                                 Ok(_) => {
                                                     if key == "device_name" {
-                                                        mdns_clone.register_device(&node_id_clone, &value, port);
+                                                        mdns_clone.register_device(
+                                                            &node_id_clone,
+                                                            &value,
+                                                            port,
+                                                        );
                                                     }
                                                     let resp_bytes =
                                                         serde_json::to_vec(&IpcMessage::Log(
@@ -1220,8 +1397,9 @@ fn main() {
                                             let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::ResumeFileTransfer { transfer_id } => {
-                                            let _ = tx_clone
-                                                .send(IpcMessage::ResumeFileTransfer { transfer_id });
+                                            let _ = tx_clone.send(IpcMessage::ResumeFileTransfer {
+                                                transfer_id,
+                                            });
                                             let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
                                                 "File transfer resume requested".to_string(),
                                             ))
@@ -1240,7 +1418,8 @@ fn main() {
                                                             file_path: t.file_path,
                                                             file_name: t.file_name,
                                                             total_bytes: t.total_bytes as u64,
-                                                            bytes_confirmed: t.bytes_confirmed as u64,
+                                                            bytes_confirmed: t.bytes_confirmed
+                                                                as u64,
                                                             status: t.status,
                                                             error_message: t.error_message,
                                                             created_at: t.created_at as u64,
@@ -1335,7 +1514,8 @@ fn clipboard_watcher(
                             let payload = serde_json::json!({
                                 "type": "image",
                                 "data": data_url
-                            }).to_string();
+                            })
+                            .to_string();
 
                             last_content_hash = img_hash;
                             let _ = tx.send(IpcMessage::ClipboardChanged {
@@ -1348,7 +1528,9 @@ fn clipboard_watcher(
                 // 2. Try reading text if no image
                 else if let Ok(current_content) = clipboard.get_text() {
                     if !current_content.trim().is_empty() {
-                        let text_hash = blake3::hash(current_content.as_bytes()).to_hex().to_string();
+                        let text_hash = blake3::hash(current_content.as_bytes())
+                            .to_hex()
+                            .to_string();
                         if text_hash != last_content_hash {
                             let mut lw = last_written.lock();
                             if let Some(ref val) = *lw {
@@ -1363,22 +1545,25 @@ fn clipboard_watcher(
                             last_content_hash = text_hash;
 
                             // Check if it is a URL
-                            let is_url = (current_content.trim().starts_with("http://") || current_content.trim().starts_with("https://")) 
+                            let is_url = (current_content.trim().starts_with("http://")
+                                || current_content.trim().starts_with("https://"))
                                 && url::Url::parse(current_content.trim()).is_ok();
-                            
+
                             if is_url {
                                 info!("URL clipboard change detected: {}", current_content);
                                 let tx_clone = tx.clone();
                                 let url_str = current_content.trim().to_string();
                                 thread::spawn(move || {
-                                    let resolved = cdus_agent::utils::resolve_url_metadata(&url_str);
+                                    let resolved =
+                                        cdus_agent::utils::resolve_url_metadata(&url_str);
                                     let content = if let Some((title, favicon)) = resolved {
                                         serde_json::json!({
                                             "type": "url",
                                             "url": url_str,
                                             "title": title,
                                             "favicon": favicon
-                                        }).to_string()
+                                        })
+                                        .to_string()
                                     } else {
                                         url_str
                                     };
@@ -1420,19 +1605,18 @@ fn clipboard_watcher(
 fn encode_image_to_png(image: &arboard::ImageData) -> Result<Vec<u8>, anyhow::Error> {
     use image::{ImageBuffer, Rgba};
     use std::io::Cursor;
-    
+
     let width = image.width as u32;
     let height = image.height as u32;
     let raw_pixels = image.bytes.to_vec();
-    
+
     let img_buffer = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(width, height, raw_pixels)
         .ok_or_else(|| anyhow::anyhow!("Failed to create ImageBuffer from raw pixels"))?;
-        
+
     let mut png_bytes = Vec::new();
     img_buffer.write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)?;
     Ok(png_bytes)
 }
-
 
 #[cfg(target_os = "macos")]
 fn install_service() {
@@ -1483,8 +1667,8 @@ fn uninstall_service() {
     info!("Uninstalling CDUS Agent macOS launchd agent...");
 
     let home = std::env::var("HOME").expect("Failed to get HOME environment variable");
-    let plist_path = std::path::PathBuf::from(home)
-        .join("Library/LaunchAgents/com.cdus.agent.plist");
+    let plist_path =
+        std::path::PathBuf::from(home).join("Library/LaunchAgents/com.cdus.agent.plist");
 
     if plist_path.exists() {
         run_command("launchctl", &["unload", "-w", plist_path.to_str().unwrap()]);
@@ -1500,7 +1684,9 @@ fn install_service() {
     info!("Installing CDUS Agent as Windows startup program...");
 
     let exe_path = std::env::current_exe().expect("Failed to get current executable path");
-    let exe_str = exe_path.to_str().expect("Failed to convert exe path to string");
+    let exe_str = exe_path
+        .to_str()
+        .expect("Failed to convert exe path to string");
 
     // Add to HKCU Registry Run key using reg.exe command line
     run_command(
@@ -1624,7 +1810,6 @@ fn install_service() {
 fn uninstall_service() {
     info!("Service uninstallation not supported on this platform.");
 }
-
 
 fn run_command(cmd: &str, args: &[&str]) {
     let status = std::process::Command::new(cmd)
