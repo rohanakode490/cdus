@@ -424,7 +424,6 @@ impl SyncMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmp_serde;
 
     #[test]
     fn test_ipc_message_roundtrip_json() {
