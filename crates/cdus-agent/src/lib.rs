@@ -182,61 +182,70 @@ pub fn daemon_loop(
 
                         #[cfg(not(target_os = "android"))]
                         {
-                            if let Some(ref mut cb) = clipboard {
-                                let mut text_to_set = None;
-                                let mut image_to_set = None;
-                                let mut raw_content_hash = String::new();
+                            let mut text_to_set = None;
+                            let mut image_to_set = None;
+                            let mut raw_content_hash = String::new();
 
-                                if let Ok(json_val) =
-                                    serde_json::from_str::<serde_json::Value>(&content)
-                                {
-                                    if let Some(typ) = json_val.get("type").and_then(|v| v.as_str())
-                                    {
-                                        match typ {
-                                            "image" => {
-                                                if let Some(data_url) =
-                                                    json_val.get("data").and_then(|v| v.as_str())
+                            if let Ok(json_val) =
+                                serde_json::from_str::<serde_json::Value>(&content)
+                            {
+                                if let Some(typ) = json_val.get("type").and_then(|v| v.as_str()) {
+                                    match typ {
+                                        "image" => {
+                                            if let Some(data_url) =
+                                                json_val.get("data").and_then(|v| v.as_str())
+                                            {
+                                                if let Some(b64) =
+                                                    data_url.strip_prefix("data:image/png;base64,")
                                                 {
-                                                    if let Some(b64) = data_url
-                                                        .strip_prefix("data:image/png;base64,")
+                                                    use base64::Engine;
+                                                    if let Ok(png_bytes) =
+                                                        base64::engine::general_purpose::STANDARD
+                                                            .decode(b64)
                                                     {
-                                                        use base64::Engine;
-                                                        if let Ok(png_bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
-                                                            if let Ok(img_data) = decode_png_to_image(&png_bytes) {
-                                                                raw_content_hash = format!("CDUS_IMAGE_HASH:{}", blake3::hash(&img_data.bytes).to_hex().to_string());
-                                                                image_to_set = Some(img_data);
-                                                            }
+                                                        if let Ok(img_data) =
+                                                            decode_png_to_image(&png_bytes)
+                                                        {
+                                                            raw_content_hash = format!(
+                                                                "CDUS_IMAGE_HASH:{}",
+                                                                blake3::hash(&img_data.bytes)
+                                                                    .to_hex()
+                                                                    .to_string()
+                                                            );
+                                                            image_to_set = Some(img_data);
                                                         }
                                                     }
                                                 }
                                             }
-                                            "url" => {
-                                                if let Some(url_val) =
-                                                    json_val.get("url").and_then(|v| v.as_str())
-                                                {
-                                                    raw_content_hash = url_val.to_string();
-                                                    text_to_set = Some(url_val.to_string());
-                                                }
-                                            }
-                                            _ => {
-                                                raw_content_hash = content.clone();
-                                                text_to_set = Some(content.clone());
+                                        }
+                                        "url" => {
+                                            if let Some(url_val) =
+                                                json_val.get("url").and_then(|v| v.as_str())
+                                            {
+                                                raw_content_hash = url_val.to_string();
+                                                text_to_set = Some(url_val.to_string());
                                             }
                                         }
-                                    } else {
-                                        raw_content_hash = content.clone();
-                                        text_to_set = Some(content.clone());
+                                        _ => {
+                                            raw_content_hash = content.clone();
+                                            text_to_set = Some(content.clone());
+                                        }
                                     }
                                 } else {
                                     raw_content_hash = content.clone();
                                     text_to_set = Some(content.clone());
                                 }
+                            } else {
+                                raw_content_hash = content.clone();
+                                text_to_set = Some(content.clone());
+                            }
 
-                                {
-                                    let mut lw = last_written.lock();
-                                    *lw = Some(raw_content_hash);
-                                }
+                            {
+                                let mut lw = last_written.lock();
+                                *lw = Some(raw_content_hash);
+                            }
 
+                            if let Some(ref mut cb) = clipboard {
                                 let write_res = if let Some(img_data) = image_to_set {
                                     cb.set_image(img_data).map_err(|e| e.to_string())
                                 } else if let Some(txt) = text_to_set {

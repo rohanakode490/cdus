@@ -1137,6 +1137,17 @@ mod tests {
         rx: Receiver<FileMessage>,
     }
 
+    fn wait_and_handle_decision(manager: &FileTransferManager, transfer_id: &str, accepted: bool) {
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_secs(5) {
+            if manager.pending_decisions.lock().contains_key(transfer_id) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        manager.handle_decision(transfer_id, accepted);
+    }
+
     impl FileStream for MockFileStream {
         fn write_message(&mut self, msg: &FileMessage) -> Result<()> {
             match msg {
@@ -1221,8 +1232,7 @@ mod tests {
                 "peer-1".to_string(),
             )
         });
-        thread::sleep(Duration::from_millis(200));
-        manager2.handle_decision(&transfer_id, true);
+        wait_and_handle_decision(&manager2, &transfer_id, true);
         sender_thread.join().unwrap()?;
         receiver_thread.join().unwrap()?;
         let dest_path = dir2.path().join("test.bin");
@@ -1297,8 +1307,7 @@ mod tests {
                 "peer-1".to_string(),
             )
         });
-        thread::sleep(Duration::from_millis(200));
-        manager2.handle_decision(&transfer_id, true);
+        wait_and_handle_decision(&manager2, &transfer_id, true);
         sender_thread.join().unwrap()?;
         receiver_thread.join().unwrap()?;
         let dest_path = dir2.path().join("large_test.bin");
@@ -1380,8 +1389,7 @@ mod tests {
                 "peer-1".to_string(),
             )
         });
-        thread::sleep(Duration::from_millis(200));
-        manager2.handle_decision(&transfer_id, true);
+        wait_and_handle_decision(&manager2, &transfer_id, true);
         sender_thread.join().unwrap()?;
         receiver_thread.join().unwrap()?;
         assert!(dest_path.exists());
@@ -1491,8 +1499,7 @@ mod tests {
             )
         });
 
-        thread::sleep(Duration::from_millis(200));
-        manager2.handle_decision(&transfer_id, true);
+        wait_and_handle_decision(&manager2, &transfer_id, true);
 
         // Sender should error with SIMULATED_CRASH
         let res = sender_thread.join().unwrap();
@@ -1539,8 +1546,7 @@ mod tests {
             )
         });
 
-        thread::sleep(Duration::from_millis(200));
-        manager2.handle_decision(&transfer_id, true);
+        wait_and_handle_decision(&manager2, &transfer_id, true);
 
         sender_thread2.join().unwrap()?;
         receiver_thread2.join().unwrap()?;
@@ -1643,8 +1649,7 @@ mod tests {
                 "peer-1".to_string(),
             )
         });
-        thread::sleep(Duration::from_millis(200));
-        manager2.handle_decision(&transfer_id, true);
+        wait_and_handle_decision(&manager2, &transfer_id, true);
         let s_res = sender_thread.join().unwrap();
         assert!(s_res.is_err());
         let r_res = receiver_thread.join().unwrap();
@@ -1738,8 +1743,7 @@ mod tests {
                 "peer-1".to_string(),
             )
         });
-        thread::sleep(Duration::from_millis(200));
-        manager2.handle_decision(&transfer_id, true);
+        wait_and_handle_decision(&manager2, &transfer_id, true);
         let _ = sender_thread.join().unwrap();
         let r_res = receiver_thread.join().unwrap();
         assert!(r_res.is_err());
@@ -1809,8 +1813,7 @@ mod tests {
                 "peer-1".to_string(),
             )
         });
-        thread::sleep(Duration::from_millis(200));
-        manager2.handle_decision(&transfer_id, false);
+        wait_and_handle_decision(&manager2, &transfer_id, false);
         let s_res = sender_thread.join().unwrap();
         assert!(s_res.is_ok());
         let r_res = receiver_thread.join().unwrap();
@@ -2048,8 +2051,7 @@ mod tests {
                     )
                 });
 
-                thread::sleep(Duration::from_millis(200));
-                manager_c.handle_decision(&transfer_id, true);
+                wait_and_handle_decision(&manager_c, &transfer_id, true);
 
                 sender.join().unwrap().unwrap();
                 receiver.join().unwrap().unwrap();
