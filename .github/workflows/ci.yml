@@ -246,9 +246,15 @@ jobs:
             bun run tauri build --no-sign -c '{"bundle":{"createUpdaterArtifacts":false}}'
           fi
 
+      - name: Discover & Collect Installers
+        run: |
+          mkdir -p dist-release
+          find target src-tauri/target -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.dmg" -o -name "*.deb" -o -name "*.AppImage" \) -exec cp -v {} dist-release/ \; || true
+          ls -la dist-release/
+
       - name: Upload Installer Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_pattern }}
+          path: dist-release/*
           if-no-files-found: warn

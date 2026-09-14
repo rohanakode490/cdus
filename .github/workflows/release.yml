@@ -104,6 +104,12 @@ jobs:
             bun run tauri build --no-sign -c '{"bundle":{"createUpdaterArtifacts":false}}'
           fi
 
+      - name: Discover & Collect Installers
+        run: |
+          mkdir -p dist-release
+          find target src-tauri/target -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.dmg" -o -name "*.deb" -o -name "*.AppImage" \) -exec cp -v {} dist-release/ \; || true
+          ls -la dist-release/
+
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
@@ -112,7 +118,7 @@ jobs:
           draft: ${{ inputs.draft || false }}
           prerelease: ${{ inputs.prerelease || false }}
           generate_release_notes: true
-          files: ${{ matrix.artifact_pattern }}
+          files: dist-release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
