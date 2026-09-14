@@ -46,7 +46,7 @@ def listen_events(socket_path, handler_fn, timeout=10):
                         event = json.loads(line)
                         if handler_fn(event):
                             return
-                    except:
+                    except (json.JSONDecodeError, UnicodeDecodeError):
                         continue
             except socket.timeout:
                 continue

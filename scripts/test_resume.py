@@ -3,7 +3,6 @@ import json
 import time
 import subprocess
 import os
-import signal
 
 def send_ipc(socket_path, message):
     try:
@@ -17,13 +16,6 @@ def send_ipc(socket_path, message):
     except Exception as e:
         print(f"IPC Error ({socket_path}): {e}")
         return None
-
-def get_node_id(socket_path):
-    # We can get node_id by connecting and listening for logs or checking state
-    # But simpler: just start the agent and it prints it. 
-    # For this test, we'll assume we can get it from 'GetDiscovered' or similar.
-    # Actually, let's just use 'GetPairedDevices' after pairing.
-    pass
 
 def cleanup():
     subprocess.run(["killall", "-9", "cdus-agent"], stderr=subprocess.DEVNULL)
@@ -86,7 +78,8 @@ def test_resume():
                     if not line: continue
                     try:
                         event = json.loads(line)
-                    except: continue
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
                     
                     if "FileProgress" in event:
                         prog = event["FileProgress"]
@@ -138,7 +131,8 @@ def test_resume():
                 if not line: continue
                 try:
                     event = json.loads(line)
-                except: continue
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
                 
                 if "FileProgress" in event:
                     prog = event["FileProgress"]

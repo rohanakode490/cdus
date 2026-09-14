@@ -3,8 +3,6 @@ import json
 import time
 import subprocess
 import os
-import signal
-import threading
 
 def send_ipc(socket_path, message):
     try:
@@ -15,6 +13,7 @@ def send_ipc(socket_path, message):
             if not data: return None
             return json.loads(data.decode())
     except Exception as e:
+        print(f"IPC Error ({socket_path}): {e}")
         return None
 
 def start_agent(id, port, socket_path):

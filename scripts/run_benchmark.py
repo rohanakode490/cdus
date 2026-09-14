@@ -17,7 +17,6 @@ def run_benchmark(sock1, sock2, node_id2):
     send_ipc(sock1, {"StartBenchmark": {"node_id": node_id2}})
     
     start_time = time.time()
-    last_bytes = 0
     
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         s.connect(sock2)
@@ -41,7 +40,6 @@ def run_benchmark(sock1, sock2, node_id2):
                         if elapsed > 0:
                             speed = bytes_conf / elapsed / (1024*1024)
                             print(f"\rProgress: {bytes_conf/(1024*1024):.1f}MB / {total/(1024*1024):.1f}MB ({speed:.1f} MB/s)", end="")
-                        last_bytes = bytes_conf
                     elif "Complete" in prog:
                         elapsed = time.time() - start_time
                         print(f"\nBenchmark Complete! Total time: {elapsed:.2f}s, Avg speed: {1024/elapsed:.2f} MB/s")
