@@ -1444,7 +1444,7 @@ impl Store {
     pub fn get_audit_logs(&self, limit: u32) -> Result<Vec<cdus_common::AuditLogRecord>> {
         let conn = self.state_conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, event_type, content, timestamp FROM audit_logs ORDER BY timestamp DESC LIMIT ?"
+            "SELECT id, event_type, content, timestamp FROM audit_logs ORDER BY timestamp DESC, id DESC LIMIT ?"
         )?;
         let rows = stmt.query_map([limit], |row| {
             Ok(cdus_common::AuditLogRecord {
