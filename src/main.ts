@@ -33,7 +33,7 @@ const deviceLabels = new Map<string, string>();
 let scanInterval: any = null;
 let pairingInterval: any = null;
 let currentPairingDevice: any = null;
-const transfers = new Map<string, any>();
+const transfers = new Map<string, TransferItem>();
 let isDeveloperMode = false;
 let currentIncomingTransferId = "";
 let html5QrCode: Html5Qrcode | null = null;
@@ -47,6 +47,43 @@ interface NotificationPayload {
   title: string;
   text: string;
   timestamp: number;
+}
+
+interface AuditLogRecord {
+  id: number;
+  event_type: string;
+  content: string;
+  timestamp: number;
+}
+
+type TransferStatus =
+  | "pending"
+  | "hashing"
+  | "preparing"
+  | "transferring"
+  | "downloading"
+  | "complete"
+  | "failed"
+  | "cancelled"
+  | "error"
+  | "rejected"
+  | "offered"
+  | "active";
+
+interface TransferItem {
+  transferId: string;
+  fileName: string;
+  totalBytes?: number;
+  direction: "incoming" | "outgoing";
+  nodeId: string;
+  status: TransferStatus;
+  progress: number;
+  bytesConfirmed?: number;
+  progressPercent?: number;
+  speed?: string;
+  error?: string;
+  filePath?: string;
+  [key: string]: any;
 }
 
 let activeNotifications: NotificationPayload[] = [];
@@ -144,18 +181,18 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // --- Device Connection States ---
-interface MockDeviceState {
+interface DeviceConnectionState {
   status: "online" | "offline" | "connecting";
   transport: string | null;
   timerId?: any;
 }
-const mockDeviceStates = new Map<string, MockDeviceState>();
+const deviceConnectionStates = new Map<string, DeviceConnectionState>();
 
 function triggerDeviceConnection(id: string) {
-  let s = mockDeviceStates.get(id);
+  let s = deviceConnectionStates.get(id);
   if (!s) {
     s = { status: "offline", transport: null };
-    mockDeviceStates.set(id, s);
+    deviceConnectionStates.set(id, s);
   }
   
   if (s.timerId) {
@@ -167,7 +204,7 @@ function triggerDeviceConnection(id: string) {
 
   // Reset to offline if connection does not succeed within 15 seconds
   s.timerId = setTimeout(() => {
-    const current = mockDeviceStates.get(id);
+    const current = deviceConnectionStates.get(id);
     if (current && current.status === "connecting") {
       current.status = "offline";
       renderPairedDevices();
@@ -190,7 +227,7 @@ async function renderAuditLogs() {
   emptyState?.classList.add("hidden");
 
   try {
-    const logs: any[] = await invoke("get_audit_logs", { limit: 100 });
+    const logs: AuditLogRecord[] = await invoke("get_audit_logs", { limit: 100 });
     loadingEl?.classList.add("hidden");
     
     if (logs.length === 0) {
@@ -808,23 +845,23 @@ async function renderPairedDevices() {
       row.className = "device-row";
       
       // Get or initialize state
-      let mockState = mockDeviceStates.get(id);
+      let connState = deviceConnectionStates.get(id);
       if (transport !== null) {
-        if (!mockState || mockState.status !== "online" || mockState.transport !== transport) {
-          if (mockState?.timerId) {
-            clearInterval(mockState.timerId);
-            clearTimeout(mockState.timerId);
+        if (!connState || connState.status !== "online" || connState.transport !== transport) {
+          if (connState?.timerId) {
+            clearInterval(connState.timerId);
+            clearTimeout(connState.timerId);
           }
-          mockState = { status: "online", transport };
-          mockDeviceStates.set(id, mockState);
+          connState = { status: "online", transport };
+          deviceConnectionStates.set(id, connState);
         }
       } else {
-        if (!mockState || mockState.status === "online") {
-          if (mockState?.timerId) {
-            clearTimeout(mockState.timerId);
+        if (!connState || connState.status === "online") {
+          if (connState?.timerId) {
+            clearTimeout(connState.timerId);
           }
-          mockState = { status: "offline", transport: null };
-          mockDeviceStates.set(id, mockState);
+          connState = { status: "offline", transport: null };
+          deviceConnectionStates.set(id, connState);
         }
       }
 
@@ -833,17 +870,17 @@ async function renderPairedDevices() {
       let pathHtml = "";
       let actionBtnHtml = "";
 
-      if (mockState.status === "online") {
+      if (connState.status === "online") {
         statusClass = "online";
         statusText = "Online";
-        const tType = mockState.transport || "Lan";
+        const tType = connState.transport || "Lan";
         const badgeClass = tType.toLowerCase();
         pathHtml = `<span class="connection-path ${badgeClass}">${tType}</span>`;
         actionBtnHtml = `
           <button class="primary-btn send-file-btn" data-id="${id}">Send File</button>
           <button class="secondary-btn disconnect-btn" data-id="${id}" style="margin-left: 8px;">Disconnect</button>
         `;
-      } else if (mockState.status === "connecting") {
+      } else if (connState.status === "connecting") {
         statusClass = "connecting";
         statusText = "Connecting...";
         actionBtnHtml = `
@@ -868,7 +905,7 @@ async function renderPairedDevices() {
         </div>
         <div class="device-actions">
           ${actionBtnHtml}
-          ${(mockState.status === "online" && isDeveloperMode) ? `<button class="tertiary-btn benchmark-btn" data-id="${id}" style="margin-right: 8px;">Benchmark</button>` : ""}
+          ${(connState.status === "online" && isDeveloperMode) ? `<button class="tertiary-btn benchmark-btn" data-id="${id}" style="margin-right: 8px;">Benchmark</button>` : ""}
           <button class="secondary-btn unpair-btn" data-id="${id}">Unpair</button>
         </div>
       `;
@@ -892,7 +929,7 @@ async function renderPairedDevices() {
           await invoke("pair_with", { nodeId: id });
         } catch (err) {
           console.error("Failed to initiate connection:", err);
-          const s = mockDeviceStates.get(id);
+          const s = deviceConnectionStates.get(id);
           if (s) {
             if (s.timerId) clearTimeout(s.timerId);
             s.status = "offline";
@@ -903,7 +940,7 @@ async function renderPairedDevices() {
       });
 
       row.querySelector(".disconnect-btn")?.addEventListener("click", async () => {
-        const s = mockDeviceStates.get(id);
+        const s = deviceConnectionStates.get(id);
         if (s) {
           if (s.timerId) clearTimeout(s.timerId);
           s.status = "offline";
@@ -1533,7 +1570,9 @@ window.addEventListener("DOMContentLoaded", () => {
           }
           startPairingPoll();
         }
-      } catch (err) { }
+      } catch (err) {
+        console.debug("Failed to poll pairing status:", err);
+      }
     }
   }, 1000);
 

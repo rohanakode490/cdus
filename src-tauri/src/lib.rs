@@ -45,6 +45,19 @@ fn send_ipc_message(msg: IpcMessage) -> Result<IpcMessage, String> {
     serde_json::from_slice(&buffer).map_err(|e| format!("Failed to parse response: {}", e))
 }
 
+fn send_ipc_log_response(msg: IpcMessage) -> Result<String, String> {
+    match send_ipc_message(msg)? {
+        IpcMessage::Log(msg) => {
+            if msg.starts_with("Error") {
+                Err(msg)
+            } else {
+                Ok(msg)
+            }
+        }
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
 #[tauri::command]
 fn get_active_notifications() -> Result<Vec<cdus_common::NotificationPayload>, String> {
     let msg = IpcMessage::GetActiveNotifications;
@@ -63,12 +76,6 @@ fn dismiss_notification(key: String) -> Result<String, String> {
         IpcMessage::Log(msg) => Ok(msg),
         response => Ok(format!("{:?}", response)),
     }
-}
-
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
 fn check_agent_online() -> bool {
@@ -144,20 +151,12 @@ fn get_clipboard_history(
 
 #[tauri::command]
 fn delete_clipboard_item(id: i64) -> Result<String, String> {
-    let msg = IpcMessage::DeleteHistoryItem { id };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+    send_ipc_log_response(IpcMessage::DeleteHistoryItem { id })
 }
 
 #[tauri::command]
 fn clear_clipboard_history() -> Result<String, String> {
-    let msg = IpcMessage::ClearHistory;
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+    send_ipc_log_response(IpcMessage::ClearHistory)
 }
 
 #[tauri::command]
@@ -171,20 +170,12 @@ fn search(query: String) -> Result<Vec<cdus_common::SearchResult>, String> {
 
 #[tauri::command]
 fn submit_feedback(text: String, attach_logs: bool) -> Result<String, String> {
-    let msg = IpcMessage::SubmitFeedback { text, attach_logs };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+    send_ipc_log_response(IpcMessage::SubmitFeedback { text, attach_logs })
 }
 
 #[tauri::command]
 fn set_telemetry_opt_in(opt_in: bool) -> Result<String, String> {
-    let msg = IpcMessage::SetTelemetryOptIn { opt_in };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+    send_ipc_log_response(IpcMessage::SetTelemetryOptIn { opt_in })
 }
 
 #[tauri::command]
@@ -197,7 +188,7 @@ fn get_telemetry_opt_in() -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn get_audit_logs(limit: u32) -> Result<Vec<cdus_common::AuditLogRecord>, String> {
+fn get_audit_logs(limit: u32) -> Result<Vec<cdus_common::AuditLogRecord>, String> {
     let msg = IpcMessage::GetAuditLogs { limit };
     match send_ipc_message(msg)? {
         IpcMessage::AuditLogsResponse(logs) => Ok(logs),
@@ -206,33 +197,21 @@ async fn get_audit_logs(limit: u32) -> Result<Vec<cdus_common::AuditLogRecord>, 
 }
 
 #[tauri::command]
-async fn clear_audit_logs() -> Result<String, String> {
-    let msg = IpcMessage::ClearAuditLogs;
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn clear_audit_logs() -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::ClearAuditLogs)
 }
 
 #[tauri::command]
-async fn append_audit_log(event_type: String, content: String) -> Result<String, String> {
-    let msg = IpcMessage::AppendAuditLog {
+fn append_audit_log(event_type: String, content: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::AppendAuditLog {
         event_type,
         content,
-    };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+    })
 }
 
 #[tauri::command]
 fn toggle_local_only(id: i64, local_only: bool) -> Result<String, String> {
-    let msg = IpcMessage::ToggleLocalOnly { id, local_only };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+    send_ipc_log_response(IpcMessage::ToggleLocalOnly { id, local_only })
 }
 
 #[tauri::command]
@@ -247,34 +226,21 @@ fn get_state(key: String) -> Result<Option<String>, String> {
 
 #[tauri::command]
 fn set_state(key: String, value: String) -> Result<String, String> {
-    let msg = IpcMessage::SetState { key, value };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+    send_ipc_log_response(IpcMessage::SetState { key, value })
 }
 
 #[tauri::command]
-async fn start_scan() -> Result<String, String> {
-    let msg = IpcMessage::StartScan;
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn start_scan() -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::StartScan)
 }
 
 #[tauri::command]
-async fn stop_scan() -> Result<String, String> {
-    let msg = IpcMessage::StopScan;
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn stop_scan() -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::StopScan)
 }
 
 #[tauri::command]
-async fn get_discovered_devices() -> Result<Vec<(String, String, String, Vec<String>, u16)>, String>
-{
+fn get_discovered_devices() -> Result<Vec<(String, String, String, Vec<String>, u16)>, String> {
     let msg = IpcMessage::GetDiscovered;
     match send_ipc_message(msg)? {
         IpcMessage::DiscoveredResponse(list) => Ok(list),
@@ -283,34 +249,22 @@ async fn get_discovered_devices() -> Result<Vec<(String, String, String, Vec<Str
 }
 
 #[tauri::command]
-async fn pair_with(node_id: String) -> Result<String, String> {
-    let msg = IpcMessage::PairWith { node_id };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn pair_with(node_id: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::PairWith { node_id })
 }
 
 #[tauri::command]
-async fn manual_pair(ip: String, port: u16) -> Result<String, String> {
-    let msg = IpcMessage::PairWithIp { ip, port };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn manual_pair(ip: String, port: u16) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::PairWithIp { ip, port })
 }
 
 #[tauri::command]
-async fn confirm_pairing(accepted: bool) -> Result<String, String> {
-    let msg = IpcMessage::ConfirmPairing(accepted);
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn confirm_pairing(accepted: bool) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::ConfirmPairing(accepted))
 }
 
 #[tauri::command]
-async fn get_pairing_status() -> Result<(Option<String>, bool, bool, String, bool), String> {
+fn get_pairing_status() -> Result<(Option<String>, bool, bool, String, bool), String> {
     let msg = IpcMessage::GetPairingStatus;
     match send_ipc_message(msg)? {
         IpcMessage::PairingStatusResponse {
@@ -325,7 +279,7 @@ async fn get_pairing_status() -> Result<(Option<String>, bool, bool, String, boo
 }
 
 #[tauri::command]
-async fn get_paired_devices() -> Result<Vec<(String, String, Option<TransportType>)>, String> {
+fn get_paired_devices() -> Result<Vec<(String, String, Option<TransportType>)>, String> {
     let msg = IpcMessage::GetPairedDevices;
     match send_ipc_message(msg)? {
         IpcMessage::PairedDevicesResponse(devices) => Ok(devices),
@@ -334,119 +288,59 @@ async fn get_paired_devices() -> Result<Vec<(String, String, Option<TransportTyp
 }
 
 #[tauri::command]
-async fn unpair_device(node_id: String) -> Result<String, String> {
-    let msg = IpcMessage::UnpairDevice { node_id };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn unpair_device(node_id: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::UnpairDevice { node_id })
 }
 
 #[tauri::command]
-async fn disconnect_device(node_id: String) -> Result<String, String> {
-    let msg = IpcMessage::DisconnectDevice { node_id };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn disconnect_device(node_id: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::DisconnectDevice { node_id })
 }
 
 #[tauri::command]
-async fn send_file(node_id: String, path: String) -> Result<String, String> {
-    let msg = IpcMessage::SendFile { node_id, path };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn send_file(node_id: String, path: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::SendFile { node_id, path })
 }
 
 #[tauri::command]
-async fn accept_file_transfer(transfer_id: String) -> Result<String, String> {
-    let msg = IpcMessage::AcceptFileTransfer { transfer_id };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn accept_file_transfer(transfer_id: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::AcceptFileTransfer { transfer_id })
 }
 
 #[tauri::command]
-async fn reject_file_transfer(transfer_id: String) -> Result<String, String> {
-    let msg = IpcMessage::RejectFileTransfer { transfer_id };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn reject_file_transfer(transfer_id: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::RejectFileTransfer { transfer_id })
 }
 
 #[tauri::command]
-async fn cancel_file_transfer(transfer_id: String) -> Result<String, String> {
-    let msg = IpcMessage::CancelFileTransfer { transfer_id };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn cancel_file_transfer(transfer_id: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::CancelFileTransfer { transfer_id })
 }
 
 #[tauri::command]
-async fn get_file_transfer_history(
+fn get_file_transfer_history(
     limit: u32,
 ) -> Result<Vec<cdus_common::FileTransferRecord>, String> {
     let msg = IpcMessage::GetFileTransferHistory { limit };
     match send_ipc_message(msg)? {
-        IpcMessage::FileTransferHistoryResponse(history) => Ok(common_history_to_tauri(history)),
+        IpcMessage::FileTransferHistoryResponse(history) => Ok(history),
         _ => Err("Unexpected response from agent".to_string()),
     }
 }
 
 #[tauri::command]
-async fn clear_finished_transfers() -> Result<String, String> {
-    let msg = IpcMessage::ClearFinishedTransfers;
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => {
-            if msg.starts_with("Error") {
-                Err(msg)
-            } else {
-                Ok(msg)
-            }
-        }
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn clear_finished_transfers() -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::ClearFinishedTransfers)
 }
 
 #[tauri::command]
-async fn delete_file_transfer(transfer_id: String) -> Result<String, String> {
-    let msg = IpcMessage::DeleteFileTransfer { transfer_id };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => {
-            if msg.starts_with("Error") {
-                Err(msg)
-            } else {
-                Ok(msg)
-            }
-        }
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn delete_file_transfer(transfer_id: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::DeleteFileTransfer { transfer_id })
 }
 
 #[tauri::command]
-async fn delete_file_permanently(transfer_id: String) -> Result<String, String> {
-    let msg = IpcMessage::DeleteFilePermanently { transfer_id };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => {
-            if msg.starts_with("Error") {
-                Err(msg)
-            } else {
-                Ok(msg)
-            }
-        }
-        _ => Err("Unexpected response from agent".to_string()),
-    }
-}
-
-fn common_history_to_tauri(
-    history: Vec<cdus_common::FileTransferRecord>,
-) -> Vec<cdus_common::FileTransferRecord> {
-    history // They are already the same type now!
+fn delete_file_permanently(transfer_id: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::DeleteFilePermanently { transfer_id })
 }
 
 #[tauri::command]
@@ -485,16 +379,12 @@ fn read_text_preview(file_path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn start_benchmark(node_id: String) -> Result<String, String> {
-    let msg = IpcMessage::StartBenchmark { node_id };
-    match send_ipc_message(msg)? {
-        IpcMessage::Log(msg) => Ok(msg),
-        _ => Err("Unexpected response from agent".to_string()),
-    }
+fn start_benchmark(node_id: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::StartBenchmark { node_id })
 }
 
 #[tauri::command]
-async fn get_qr_pairing_payload() -> Result<String, String> {
+fn get_qr_pairing_payload() -> Result<String, String> {
     let msg = IpcMessage::GetQrPairingPayload;
     match send_ipc_message(msg)? {
         IpcMessage::QrPairingPayloadResponse { payload } => Ok(payload),
@@ -503,7 +393,7 @@ async fn get_qr_pairing_payload() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn pair_with_qr(payload: String) -> Result<String, String> {
+fn pair_with_qr(payload: String) -> Result<String, String> {
     let msg = IpcMessage::PairWithQr { payload };
     match send_ipc_message(msg)? {
         IpcMessage::Log(msg) => {
@@ -518,7 +408,7 @@ async fn pair_with_qr(payload: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn open_file_location(app: tauri::AppHandle, transfer_id: String) -> Result<(), String> {
+fn open_file_location(app: tauri::AppHandle, transfer_id: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
 
     // 1. Get the file transfer history from the agent daemon (up to 1000 items)
@@ -945,7 +835,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet,
             get_active_notifications,
             dismiss_notification,
             search,
