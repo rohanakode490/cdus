@@ -50,24 +50,36 @@ object FileUtils {
         return name ?: uri.lastPathSegment
     }
 
+    private fun getDownloadsCollectionUri(): Uri {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        } else {
+            @Suppress("DEPRECATION")
+            Uri.parse("content://media/external/file")
+        }
+    }
+
+    private fun buildDownloadSelection(fileName: String, subfolderOnly: Boolean): Pair<String, Array<String>> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && subfolderOnly) {
+            val relPath = Environment.DIRECTORY_DOWNLOADS + File.separator + "cdus" + File.separator
+            Pair("${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} = ?", arrayOf(fileName, relPath))
+        } else {
+            Pair("${MediaStore.MediaColumns.DISPLAY_NAME} = ?", arrayOf(fileName))
+        }
+    }
+
     fun saveFileToDownloads(context: Context, sourceFile: File): Uri? {
         val resolver = context.contentResolver
         val contentValues = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, sourceFile.name)
             put(MediaStore.MediaColumns.MIME_TYPE, "*/*")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + java.io.File.separator + "cdus")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + File.separator + "cdus")
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
         }
 
-        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaStore.Downloads.EXTERNAL_CONTENT_URI
-        } else {
-            @Suppress("DEPRECATION")
-            Uri.parse("content://media/external/file") 
-        }
-
+        val collection = getDownloadsCollectionUri()
         val uri = resolver.insert(collection, contentValues)
         uri?.let {
             try {
@@ -92,24 +104,9 @@ object FileUtils {
     fun deleteFileFromDownloads(context: Context, fileName: String): Boolean {
         return try {
             val resolver = context.contentResolver
-            val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                MediaStore.Downloads.EXTERNAL_CONTENT_URI
-            } else {
-                @Suppress("DEPRECATION")
-                Uri.parse("content://media/external/file")
-            }
-            
+            val collection = getDownloadsCollectionUri()
+            val (selection, selectionArgs) = buildDownloadSelection(fileName, subfolderOnly = true)
             val projection = arrayOf(MediaStore.MediaColumns._ID)
-            val selection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} = ?"
-            } else {
-                "${MediaStore.MediaColumns.DISPLAY_NAME} = ?"
-            }
-            val selectionArgs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                arrayOf(fileName, Environment.DIRECTORY_DOWNLOADS + java.io.File.separator + "cdus" + java.io.File.separator)
-            } else {
-                arrayOf(fileName)
-            }
             
             var deleted = false
             resolver.query(collection, projection, selection, selectionArgs, null)?.use { cursor ->
@@ -180,24 +177,9 @@ object FileUtils {
     private fun findFileUriInDownloadsHelper(context: Context, fileName: String, searchSubfolderOnly: Boolean): Uri? {
         return try {
             val resolver = context.contentResolver
-            val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                MediaStore.Downloads.EXTERNAL_CONTENT_URI
-            } else {
-                @Suppress("DEPRECATION")
-                Uri.parse("content://media/external/file")
-            }
-            
+            val collection = getDownloadsCollectionUri()
+            val (selection, selectionArgs) = buildDownloadSelection(fileName, searchSubfolderOnly)
             val projection = arrayOf(MediaStore.MediaColumns._ID)
-            val selection: String
-            val selectionArgs: Array<String>
-            
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && searchSubfolderOnly) {
-                selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} = ?"
-                selectionArgs = arrayOf(fileName, Environment.DIRECTORY_DOWNLOADS + java.io.File.separator + "cdus" + java.io.File.separator)
-            } else {
-                selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ?"
-                selectionArgs = arrayOf(fileName)
-            }
             
             var fileUri: Uri? = null
             resolver.query(collection, projection, selection, selectionArgs, null)?.use { cursor ->

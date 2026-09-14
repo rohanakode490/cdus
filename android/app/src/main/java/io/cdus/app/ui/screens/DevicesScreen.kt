@@ -69,10 +69,14 @@ import androidx.compose.foundation.Image
 import androidx.compose.ui.draw.clip
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
-data class AndroidMockDeviceState(
-    val status: String, // "online", "offline", "reconnecting", "connecting"
+enum class ConnectionStatus {
+    ONLINE, OFFLINE, RECONNECTING, CONNECTING
+}
+
+data class DeviceConnectionState(
+    val status: ConnectionStatus,
     val transport: String?, // "LAN", "Relay", null
-    val countdown: Int
+    val countdown: Int = 0
 )
 
 @Composable
@@ -90,24 +94,24 @@ fun DevicesScreen() {
     val context = LocalContext.current
     
     // --- Reconnection & Relay Dialog States ---
-    val mockStates = remember { mutableStateMapOf<String, AndroidMockDeviceState>() }
+    val connectionStates = remember { mutableStateMapOf<String, DeviceConnectionState>() }
     var showRelayErrorDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     fun triggerActualConnect(deviceId: String) {
-        mockStates[deviceId] = AndroidMockDeviceState("connecting", null, 0)
+        connectionStates[deviceId] = DeviceConnectionState(ConnectionStatus.CONNECTING, null, 0)
         scope.launch {
             try {
                 uniffi.cdus_ffi.initiatePairing(deviceId)
             } catch (e: Exception) {
                 Logger.e("Manual reconnect error: ${e.message}")
-                mockStates[deviceId] = AndroidMockDeviceState("offline", null, 0)
+                connectionStates[deviceId] = DeviceConnectionState(ConnectionStatus.OFFLINE, null, 0)
                 return@launch
             }
             delay(15000)
-            val state = mockStates[deviceId]
-            if (state != null && state.status == "connecting") {
-                mockStates[deviceId] = AndroidMockDeviceState("offline", null, 0)
+            val state = connectionStates[deviceId]
+            if (state != null && state.status == ConnectionStatus.CONNECTING) {
+                connectionStates[deviceId] = DeviceConnectionState(ConnectionStatus.OFFLINE, null, 0)
             }
         }
     }
@@ -173,16 +177,16 @@ fun DevicesScreen() {
                 io.cdus.app.data.DeviceManager.updateLabels(devices)
                 errorMsg = null
                 
-                // Sync mock states for devices with real connectivity status
+                // Sync connection states for devices with real connectivity status
                 devices.forEach { device ->
-                    val state = mockStates[device.nodeId]
+                    val state = connectionStates[device.nodeId]
                     if (device.isOnline) {
-                        if (state == null || state.status != "online") {
-                            mockStates[device.nodeId] = AndroidMockDeviceState("online", "LAN", 0)
+                        if (state == null || state.status != ConnectionStatus.ONLINE) {
+                            connectionStates[device.nodeId] = DeviceConnectionState(ConnectionStatus.ONLINE, "LAN", 0)
                         }
                     } else {
-                        if (state == null || state.status == "online") {
-                            mockStates[device.nodeId] = AndroidMockDeviceState("offline", null, 0)
+                        if (state == null || state.status == ConnectionStatus.ONLINE) {
+                            connectionStates[device.nodeId] = DeviceConnectionState(ConnectionStatus.OFFLINE, null, 0)
                         }
                     }
                 }
@@ -350,7 +354,7 @@ fun DevicesScreen() {
             for (device in pairedDevices) {
                 PairedDeviceItem(
                     device = device,
-                    mockState = mockStates[device.nodeId],
+                    connectionState = connectionStates[device.nodeId],
                     isDeveloperMode = isDeveloperMode,
                     onUnpairClick = { unpairDevice(device.nodeId) },
                     onSendFileClick = {
@@ -361,7 +365,7 @@ fun DevicesScreen() {
                         triggerActualConnect(device.nodeId)
                     },
                     onDisconnectClick = {
-                        mockStates[device.nodeId] = AndroidMockDeviceState("offline", null, 0)
+                        connectionStates[device.nodeId] = DeviceConnectionState(ConnectionStatus.OFFLINE, null, 0)
                         try {
                             uniffi.cdus_ffi.disconnectDevice(device.nodeId)
                         } catch (e: Exception) {
@@ -478,7 +482,7 @@ fun ConnectionPathBadge(transport: String) {
 @Composable
 fun PairedDeviceItem(
     device: PairedDevice, 
-    mockState: AndroidMockDeviceState?,
+    connectionState: DeviceConnectionState?,
     isDeveloperMode: Boolean = false,
     onUnpairClick: () -> Unit, 
     onSendFileClick: () -> Unit,
@@ -486,19 +490,19 @@ fun PairedDeviceItem(
     onDisconnectClick: () -> Unit,
     onBenchmarkClick: () -> Unit = {}
 ) {
-    val status = mockState?.status ?: if (device.isOnline) "online" else "offline"
-    val transport = mockState?.transport ?: if (device.isOnline) "LAN" else null
-    val countdown = mockState?.countdown ?: 0
+    val status = connectionState?.status ?: if (device.isOnline) ConnectionStatus.ONLINE else ConnectionStatus.OFFLINE
+    val transport = connectionState?.transport ?: if (device.isOnline) "LAN" else null
+    val countdown = connectionState?.countdown ?: 0
 
-    val isOnline = status == "online"
-    val isConnecting = status == "connecting"
-    val isReconnecting = status == "reconnecting"
+    val isOnline = status == ConnectionStatus.ONLINE
+    val isConnecting = status == ConnectionStatus.CONNECTING
+    val isReconnecting = status == ConnectionStatus.RECONNECTING
 
     val statusText = when (status) {
-        "online" -> "Online"
-        "connecting" -> "Connecting..."
-        "reconnecting" -> "Reconnecting in ${countdown}s..."
-        else -> "Offline"
+        ConnectionStatus.ONLINE -> "Online"
+        ConnectionStatus.CONNECTING -> "Connecting..."
+        ConnectionStatus.RECONNECTING -> "Reconnecting in ${countdown}s..."
+        ConnectionStatus.OFFLINE -> "Offline"
     }
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -513,10 +517,10 @@ fun PairedDeviceItem(
     )
 
     val dotColor = when (status) {
-        "online" -> androidx.compose.ui.graphics.Color.Green
-        "connecting" -> androidx.compose.ui.graphics.Color(0xFF2196F3)
-        "reconnecting" -> androidx.compose.ui.graphics.Color(0xFFFF9800)
-        else -> androidx.compose.ui.graphics.Color.Gray
+        ConnectionStatus.ONLINE -> androidx.compose.ui.graphics.Color.Green
+        ConnectionStatus.CONNECTING -> androidx.compose.ui.graphics.Color(0xFF2196F3)
+        ConnectionStatus.RECONNECTING -> androidx.compose.ui.graphics.Color(0xFFFF9800)
+        ConnectionStatus.OFFLINE -> androidx.compose.ui.graphics.Color.Gray
     }
 
     val dotModifier = Modifier

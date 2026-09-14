@@ -1,60 +1,48 @@
 package io.cdus.app
 
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import io.cdus.app.ui.components.DevicePickerDialog
+import io.cdus.app.ui.components.SearchBottomSheet
 import io.cdus.app.ui.navigation.Screen
 import io.cdus.app.ui.navigation.navItems
+import io.cdus.app.ui.screens.AuditScreen
 import io.cdus.app.ui.screens.ClipboardScreen
 import io.cdus.app.ui.screens.DevicesScreen
 import io.cdus.app.ui.screens.FilesScreen
-import io.cdus.app.ui.screens.SettingsScreen
 import io.cdus.app.ui.screens.OnboardingOverlay
-import io.cdus.app.ui.screens.AuditScreen
+import io.cdus.app.ui.screens.SettingsScreen
 import io.cdus.app.ui.theme.CdusandroidTheme
-import io.cdus.app.ui.components.SearchBottomSheet
-
-import android.content.Intent
-import android.os.Build
-import android.content.ClipboardManager
-import uniffi.cdus_ffi.greetFromRust
-import uniffi.cdus_ffi.initLogging
-import uniffi.cdus_ffi.initCore
-import uniffi.cdus_ffi.registerDevice
-import android.net.wifi.WifiManager
-import android.content.Context
-import android.net.nsd.NsdManager
-import android.net.nsd.NsdServiceInfo
-
 import io.cdus.app.utils.FileUtils
 import io.cdus.app.utils.Logger
-import io.cdus.app.data.FileTransferManager
-import io.cdus.app.ui.components.DevicePickerDialog
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.remember
-import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -157,9 +145,6 @@ class MainActivity : ComponentActivity() {
         Logger.i("SyncService start requested")
 
         handleIntent(intent)
-        
-        val greeting = greetFromRust("Android")
-        Logger.d("Rust says: $greeting")
         
         enableEdgeToEdge()
         setContent {
