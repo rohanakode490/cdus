@@ -1,13 +1,25 @@
 use anyhow::Result;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use libp2p::PeerId;
 use std::io::Read;
+use std::time::Duration;
 
+// -----------------------------------------------------------------------------
+// Cryptographic Identifiers
+// -----------------------------------------------------------------------------
+
+/// Converts a hex-encoded Ed25519 public key into a libp2p PeerId string.
 pub fn hex_to_peer_id(hex_pk: &str) -> Result<String> {
     let bytes = hex::decode(hex_pk)?;
     let pk = libp2p::identity::ed25519::PublicKey::try_from_bytes(&bytes)
         .map_err(|e| anyhow::anyhow!("Invalid ed25519 public key: {}", e))?;
     Ok(PeerId::from_public_key(&libp2p::identity::PublicKey::from(pk)).to_string())
 }
+
+// -----------------------------------------------------------------------------
+// Web Metadata & URL Preview Extraction
+// -----------------------------------------------------------------------------
 
 fn decode_html_entities(s: &str) -> String {
     s.replace("&amp;", "&")
@@ -20,14 +32,16 @@ fn decode_html_entities(s: &str) -> String {
 
 fn extract_title(html: &str) -> Option<String> {
     let html_lower = html.to_lowercase();
-    if let Some(start_tag) = html_lower.find("<title>") {
-        let content_start = start_tag + 7;
-        if let Some(end_tag) = html_lower[content_start..].find("</title>") {
-            let title = &html[content_start..content_start + end_tag];
-            return Some(decode_html_entities(title.trim()));
-        }
+    let start_idx = html_lower.find("<title")?;
+    let tag_close = html_lower[start_idx..].find('>')? + start_idx + 1;
+    let end_idx = html_lower[tag_close..].find("</title>")? + tag_close;
+    let raw_title = &html[tag_close..end_idx];
+    let decoded = decode_html_entities(raw_title.trim());
+    if decoded.is_empty() {
+        None
+    } else {
+        Some(decoded)
     }
-    None
 }
 
 fn extract_favicon_url(html: &str, page_url: &str) -> String {
@@ -38,8 +52,7 @@ fn extract_favicon_url(html: &str, page_url: &str) -> String {
 
     let mut favicon_href = None;
     let html_lower = html.to_lowercase();
-    for link_start in html_lower.match_indices("<link") {
-        let idx = link_start.0;
+    for (idx, _) in html_lower.match_indices("<link") {
         if let Some(end_idx) = html_lower[idx..].find('>') {
             let tag = &html[idx..idx + end_idx];
             let tag_lower = tag.to_lowercase();
@@ -75,7 +88,7 @@ fn fetch_favicon_as_base64(url_str: &str) -> Option<String> {
         return None;
     }
     let response = ureq::get(url_str)
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(Duration::from_secs(3))
         .call()
         .ok()?;
 
@@ -90,14 +103,14 @@ fn fetch_favicon_as_base64(url_str: &str) -> Option<String> {
         return None;
     }
 
-    use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let b64 = BASE64_STANDARD.encode(&bytes);
     Some(format!("data:{};base64,{}", content_type, b64))
 }
 
+/// Resolves URL title and favicon for rich clipboard sync previews.
 pub fn resolve_url_metadata(url_str: &str) -> Option<(String, String)> {
     let response = ureq::get(url_str)
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(Duration::from_secs(5))
         .call()
         .ok()?;
 

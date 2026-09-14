@@ -171,8 +171,6 @@ static STORE: Lazy<Mutex<Option<Arc<cdus_agent::store::Store>>>> = Lazy::new(|| 
 
 static RELAY_MANAGER: Lazy<Mutex<Option<Arc<cdus_agent::relay::RelayManager>>>> =
     Lazy::new(|| Mutex::new(None));
-static RELAY_RX: Lazy<Mutex<Option<flume::Receiver<cdus_agent::relay::SignalMessage>>>> =
-    Lazy::new(|| Mutex::new(None));
 
 static AGENT_TX: Lazy<Mutex<Option<flume::Sender<IpcMessage>>>> = Lazy::new(|| Mutex::new(None));
 
@@ -676,7 +674,7 @@ pub fn send_file(node_id: String, path: String) {
             if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
                 match lm_clone.open_file_stream(peer_id) {
                     Ok(wrapped_stream) => {
-                        let session_key = cdus_agent::file_transfer::SessionKey([0u8; 32]);
+                        let session_key = cdus_agent::file_transfer::derive_peer_session_key(&store_clone, &node_id);
                         let _ = cdus_agent::file_transfer::handle_outgoing_transfer(
                             Box::new(wrapped_stream),
                             store_clone,
@@ -1208,11 +1206,6 @@ pub fn get_discovered_devices() -> Vec<DiscoveredDevice> {
 #[uniffi::export]
 pub fn clear_discovered_devices() {
     DISCOVERED.lock().unwrap().clear();
-}
-
-#[uniffi::export]
-pub fn greet_from_rust(name: String) -> String {
-    format!("Hello, {}! This is CDUS Sync Core running on Rust.", name)
 }
 
 #[uniffi::export]

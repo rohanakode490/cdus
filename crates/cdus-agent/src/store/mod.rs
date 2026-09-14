@@ -36,6 +36,21 @@ pub struct PairedDeviceRecord {
     pub static_key: Option<Vec<u8>>,
 }
 
+pub fn format_byte_size(total_bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * 1024 * 1024;
+    if total_bytes >= GB {
+        format!("{:.2} GB", total_bytes as f64 / GB as f64)
+    } else if total_bytes >= MB {
+        format!("{:.2} MB", total_bytes as f64 / MB as f64)
+    } else if total_bytes >= KB {
+        format!("{:.2} KB", total_bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", total_bytes)
+    }
+}
+
 impl Store {
     pub fn init(data_dir: &Path) -> Result<Self> {
         let events_path = data_dir.join("events.db");
@@ -337,20 +352,7 @@ impl Store {
                         .unwrap_or_else(|_| {
                             peer_node_id[..std::cmp::min(8, peer_node_id.len())].to_string()
                         });
-                    let size_str = {
-                        const KB: u64 = 1024;
-                        const MB: u64 = 1024 * 1024;
-                        const GB: u64 = 1024 * 1024 * 1024;
-                        if total_bytes >= GB {
-                            format!("{:.2} GB", total_bytes as f64 / GB as f64)
-                        } else if total_bytes >= MB {
-                            format!("{:.2} MB", total_bytes as f64 / MB as f64)
-                        } else if total_bytes >= KB {
-                            format!("{:.2} KB", total_bytes as f64 / KB as f64)
-                        } else {
-                            format!("{} B", total_bytes)
-                        }
-                    };
+                    let size_str = format_byte_size(total_bytes);
                     let title = file_name.to_string();
                     let subtitle = if direction == "outgoing" {
                         format!("Size: {} • sent to {} ({})", size_str, peer_label, status)
@@ -426,20 +428,7 @@ impl Store {
             )
             .unwrap_or_else(|_| peer_node_id[..std::cmp::min(8, peer_node_id.len())].to_string());
 
-        let size_str = {
-            const KB: u64 = 1024;
-            const MB: u64 = 1024 * 1024;
-            const GB: u64 = 1024 * 1024 * 1024;
-            if total_bytes >= GB {
-                format!("{:.2} GB", total_bytes as f64 / GB as f64)
-            } else if total_bytes >= MB {
-                format!("{:.2} MB", total_bytes as f64 / MB as f64)
-            } else if total_bytes >= KB {
-                format!("{:.2} KB", total_bytes as f64 / KB as f64)
-            } else {
-                format!("{} B", total_bytes)
-            }
-        };
+        let size_str = format_byte_size(total_bytes);
 
         let log_content = if direction == "outgoing" {
             format!(
@@ -534,20 +523,7 @@ impl Store {
                 });
 
             if old_status != status {
-                let size_str = {
-                    const KB: u64 = 1024;
-                    const MB: u64 = 1024 * 1024;
-                    const GB: u64 = 1024 * 1024 * 1024;
-                    if total_bytes >= GB {
-                        format!("{:.2} GB", total_bytes as f64 / GB as f64)
-                    } else if total_bytes >= MB {
-                        format!("{:.2} MB", total_bytes as f64 / MB as f64)
-                    } else if total_bytes >= KB {
-                        format!("{:.2} KB", total_bytes as f64 / KB as f64)
-                    } else {
-                        format!("{} B", total_bytes)
-                    }
-                };
+                let size_str = format_byte_size(total_bytes);
 
                 let log_content = match status {
                     "in_progress" => Some(if direction == "outgoing" {
@@ -666,20 +642,7 @@ impl Store {
                 });
 
             if old_status != "failed" {
-                let size_str = {
-                    const KB: u64 = 1024;
-                    const MB: u64 = 1024 * 1024;
-                    const GB: u64 = 1024 * 1024 * 1024;
-                    if total_bytes >= GB {
-                        format!("{:.2} GB", total_bytes as f64 / GB as f64)
-                    } else if total_bytes >= MB {
-                        format!("{:.2} MB", total_bytes as f64 / MB as f64)
-                    } else if total_bytes >= KB {
-                        format!("{:.2} KB", total_bytes as f64 / KB as f64)
-                    } else {
-                        format!("{} B", total_bytes)
-                    }
-                };
+                let size_str = format_byte_size(total_bytes);
 
                 let log_content = if direction == "outgoing" {
                     format!(
@@ -1588,20 +1551,7 @@ impl Store {
         total_bytes: u64,
         status: &str,
     ) -> Result<()> {
-        let size_str = {
-            const KB: u64 = 1024;
-            const MB: u64 = 1024 * 1024;
-            const GB: u64 = 1024 * 1024 * 1024;
-            if total_bytes >= GB {
-                format!("{:.2} GB", total_bytes as f64 / GB as f64)
-            } else if total_bytes >= MB {
-                format!("{:.2} MB", total_bytes as f64 / MB as f64)
-            } else if total_bytes >= KB {
-                format!("{:.2} KB", total_bytes as f64 / KB as f64)
-            } else {
-                format!("{} B", total_bytes)
-            }
-        };
+        let size_str = format_byte_size(total_bytes);
 
         let title = file_name.to_string();
         let subtitle = if direction == "outgoing" {

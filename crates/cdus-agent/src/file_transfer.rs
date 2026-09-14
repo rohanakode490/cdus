@@ -33,6 +33,39 @@ pub struct ChunkMeta {
 
 pub struct SessionKey(pub [u8; 32]);
 
+/// Derives a deterministic 32-byte symmetric session key for a peer pair.
+///
+/// Canonicalizes the local and peer identities in lexicographical order,
+/// incorporates any stored Noise static public key, and applies BLAKE3 key derivation.
+pub fn derive_peer_session_key(store: &Store, peer_node_id: &str) -> SessionKey {
+    let local_node_id = store
+        .get_state("node_id")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let remote_device = store.get_paired_device(peer_node_id).ok().flatten();
+
+    let mut hasher = blake3::Hasher::new_derive_key("cdus-v1-file-transfer-session-key");
+
+    if local_node_id.as_str() <= peer_node_id {
+        hasher.update(local_node_id.as_bytes());
+        hasher.update(peer_node_id.as_bytes());
+    } else {
+        hasher.update(peer_node_id.as_bytes());
+        hasher.update(local_node_id.as_bytes());
+    }
+
+    if let Some(device) = remote_device {
+        if let Some(ref static_key) = device.static_key {
+            hasher.update(static_key);
+        }
+    }
+
+    let mut output = [0u8; 32];
+    hasher.finalize_xof().fill(&mut output);
+    SessionKey(output)
+}
+
 pub const MAX_TIMEOUT_RETRIES: u32 = 12; // 12 * 5s = 60s total timeout for inactivity
 
 pub struct FileTransferManager {
@@ -749,7 +782,6 @@ fn handle_incoming_transfer_inner(
                 }
             }
             Ok(FileMessage::Complete(complete)) => {
-                timeout_count = 0;
                 if !is_benchmark {
                     if let Some(f) = file_opt.take() {
                         f.sync_all()?;

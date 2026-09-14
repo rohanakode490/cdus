@@ -21,6 +21,33 @@ use tracing::{error, info};
 #[derive(Default, Clone)]
 pub struct MessagePackCodec;
 
+async fn read_msg<T>(io: &mut T) -> io::Result<SyncMessage>
+where
+    T: AsyncRead + Unpin + Send,
+{
+    let mut len_bytes = [0u8; 4];
+    io.read_exact(&mut len_bytes).await?;
+    let len = u32::from_be_bytes(len_bytes) as usize;
+
+    let mut data = vec![0u8; len];
+    io.read_exact(&mut data).await?;
+
+    SyncMessage::from_slice(&data).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+async fn write_msg<T>(io: &mut T, msg: SyncMessage) -> io::Result<()>
+where
+    T: AsyncWrite + Unpin + Send,
+{
+    let data = msg
+        .to_vec()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let len = data.len() as u32;
+    io.write_all(&len.to_be_bytes()).await?;
+    io.write_all(&data).await?;
+    Ok(())
+}
+
 #[async_trait]
 impl request_response::Codec for MessagePackCodec {
     type Protocol = libp2p::StreamProtocol;
@@ -35,14 +62,7 @@ impl request_response::Codec for MessagePackCodec {
     where
         T: AsyncRead + Unpin + Send,
     {
-        let mut len_bytes = [0u8; 4];
-        io.read_exact(&mut len_bytes).await?;
-        let len = u32::from_be_bytes(len_bytes) as usize;
-
-        let mut data = vec![0u8; len];
-        io.read_exact(&mut data).await?;
-
-        SyncMessage::from_slice(&data).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        read_msg(io).await
     }
 
     async fn read_response<T>(
@@ -53,17 +73,7 @@ impl request_response::Codec for MessagePackCodec {
     where
         T: AsyncRead + Unpin + Send,
     {
-        let mut len_bytes = [0u8; 4];
-        io.read_exact(&mut len_bytes).await?;
-        let len = u32::from_be_bytes(len_bytes) as usize;
-
-        let mut data = vec![0u8; len];
-        io.read_exact(&mut data).await?;
-
-        SyncMessage::from_slice(&data).map_err(|e| {
-            error!("MessagePackCodec: failed to decode response: {}", e);
-            io::Error::new(io::ErrorKind::InvalidData, e)
-        })
+        read_msg(io).await
     }
 
     async fn write_request<T>(
@@ -76,13 +86,7 @@ impl request_response::Codec for MessagePackCodec {
         T: AsyncWrite + Unpin + Send,
     {
         info!("MessagePackCodec: writing request: {:?}", request);
-        let data = request
-            .to_vec()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let len = data.len() as u32;
-        io.write_all(&len.to_be_bytes()).await?;
-        io.write_all(&data).await?;
-        Ok(())
+        write_msg(io, request).await
     }
 
     async fn write_response<T>(
@@ -95,13 +99,7 @@ impl request_response::Codec for MessagePackCodec {
         T: AsyncWrite + Unpin + Send,
     {
         info!("MessagePackCodec: writing response: {:?}", response);
-        let data = response
-            .to_vec()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let len = data.len() as u32;
-        io.write_all(&len.to_be_bytes()).await?;
-        io.write_all(&data).await?;
-        Ok(())
+        write_msg(io, response).await
     }
 }
 
@@ -377,10 +375,9 @@ impl Libp2pManager {
                                 file_pool.execute(move || {
                                     let wrapped_stream = crate::file_transfer::Libp2pFileStream::new(
                                         stream,
-                                        &runtime_handle
+                                        &runtime_handle,
                                     );
-                                    // TODO: Get real session key
-                                    let session_key = crate::file_transfer::SessionKey([0u8; 32]);
+                                    let session_key = crate::file_transfer::derive_peer_session_key(&store_clone, &peer_str);
 
                                      let download_dir = if let Some(custom) = download_dir_custom_clone {
                                          custom
@@ -461,15 +458,7 @@ impl Libp2pManager {
                                                         }
                                                         SyncMessage::PeerExchange { peers } => {
                                                             info!("Received PEX via Gossipsub from {} ({} peers)", propagation_source, peers.len());
-                                                            for peer_rec in peers {
-                                                                if let Ok(peer_id) = peer_rec.node_id.parse::<libp2p::PeerId>() {
-                                                                    for addr_str in peer_rec.addresses {
-                                                                        if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
-                                                                            swarm.add_peer_address(peer_id, addr);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
+                                                            apply_pex_records(&mut swarm, &peers);
                                                         }
                                                         SyncMessage::Disconnect => {
                                                             info!("Received Disconnect request over Gossipsub from {}", propagation_source);
@@ -482,37 +471,21 @@ impl Libp2pManager {
                                             match message {
                                                 request_response::Message::Request { request, channel, .. } => {
                                                     info!("Received libp2p Request from {}: {:?}", peer, request);
-
-                                                    // If it's PEX, process it
-                                                    if let SyncMessage::PeerExchange { ref peers } = request {
-                                                        info!("Processing PEX Request from {} ({} peers)", peer, peers.len());
-                                                        for peer_rec in peers {
-                                                            if let Ok(peer_id) = peer_rec.node_id.parse::<libp2p::PeerId>() {
-                                                                for addr_str in &peer_rec.addresses {
-                                                                    if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
-                                                                        swarm.add_peer_address(peer_id, addr);
-                                                                    }
-                                                                }
-                                                            }
+                                                    let response = match request {
+                                                        SyncMessage::PeerExchange { ref peers } => {
+                                                            info!("Processing PEX Request from {} ({} peers)", peer, peers.len());
+                                                            apply_pex_records(&mut swarm, peers);
+                                                            SyncMessage::PeerExchange { peers: get_local_pex_records(&store) }
                                                         }
-                                                    }
-
-                                                    // Echo back for testing
-                                                    let _ = swarm.behaviour_mut().request_response.send_response(channel, request);
+                                                        other => other,
+                                                    };
+                                                    let _ = swarm.behaviour_mut().request_response.send_response(channel, response);
                                                 }
                                                 request_response::Message::Response { response, .. } => {
                                                     info!("Received libp2p Response from {}: {:?}", peer, response);
-                                                    if let SyncMessage::PeerExchange { peers } = response {
+                                                    if let SyncMessage::PeerExchange { ref peers } = response {
                                                         info!("Processing PEX Response from {} ({} peers)", peer, peers.len());
-                                                        for peer_rec in peers {
-                                                            if let Ok(peer_id) = peer_rec.node_id.parse::<libp2p::PeerId>() {
-                                                                for addr_str in peer_rec.addresses {
-                                                                    if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
-                                                                        swarm.add_peer_address(peer_id, addr);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
+                                                        apply_pex_records(&mut swarm, peers);
                                                     }
                                                 }
                                             }
@@ -594,4 +567,35 @@ impl Libp2pManager {
     pub fn disconnect_peer(&self, peer_id: PeerId) {
         let _ = self.command_tx.send(SwarmCommand::Disconnect(peer_id));
     }
+}
+
+fn apply_pex_records(swarm: &mut libp2p::Swarm<CdusBehaviour>, peers: &[cdus_common::PeerExchangeRecord]) {
+    for peer_rec in peers {
+        if let Ok(peer_id) = peer_rec.node_id.parse::<libp2p::PeerId>() {
+            for addr_str in &peer_rec.addresses {
+                if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                    swarm.add_peer_address(peer_id, addr);
+                }
+            }
+        }
+    }
+}
+
+fn get_local_pex_records(store: &crate::store::Store) -> Vec<cdus_common::PeerExchangeRecord> {
+    let mut records = Vec::new();
+    if let Ok(devices) = store.get_paired_devices() {
+        for dev in devices {
+            let mut addresses = Vec::new();
+            if let (Some(ips), Some(port)) = (dev.last_known_ips, dev.last_known_port) {
+                for ip in ips {
+                    addresses.push(format!("/ip4/{}/tcp/{}", ip, port));
+                }
+            }
+            records.push(cdus_common::PeerExchangeRecord {
+                node_id: dev.node_id,
+                addresses,
+            });
+        }
+    }
+    records
 }
