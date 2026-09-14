@@ -674,7 +674,10 @@ pub fn send_file(node_id: String, path: String) {
             if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
                 match lm_clone.open_file_stream(peer_id) {
                     Ok(wrapped_stream) => {
-                        let session_key = cdus_agent::file_transfer::derive_peer_session_key(&store_clone, &node_id);
+                        let session_key = cdus_agent::file_transfer::derive_peer_session_key(
+                            &store_clone,
+                            &node_id,
+                        );
                         let _ = cdus_agent::file_transfer::handle_outgoing_transfer(
                             Box::new(wrapped_stream),
                             store_clone,

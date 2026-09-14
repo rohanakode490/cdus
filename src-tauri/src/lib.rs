@@ -318,9 +318,7 @@ fn cancel_file_transfer(transfer_id: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn get_file_transfer_history(
-    limit: u32,
-) -> Result<Vec<cdus_common::FileTransferRecord>, String> {
+fn get_file_transfer_history(limit: u32) -> Result<Vec<cdus_common::FileTransferRecord>, String> {
     let msg = IpcMessage::GetFileTransferHistory { limit };
     match send_ipc_message(msg)? {
         IpcMessage::FileTransferHistoryResponse(history) => Ok(history),

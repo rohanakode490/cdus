@@ -466,7 +466,10 @@ pub fn daemon_loop(
                         if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
                             match libp2p_manager_clone.open_file_stream(peer_id) {
                                 Ok(wrapped_stream) => {
-                                    let session_key = crate::file_transfer::derive_peer_session_key(&store_clone, &node_id);
+                                    let session_key = crate::file_transfer::derive_peer_session_key(
+                                        &store_clone,
+                                        &node_id,
+                                    );
                                     if let Err(e) = crate::file_transfer::handle_outgoing_transfer(
                                         Box::new(wrapped_stream),
                                         store_clone,
@@ -519,7 +522,10 @@ pub fn daemon_loop(
                         if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
                             match libp2p_manager_clone.open_file_stream(peer_id) {
                                 Ok(wrapped_stream) => {
-                                    let session_key = crate::file_transfer::derive_peer_session_key(&store_clone, &node_id);
+                                    let session_key = crate::file_transfer::derive_peer_session_key(
+                                        &store_clone,
+                                        &node_id,
+                                    );
                                     if let Err(e) = crate::file_transfer::handle_outgoing_transfer(
                                         Box::new(wrapped_stream),
                                         store_clone,
@@ -583,7 +589,10 @@ pub fn daemon_loop(
                                     match libp2p_manager_clone.open_file_stream(peer_id) {
                                         Ok(wrapped_stream) => {
                                             let session_key =
-                                                crate::file_transfer::derive_peer_session_key(&store_clone, &record.peer_node_id);
+                                                crate::file_transfer::derive_peer_session_key(
+                                                    &store_clone,
+                                                    &record.peer_node_id,
+                                                );
                                             if let Err(e) =
                                                 crate::file_transfer::handle_outgoing_transfer(
                                                     Box::new(wrapped_stream),

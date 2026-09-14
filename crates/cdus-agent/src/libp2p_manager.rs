@@ -569,7 +569,10 @@ impl Libp2pManager {
     }
 }
 
-fn apply_pex_records(swarm: &mut libp2p::Swarm<CdusBehaviour>, peers: &[cdus_common::PeerExchangeRecord]) {
+fn apply_pex_records(
+    swarm: &mut libp2p::Swarm<CdusBehaviour>,
+    peers: &[cdus_common::PeerExchangeRecord],
+) {
     for peer_rec in peers {
         if let Ok(peer_id) = peer_rec.node_id.parse::<libp2p::PeerId>() {
             for addr_str in &peer_rec.addresses {
