@@ -168,16 +168,41 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
 
   # =========================================================================
-  # 4. TAURI DESKTOP BUILDER (LINUX FIRST)
+  # 4. TAURI DESKTOP BUILDER (LINUX, WINDOWS, MACOS)
   # =========================================================================
   tauri-desktop:
-    name: Tauri Desktop (Linux Build Verification)
-    runs-on: ubuntu-latest
+    name: Tauri Desktop (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-latest
+            artifact_name: cdus-desktop-linux
+            artifact_pattern: |
+              src-tauri/target/release/bundle/deb/*.deb
+              src-tauri/target/release/bundle/appimage/*.AppImage
+          - platform: windows
+            os: windows-latest
+            artifact_name: cdus-desktop-windows
+            artifact_pattern: |
+              src-tauri/target/release/bundle/nsis/*.exe
+              src-tauri/target/release/bundle/msi/*.msi
+          - platform: macos
+            os: macos-latest
+            artifact_name: cdus-desktop-macos
+            artifact_pattern: |
+              src-tauri/target/release/bundle/dmg/*.dmg
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install Linux Build Dependencies
+        if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -205,10 +230,25 @@ jobs:
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
         with:
-          shared-key: "tauri-rust"
+          shared-key: "tauri-${{ matrix.platform }}"
 
       - name: Verify TypeScript & Build Frontend
         run: bun run build
 
-      - name: Build Tauri Desktop (No-Bundle Check)
-        run: bun run tauri build --no-bundle
+      - name: Build Tauri Desktop Bundle
+        env:
+          CI: "true"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            bun run tauri build
+          else
+            bun run tauri build --no-sign -c '{"bundle":{"createUpdaterArtifacts":false}}'
+          fi
+
+      - name: Upload Installer Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_pattern }}
+          if-no-files-found: warn

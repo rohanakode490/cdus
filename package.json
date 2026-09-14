@@ -7,7 +7,13 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "check:targets:setup": "rustup target add x86_64-pc-windows-gnu x86_64-apple-darwin",
+    "check:windows": "cargo check --workspace --exclude tauri-app --target x86_64-pc-windows-gnu",
+    "check:macos": "cargo check --workspace --exclude tauri-app --target x86_64-apple-darwin",
+    "check:protocols": "cargo check -p cdus-common --target x86_64-pc-windows-gnu && cargo check -p cdus-common --target x86_64-apple-darwin",
+    "check:all-targets": "cargo check --workspace --exclude tauri-app && bun run check:protocols",
+    "test:e2e": "bun run tests/e2e/desktop.spec.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -15,12 +21,12 @@
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
-    "@types/qrcode": "^1.5.6",
     "html5-qrcode": "^2.3.8",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
+    "@types/qrcode": "^1.5.6",
     "typescript": "~5.6.2",
     "vite": "^6.0.3"
   }
