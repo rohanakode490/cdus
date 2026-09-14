@@ -107,7 +107,7 @@ jobs:
       - name: Discover & Collect Installers
         run: |
           mkdir -p dist-release
-          find target src-tauri/target -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.dmg" -o -name "*.deb" -o -name "*.AppImage" \) -exec cp -v {} dist-release/ \; || true
+          find target src-tauri/target -path "*/bundle/*" -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.dmg" -o -name "*.deb" -o -name "*.AppImage" \) -exec cp -v {} dist-release/ \; || true
           ls -la dist-release/
 
       - name: Upload Release Assets
