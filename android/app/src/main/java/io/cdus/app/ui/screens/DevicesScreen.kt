@@ -3,7 +3,11 @@ package io.cdus.app.ui.screens
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
@@ -12,6 +16,11 @@ import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -271,181 +280,356 @@ fun DevicesScreen() {
             )
         }
 
+        // Header & Live Mesh Status
         Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = "Devices",
-                style = MaterialTheme.typography.headlineMedium
-            )
-            
-            // Relay status badge
+            Column {
+                Text(
+                    text = "Devices",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = "Encrypted Cross-Device Mesh",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Mesh / Relay Status Badge
             Surface(
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                color = if (isRelayConnected) androidx.compose.ui.graphics.Color(0xFFE2FBE8) else androidx.compose.ui.graphics.Color(0xFFFFEEF0),
-                modifier = Modifier.clickable {
-                    if (!isRelayConnected) {
-                        showRelayErrorDialog = true
+                shape = RoundedCornerShape(16.dp),
+                color = if (isRelayConnected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.tertiaryContainer,
+                modifier = Modifier
+                    .clickable {
+                        if (!isRelayConnected) {
+                            showRelayErrorDialog = true
+                        }
                     }
-                }
+                    .border(
+                        1.dp,
+                        if (isRelayConnected) MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f) else MaterialTheme.colorScheme.tertiary.copy(alpha = 0.4f),
+                        RoundedCornerShape(16.dp)
+                    )
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(6.dp)
+                            .size(7.dp)
                             .background(
-                                color = if (isRelayConnected) androidx.compose.ui.graphics.Color.Green else androidx.compose.ui.graphics.Color.Red,
-                                shape = androidx.compose.foundation.shape.CircleShape
+                                color = if (isRelayConnected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.tertiary,
+                                shape = CircleShape
                             )
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (isRelayConnected) "Relay Connected" else "Relay Offline",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (isRelayConnected) androidx.compose.ui.graphics.Color(0xFF1E7E34) else androidx.compose.ui.graphics.Color(0xFFD73A49),
-                        fontWeight = FontWeight.Bold
+                        text = if (isRelayConnected) "Direct + Relay Active" else "LAN Only (Relay Off)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isRelayConnected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onTertiaryContainer,
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
             }
         }
 
-        // Paired Devices Section
-        Text(
-            text = "Your Devices",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.secondary,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-
-        if (isLoading) {
-            Box(
-                modifier = Modifier.fillMaxWidth().height(80.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(modifier = Modifier.size(24.dp))
-            }
-        } else if (errorMsg != null) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(text = errorMsg!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(onClick = {
-                    isLoading = true
-                    errorMsg = null
-                }) {
-                    Text("Retry")
-                }
-            }
-        } else if (pairedDevices.isEmpty()) {
-            Text(
-                text = "No devices paired yet. Start scanning to connect your first device.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
-        } else {
-            for (device in pairedDevices) {
-                PairedDeviceItem(
-                    device = device,
-                    connectionState = connectionStates[device.nodeId],
-                    isDeveloperMode = isDeveloperMode,
-                    onUnpairClick = { unpairDevice(device.nodeId) },
-                    onSendFileClick = {
-                        selectedDeviceForFile = device.nodeId
-                        filePickerLauncher.launch("*/*")
-                    },
-                    onReconnectClick = {
-                        triggerActualConnect(device.nodeId)
-                    },
-                    onDisconnectClick = {
-                        connectionStates[device.nodeId] = DeviceConnectionState(ConnectionStatus.OFFLINE, null, 0)
-                        try {
-                            uniffi.cdus_ffi.disconnectDevice(device.nodeId)
-                        } catch (e: Exception) {
-                            Logger.e("Error disconnecting device: ${e.message}")
-                        }
-                        android.widget.Toast.makeText(context, "Disconnected from ${UIUtils.formatDeviceLabel(device.label)}", android.widget.Toast.LENGTH_SHORT).show()
-                    },
-                    onBenchmarkClick = {
-                        startBenchmark(device.nodeId)
-                        android.widget.Toast.makeText(context, "Starting 1GB Benchmark...", android.widget.Toast.LENGTH_LONG).show()
-                    }
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Discovery Section
-        Text(
-            text = "Discovery",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.secondary,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Button(
-                onClick = { showQrDialog = true },
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("Show QR")
-            }
-            Button(
-                onClick = { cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA) },
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("Scan QR")
-            }
-            Button(
-                onClick = { isScanning = !isScanning },
-                modifier = Modifier.weight(1.5f)
-            ) {
-                if (isScanning) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary
+            // Section 1: Connect / Pairing Actions Hub
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "Pair New Device",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Stop")
+                        Text(
+                            text = "Direct peer-to-peer encryption with Noise XX handshake.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        // Primary Action: Scan QR
+                        Button(
+                            onClick = { cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.QrCodeScanner,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Scan Pairing QR", fontWeight = FontWeight.SemiBold)
+                        }
+
+                        // Secondary Actions Row
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { showQrDialog = true },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(42.dp),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.QrCode,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("My QR")
+                            }
+
+                            OutlinedButton(
+                                onClick = { isScanning = !isScanning },
+                                modifier = Modifier
+                                    .weight(1.3f)
+                                    .height(42.dp),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                if (isScanning) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Stop Scan")
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Scan LAN")
+                                }
+                            }
+                        }
                     }
-                } else {
-                    Text("Scan LAN")
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (isScanning && discoveredDevices.isEmpty()) {
-            Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+            // Section 2: Paired Devices
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Paired Devices",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    if (pairedDevices.isNotEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant
+                        ) {
+                            Text(
+                                text = "${pairedDevices.size} connected",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
             }
-        } else if (!isScanning && discoveredDevices.isEmpty()) {
-            // Nothing to show
-        } else {
-            LazyColumn(modifier = Modifier.weight(1f)) {
-                // Filter out already paired devices from discovered list
+
+            if (isLoading) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(80.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    }
+                }
+            } else if (errorMsg != null) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f), RoundedCornerShape(12.dp)),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(text = errorMsg!!, color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodyMedium)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(onClick = {
+                                isLoading = true
+                                errorMsg = null
+                            }) {
+                                Text("Retry")
+                            }
+                        }
+                    }
+                }
+            } else if (pairedDevices.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier.size(54.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Devices,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(26.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "No devices paired yet",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Install CDUS on your laptop or desktop and scan the pairing QR code to sync clipboard and files directly.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            } else {
+                items(pairedDevices) { device ->
+                    PairedDeviceItem(
+                        device = device,
+                        connectionState = connectionStates[device.nodeId],
+                        isDeveloperMode = isDeveloperMode,
+                        onUnpairClick = { unpairDevice(device.nodeId) },
+                        onSendFileClick = {
+                            selectedDeviceForFile = device.nodeId
+                            filePickerLauncher.launch("*/*")
+                        },
+                        onReconnectClick = {
+                            triggerActualConnect(device.nodeId)
+                        },
+                        onDisconnectClick = {
+                            connectionStates[device.nodeId] = DeviceConnectionState(ConnectionStatus.OFFLINE, null, 0)
+                            try {
+                                uniffi.cdus_ffi.disconnectDevice(device.nodeId)
+                            } catch (e: Exception) {
+                                Logger.e("Error disconnecting device: ${e.message}")
+                            }
+                            android.widget.Toast.makeText(context, "Disconnected from ${UIUtils.formatDeviceLabel(device.label)}", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                        onBenchmarkClick = {
+                            startBenchmark(device.nodeId)
+                            android.widget.Toast.makeText(context, "Starting 1GB Benchmark...", android.widget.Toast.LENGTH_LONG).show()
+                        }
+                    )
+                }
+            }
+
+            // Section 3: Discovered Devices on LAN
+            if (isScanning || discoveredDevices.isNotEmpty()) {
                 val filteredDiscovered = discoveredDevices.filter { d ->
                     pairedDevices.none { p -> p.nodeId == d.nodeId }
                 }
-                items(filteredDiscovered) { device ->
-                    DeviceListItem(
-                        device = device,
-                        onConnectClick = { initiatePairing(device.nodeId) }
+
+                item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Discovered on Local Network",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onBackground
                     )
+                }
+
+                if (isScanning && filteredDiscovered.isEmpty()) {
+                    item {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp)),
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = "Listening for mDNS beacons on LAN...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    items(filteredDiscovered) { device ->
+                        DeviceListItem(
+                            device = device,
+                            onConnectClick = { initiatePairing(device.nodeId) }
+                        )
+                    }
                 }
             }
         }
@@ -454,27 +638,18 @@ fun DevicesScreen() {
 
 @Composable
 fun ConnectionPathBadge(transport: String) {
-    val containerColor = when (transport) {
-        "LAN" -> androidx.compose.ui.graphics.Color(0xFFE8F5E9)
-        "Relay" -> androidx.compose.ui.graphics.Color(0xFFFFF3E0)
-        else -> androidx.compose.ui.graphics.Color(0xFFFFEBEE)
-    }
-    val contentColor = when (transport) {
-        "LAN" -> androidx.compose.ui.graphics.Color(0xFF2E7D32)
-        "Relay" -> androidx.compose.ui.graphics.Color(0xFFEF6C00)
-        else -> androidx.compose.ui.graphics.Color(0xFFC62828)
-    }
+    val isLan = transport == "LAN"
     Surface(
-        color = containerColor,
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+        color = if (isLan) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.tertiaryContainer,
+        shape = RoundedCornerShape(4.dp),
         modifier = Modifier.padding(start = 6.dp)
     ) {
         Text(
-            text = transport,
-            color = contentColor,
+            text = if (isLan) "DIRECT LAN" else "RELAY",
+            color = if (isLan) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onTertiaryContainer,
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+            fontWeight = FontWeight.Bold
         )
     }
 }
@@ -517,10 +692,10 @@ fun PairedDeviceItem(
     )
 
     val dotColor = when (status) {
-        ConnectionStatus.ONLINE -> androidx.compose.ui.graphics.Color.Green
-        ConnectionStatus.CONNECTING -> androidx.compose.ui.graphics.Color(0xFF2196F3)
-        ConnectionStatus.RECONNECTING -> androidx.compose.ui.graphics.Color(0xFFFF9800)
-        ConnectionStatus.OFFLINE -> androidx.compose.ui.graphics.Color.Gray
+        ConnectionStatus.ONLINE -> MaterialTheme.colorScheme.secondary
+        ConnectionStatus.CONNECTING -> MaterialTheme.colorScheme.primary
+        ConnectionStatus.RECONNECTING -> MaterialTheme.colorScheme.tertiary
+        ConnectionStatus.OFFLINE -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
     }
 
     val dotModifier = Modifier
@@ -536,38 +711,57 @@ fun PairedDeviceItem(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp)),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column {
             Row(
                 modifier = Modifier
-                    .padding(12.dp)
+                    .padding(14.dp)
                     .fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Computer,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Computer,
+                                contentDescription = null,
+                                modifier = Modifier.size(22.dp),
+                                tint = if (isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text(text = UIUtils.formatDeviceLabel(device.label), style = MaterialTheme.typography.bodyLarge)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = UIUtils.formatDeviceLabel(device.label),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Surface(
                                 modifier = dotModifier,
-                                shape = androidx.compose.foundation.shape.CircleShape,
+                                shape = CircleShape,
                                 color = dotColor
                             ) {}
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = statusText,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                color = if (isOnline) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             
                             if (isOnline && transport != null) {
@@ -576,17 +770,31 @@ fun PairedDeviceItem(
                         }
                     }
                 }
+
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (isOnline) {
-                        TextButton(onClick = onSendFileClick) {
-                            Text("Send File")
+                        Button(
+                            onClick = onSendFileClick,
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.height(36.dp)
+                        ) {
+                            Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Send", style = MaterialTheme.typography.labelMedium)
                         }
                     } else {
-                        TextButton(
+                        OutlinedButton(
                             onClick = onReconnectClick,
-                            enabled = !isConnecting
+                            enabled = !isConnecting,
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.height(36.dp)
                         ) {
-                            Text(if (isConnecting) "Connecting..." else "Reconnect Now")
+                            Text(
+                                if (isConnecting) "Connecting..." else "Reconnect",
+                                style = MaterialTheme.typography.labelMedium
+                            )
                         }
                     }
                     
@@ -595,7 +803,8 @@ fun PairedDeviceItem(
                         IconButton(onClick = { showMenu = true }) {
                             Icon(
                                 imageVector = Icons.Default.MoreVert,
-                                contentDescription = "Device Options"
+                                contentDescription = "Device Options",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         DropdownMenu(
@@ -624,16 +833,22 @@ fun PairedDeviceItem(
             }
             
             if (isDeveloperMode && isOnline) {
-                Divider(modifier = Modifier.padding(horizontal = 12.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                Divider(
+                    modifier = Modifier.padding(horizontal = 14.dp),
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outline
+                )
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.End
                 ) {
                     TextButton(
                         onClick = onBenchmarkClick,
                         colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.tertiary)
                     ) {
-                        Text("Run 1GB Benchmark")
+                        Text("Run 1GB Benchmark", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }
@@ -646,34 +861,63 @@ fun DeviceListItem(device: DiscoveredDevice, onConnectClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp)),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Row(
             modifier = Modifier
-                .padding(16.dp)
+                .padding(14.dp)
                 .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = if (device.os == "Android") Icons.Default.Smartphone else Icons.Default.Computer,
-                    contentDescription = null,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(16.dp))
-                Column {
-                    Text(text = UIUtils.formatDeviceLabel(device.label), style = MaterialTheme.typography.bodyLarge)
-                    Text(text = "#${device.nodeId.take(8)} • ${device.os}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.size(38.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = if (device.os == "Android") Icons.Default.Smartphone else Icons.Default.Computer,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = UIUtils.formatDeviceLabel(device.label),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "#${device.nodeId.take(8)} • ${device.os}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
-            Button(onClick = onConnectClick) {
-                Text("Connect")
+            Button(
+                onClick = onConnectClick,
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                modifier = Modifier.height(36.dp)
+            ) {
+                Text("Pair", style = MaterialTheme.typography.labelMedium)
             }
         }
     }
 }
+
 
 @Composable
 fun PairingDialog(

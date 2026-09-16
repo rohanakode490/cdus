@@ -7,6 +7,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.border
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -16,6 +17,10 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -110,26 +115,18 @@ fun ClipboardScreen() {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Clipboard History",
-                style = MaterialTheme.typography.headlineMedium
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { refreshHistory() }) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                }
-                if (clipboardHistory.isNotEmpty()) {
-                    IconButton(onClick = {
+    var showClearAllConfirm by remember { mutableStateOf(false) }
+
+    if (showClearAllConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearAllConfirm = false },
+            icon = { Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Clear Clipboard History?") },
+            text = { Text("This will permanently remove all synchronized and local clipboard entries from this device.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showClearAllConfirm = false
                         scope.launch(Dispatchers.IO) {
                             clearClipboardHistory()
                             val freshHistory = getClipboardHistory(50u)
@@ -137,7 +134,51 @@ fun ClipboardScreen() {
                                 clipboardHistory = freshHistory
                             }
                         }
-                    }) {
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Clear All")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearAllConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // Header
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "Clipboard",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = "End-to-End Encrypted Sync",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { refreshHistory() }) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (clipboardHistory.isNotEmpty()) {
+                    IconButton(onClick = { showClearAllConfirm = true }) {
                         Icon(
                             imageVector = Icons.Default.DeleteSweep,
                             contentDescription = "Clear all history",
@@ -148,13 +189,31 @@ fun ClipboardScreen() {
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
+        // Search bar
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
-            placeholder = { Text("Search clipboard or devices...") },
+            placeholder = { Text("Search clipboard content or source device...") },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Clear search",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
             singleLine = true
         )
 
@@ -167,13 +226,19 @@ fun ClipboardScreen() {
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    CircularProgressIndicator()
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(text = "Loading clipboard history...", color = MaterialTheme.colorScheme.outline)
+                    CircularProgressIndicator(modifier = Modifier.size(28.dp), color = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Loading clipboard history...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             } else if (errorMsg != null) {
                 Column(
-                    modifier = Modifier.fillMaxSize().padding(24.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
@@ -181,14 +246,14 @@ fun ClipboardScreen() {
                         imageVector = Icons.Default.Warning,
                         contentDescription = "Error",
                         tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(48.dp)
+                        modifier = Modifier.size(44.dp)
                     )
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         text = errorMsg!!,
                         color = MaterialTheme.colorScheme.error,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 16.sp
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Button(onClick = { refreshHistory() }) {
@@ -202,26 +267,67 @@ fun ClipboardScreen() {
                     modifier = Modifier.fillMaxSize()
                 ) {
                     if (filteredHistory.isEmpty()) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                             ) {
-                                Text(
-                                    text = if (searchQuery.isBlank()) "No clipboard history yet." else "No matches found.",
-                                    color = MaterialTheme.colorScheme.outline,
-                                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
-                                )
-                                Spacer(modifier = Modifier.height(16.dp))
-                                Button(onClick = { refreshHistory() }) {
-                                    Text("Refresh")
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(28.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        modifier = Modifier.size(54.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.ContentPaste,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(26.dp),
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        text = if (searchQuery.isBlank()) "Clipboard is empty" else "No matching clips",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = if (searchQuery.isBlank()) {
+                                            "Copy text, links, or images on this phone or any paired computer to sync directly."
+                                        } else {
+                                            "No clipboard entries match \"$searchQuery\"."
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                    if (searchQuery.isNotBlank()) {
+                                        Spacer(modifier = Modifier.height(14.dp))
+                                        OutlinedButton(onClick = { searchQuery = "" }) {
+                                            Text("Clear Search")
+                                        }
+                                    }
                                 }
                             }
                         }
                     } else {
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             items(filteredHistory, key = { it.id }) { item ->
                                 val isVisible = visibleSensitiveIds.contains(item.id)
@@ -347,6 +453,7 @@ fun ClipboardListItem(
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
             .combinedClickable(
                 onClick = {
                     clipboardManager.setText(AnnotatedString(rawContentToCopy))
@@ -358,10 +465,11 @@ fun ClipboardListItem(
                     Toast.makeText(context, statusText, Toast.LENGTH_SHORT).show()
                 }
             ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp)
+            modifier = Modifier.padding(14.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -370,17 +478,31 @@ fun ClipboardListItem(
             ) {
                 Box(modifier = Modifier.weight(1f)) {
                     if (isSensitive && !isVisible) {
-                        Text(
-                            text = "••••••••••••",
-                            style = MaterialTheme.typography.bodyLarge
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.tertiary)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Sensitive content hidden",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     } else if (isImage && imageBitmap != null) {
                         androidx.compose.foundation.Image(
                             bitmap = imageBitmap!!.asImageBitmap(),
                             contentDescription = "Clipboard Image",
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 200.dp)
+                                .heightIn(max = 180.dp)
                                 .clip(RoundedCornerShape(8.dp)),
                             contentScale = androidx.compose.ui.layout.ContentScale.Fit
                         )
@@ -394,26 +516,28 @@ fun ClipboardListItem(
                                     bitmap = faviconBitmap!!.asImageBitmap(),
                                     contentDescription = null,
                                     modifier = Modifier
-                                        .size(24.dp)
+                                        .size(20.dp)
                                         .clip(RoundedCornerShape(4.dp))
                                 )
                             } else {
-                                Text("🌐", style = MaterialTheme.typography.titleMedium)
+                                Text("🌐", style = MaterialTheme.typography.bodyMedium)
                             }
-                            Spacer(modifier = Modifier.width(12.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
                             Column {
-                                Text(
-                                    text = urlTitle,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                if (urlTitle.isNotBlank()) {
+                                    Text(
+                                        text = urlTitle,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                                 Text(
                                     text = urlText,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary,
-                                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -422,8 +546,9 @@ fun ClipboardListItem(
                     } else {
                         Text(
                             text = item.content,
-                            style = MaterialTheme.typography.bodyLarge,
-                            maxLines = 2,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 3,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
@@ -432,32 +557,31 @@ fun ClipboardListItem(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
                         onClick = onToggleLocalOnly,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
                             imageVector = if (item.localOnly) Icons.Default.Lock else Icons.Default.LockOpen,
                             contentDescription = if (item.localOnly) "Shared sync disabled" else "Keep on this device only",
-                            tint = if (item.localOnly) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                            tint = if (item.localOnly) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(18.dp)
                         )
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
                     if (isSensitive) {
                         IconButton(
                             onClick = onToggleVisibility,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(36.dp)
                         ) {
                             Icon(
                                 imageVector = if (isVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                                 contentDescription = if (isVisible) "Hide password" else "Show password",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(18.dp)
-                              )
+                            )
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
                     }
                     IconButton(
                         onClick = onDelete,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Delete,
@@ -468,24 +592,31 @@ fun ClipboardListItem(
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(8.dp))
+
+            Spacer(modifier = Modifier.height(10.dp))
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "from ${item.source}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.weight(1f, fill = false),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    Text(
+                        text = "from ${item.source}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Text(
                     text = displayTime,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 8.dp),
                     maxLines = 1
                 )
@@ -493,3 +624,4 @@ fun ClipboardListItem(
         }
     }
 }
+
