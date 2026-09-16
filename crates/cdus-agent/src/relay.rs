@@ -4,8 +4,8 @@ use cdus_common::IpcMessage;
 use flume::{Receiver, Sender};
 use serde::{Deserialize, Serialize};
 use std::thread;
-use std::time::Duration;
-use tracing::{error, info};
+use std::time::{Duration, Instant};
+use tracing::{debug, error, info, warn};
 use tungstenite::{connect, stream::MaybeTlsStream, Message};
 use ureq;
 
@@ -41,6 +41,7 @@ pub struct RevocationEvent {
     pub revoked_uuid: String,
 }
 
+#[derive(Clone)]
 pub struct RelayManager {
     node_id: String,
     relay_url: String,
@@ -172,11 +173,17 @@ impl RelayManager {
             + &self.node_id;
 
         let tx = self.tx.clone();
+        let manager = self.clone();
 
         info!("Starting background relay signaling loop for {}", ws_url);
 
         thread::spawn(move || {
             loop {
+                // Ensure device registration is refreshed/retried before or with signaling connection
+                if let Err(e) = manager.register() {
+                    debug!("Relay: Registration retry probe: {}", e);
+                }
+
                 info!("Relay: Attempting connection to {}...", ws_url);
                 match connect(&ws_url) {
                     Ok((mut socket, _response)) => {
@@ -186,10 +193,18 @@ impl RelayManager {
                             error: None,
                         });
 
-                        // Set read timeout
-                        if let MaybeTlsStream::Plain(s) = socket.get_mut() {
-                            let _ = s.set_read_timeout(Some(Duration::from_millis(100)));
+                        // Set read timeout on underlying socket (works for Plain or Rustls TLS)
+                        match socket.get_mut() {
+                            MaybeTlsStream::Plain(s) => {
+                                let _ = s.set_read_timeout(Some(Duration::from_millis(100)));
+                            }
+                            MaybeTlsStream::Rustls(s) => {
+                                let _ = s.sock.set_read_timeout(Some(Duration::from_millis(100)));
+                            }
+                            _ => {}
                         }
+
+                        let mut last_ping = Instant::now();
 
                         loop {
                             // 1. Check for incoming messages
@@ -198,6 +213,11 @@ impl RelayManager {
                                     let data = match msg {
                                         Message::Binary(data) => Some(data),
                                         Message::Text(text) => Some(text.into_bytes()),
+                                        Message::Ping(payload) => {
+                                            let _ = socket.send(Message::Pong(payload));
+                                            let _ = socket.flush();
+                                            None
+                                        }
                                         _ => None,
                                     };
 
@@ -254,14 +274,34 @@ impl RelayManager {
                                 }
                             }
 
-                            // 2. Check for outgoing messages
+                            // 2. Periodic client heartbeat ping to keep connection alive and detect dead sockets
+                            if last_ping.elapsed() >= Duration::from_secs(30) {
+                                last_ping = Instant::now();
+                                if let Err(e) = socket.send(Message::Ping(vec![])) {
+                                    let err_msg = format!("Ping failed: {}", e);
+                                    error!("Relay: {}", err_msg);
+                                    let _ = tx.send(IpcMessage::RelayStatus {
+                                        connected: false,
+                                        error: Some(err_msg),
+                                    });
+                                    break;
+                                }
+                                let _ = socket.flush();
+                            }
+
+                            // 3. Check for outgoing messages
+                            let mut sent_any = false;
                             while let Ok(msg) = outgoing_rx.try_recv() {
                                 if let Ok(json_msg) = serde_json::to_string(&msg) {
                                     if let Err(e) = socket.send(Message::Text(json_msg)) {
                                         error!("Relay: Failed to send message: {}", e);
                                         break;
                                     }
+                                    sent_any = true;
                                 }
+                            }
+                            if sent_any {
+                                let _ = socket.flush();
                             }
                         }
                     }
@@ -359,6 +399,31 @@ mod tests {
         });
 
         relay.revoke_device("target-node".to_string()).unwrap();
+        mock.assert();
+    }
+
+    #[test]
+    fn test_register_device() {
+        let server = MockServer::start();
+        let (tx, _) = flume::unbounded();
+        let relay = RelayManager {
+            node_id: "node-1".to_string(),
+            relay_url: server.base_url(),
+            tx,
+            outgoing_tx: flume::unbounded().0,
+        };
+
+        let mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/register")
+                .json_body(serde_json::json!({
+                    "uuid": "node-1",
+                    "public_key": "node-1"
+                }));
+            then.status(201);
+        });
+
+        assert!(relay.register().is_ok());
         mock.assert();
     }
 }

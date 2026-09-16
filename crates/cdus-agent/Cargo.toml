@@ -31,7 +31,7 @@ hex = "0.4"
 snow = "0.9"
 keyring = "2.3"
 anyhow = "1.0"
-tungstenite = "0.21"
+tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
 ureq = { version = "2.9", features = ["json"] }
 base64 = "0.22"
 tokio = { version = "1.36", features = ["rt", "net", "time", "sync", "macros"] }
