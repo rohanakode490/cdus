@@ -107,7 +107,6 @@ impl request_response::Codec for MessagePackCodec {
 mod tests {
     use super::*;
     use futures::io::Cursor;
-    use libp2p::request_response::Codec as _;
 
     #[tokio::test]
     async fn test_message_pack_codec_roundtrip() {

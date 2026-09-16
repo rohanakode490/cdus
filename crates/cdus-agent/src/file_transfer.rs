@@ -1993,9 +1993,7 @@ mod tests {
             )?;
         }
 
-        // Create dummy .part file
-        let part_path = PathBuf::from("/some/path/file.txt.cdus.part");
-        // We can't actually create it at that path if it's invalid, let's use temp dir
+        // Create dummy .part file in temp dir
         let real_path = dir.path().join("stale.txt");
         let real_part_path = real_path.with_extension("cdus.part");
         std::fs::write(&real_part_path, "partial data")?;
@@ -2104,7 +2102,7 @@ mod tests {
         let dir = tempdir()?;
         let store = Arc::new(Store::init(dir.path())?);
         let (prog_tx, _prog_rx) = flume::unbounded();
-        let manager = Arc::new(FileTransferManager::new(Arc::clone(&store), prog_tx));
+        let _manager = Arc::new(FileTransferManager::new(Arc::clone(&store), prog_tx));
 
         let pool = threadpool::ThreadPool::new(4);
         let (start_tx, start_rx) = flume::unbounded();

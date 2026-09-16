@@ -7,10 +7,9 @@ mod tests {
     use crate::store::Store;
     use crate::turn_manager::TurnManager;
     use crate::{daemon_loop, EVENT_BUS};
-    use cdus_common::{IpcMessage, ProgressEvent, SyncMessage, TransportType};
+    use cdus_common::{IpcMessage, SyncMessage, TransportType};
     use parking_lot::Mutex;
     use std::collections::HashMap;
-    use std::net::SocketAddr;
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
@@ -1173,7 +1172,7 @@ mod tests {
     fn test_local_only_clipboard_filtering() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::init(dir.path()).unwrap());
-        let (tx, rx) = flume::unbounded();
+        let (tx, _rx) = flume::unbounded();
         let lw = Arc::new(Mutex::new(None));
         let dd = Arc::new(Mutex::new(Vec::new()));
         let ap = Arc::new(Mutex::new(None));
