@@ -1,21 +1,24 @@
 package io.cdus.app.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Done
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -44,25 +47,30 @@ fun OnboardingOverlay(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(24.dp),
+                    .padding(horizontal = 24.dp, vertical = 20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
                 // Top Progress indicator
                 Row(
                     modifier = Modifier
-                        .padding(top = 32.dp),
+                        .padding(top = 28.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     repeat(3) { index ->
+                        val isCurrent = step == index + 1
+                        val isPassed = step > index + 1
                         Box(
                             modifier = Modifier
-                                .height(8.dp)
-                                .width(if (step == index + 1) 24.dp else 8.dp)
-                                .clip(CircleShape)
+                                .height(4.dp)
+                                .width(if (isCurrent) 32.dp else 16.dp)
+                                .clip(RoundedCornerShape(2.dp))
                                 .background(
-                                    if (step == index + 1) MaterialTheme.colorScheme.primary 
-                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.2f)
+                                    when {
+                                        isCurrent -> MaterialTheme.colorScheme.primary
+                                        isPassed -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                                        else -> MaterialTheme.colorScheme.outlineVariant
+                                    }
                                 )
                         )
                     }
@@ -83,29 +91,40 @@ fun OnboardingOverlay(
                 }
 
                 // Bottom Action buttons
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 32.dp),
-                    horizontalArrangement = Arrangement.Center
+                        .padding(bottom = 24.dp)
                 ) {
                     if (step < 3) {
                         Button(
                             onClick = { step++ },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            )
                         ) {
-                            Text("Next", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Text("Continue", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.width(8.dp))
                             Icon(Icons.Default.ChevronRight, contentDescription = null)
                         }
                     } else {
                         Button(
                             onClick = onDismiss,
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            )
                         ) {
-                            Text("Get Started", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Text("Enter Unified Mesh", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.width(8.dp))
                             Icon(Icons.Default.Done, contentDescription = null)
                         }
@@ -123,45 +142,39 @@ fun WelcomeStep() {
         verticalArrangement = Arrangement.Center,
         modifier = Modifier.padding(16.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .size(120.dp)
-                .clip(CircleShape)
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            Color(0xFF24C8DB),
-                            Color(0xFF00838F)
-                        )
-                    )
-                ),
-            contentAlignment = Alignment.Center
+        Surface(
+            modifier = Modifier.size(88.dp),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
-            Icon(
-                Icons.Default.Info, 
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(64.dp)
-            )
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Default.Hub, 
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(44.dp)
+                )
+            }
         }
         
         Spacer(Modifier.height(32.dp))
         
         Text(
-            text = "Welcome to CDUS",
-            fontSize = 28.sp,
+            text = "Cross-Device Unified System",
+            style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onBackground
         )
         
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
         
         Text(
-            text = "Your secure, peer-to-peer system that unifies all your personal devices into a single logical environment.",
-            fontSize = 16.sp,
+            text = "CDUS binds your phones, tablets, and laptops into a single logical environment with zero cloud intermediaries.",
+            style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+            color = MaterialTheme.colorScheme.outline,
             lineHeight = 22.sp
         )
     }
@@ -174,45 +187,39 @@ fun ConnectStep() {
         verticalArrangement = Arrangement.Center,
         modifier = Modifier.padding(16.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .size(120.dp)
-                .clip(CircleShape)
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            Color(0xFF4DD0E1),
-                            Color(0xFF004D40)
-                        )
-                    )
-                ),
-            contentAlignment = Alignment.Center
+        Surface(
+            modifier = Modifier.size(88.dp),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
-            Icon(
-                Icons.Default.Devices, 
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(64.dp)
-            )
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Default.Devices, 
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(44.dp)
+                )
+            }
         }
         
         Spacer(Modifier.height(32.dp))
         
         Text(
-            text = "Connect Your Devices",
-            fontSize = 28.sp,
+            text = "Peer-to-Peer Mesh",
+            style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onBackground
         )
         
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
         
         Text(
-            text = "Sync occurs directly between your devices over local networks (or fallback secure relay) using encrypted connections.",
-            fontSize = 16.sp,
+            text = "Transfers run over high-speed local Wi-Fi with automatic fallback to encrypted TURN relays when traversing separate networks.",
+            style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+            color = MaterialTheme.colorScheme.outline,
             lineHeight = 22.sp
         )
     }
@@ -226,50 +233,95 @@ fun FeaturesStep() {
         modifier = Modifier.padding(16.dp)
     ) {
         Text(
-            text = "Features & Permissions",
-            fontSize = 28.sp,
+            text = "Engine Capabilities",
+            style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onBackground
         )
         
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(24.dp))
 
         // Features list
-        FeatureRow(icon = "📋", title = "Clipboard Synchronization", desc = "Automatically syncs text and images securely across devices.")
-        Spacer(Modifier.height(16.dp))
-        FeatureRow(icon = "📁", title = "P2P File Transfer", desc = "Send files of any size directly, with resume support.")
-        Spacer(Modifier.height(16.dp))
-        FeatureRow(icon = "🔒", title = "End-to-End Encryption", desc = "Your data is secured using the Noise Protocol before it leaves.")
+        FeatureRow(
+            icon = Icons.Default.ContentPaste,
+            title = "Zero-Cloud Clipboard",
+            desc = "Instant bi-directional text and image synchronization directly between paired nodes."
+        )
+        Spacer(Modifier.height(12.dp))
+        FeatureRow(
+            icon = Icons.Default.FolderZip,
+            title = "Resumable File Stream",
+            desc = "Chunked BLAKE3-verified transfers with automatic pause and resume across network changes."
+        )
+        Spacer(Modifier.height(12.dp))
+        FeatureRow(
+            icon = Icons.Default.Security,
+            title = "Noise Protocol Security",
+            desc = "Authenticated Noise XX key exchange and IK reconnections keep data strictly confidential."
+        )
         
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(20.dp))
 
         Surface(
-            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
-            shape = RoundedCornerShape(12.dp)
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         ) {
             Text(
-                text = "On the next screen, please grant necessary permissions to enable clipboard syncing.",
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                text = "Clipboard listening and foreground sync will run in a lightweight background service.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(16.dp)
+                modifier = Modifier.padding(12.dp)
             )
         }
     }
 }
 
 @Composable
-fun FeatureRow(icon: String, title: String, desc: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Top
+fun FeatureRow(icon: ImageVector, title: String, desc: String) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Text(icon, fontSize = 24.sp)
-        Spacer(Modifier.width(16.dp))
-        Column {
-            Text(title, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = MaterialTheme.colorScheme.onBackground)
-            Text(desc, fontSize = 13.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.size(36.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = desc,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
         }
     }
 }

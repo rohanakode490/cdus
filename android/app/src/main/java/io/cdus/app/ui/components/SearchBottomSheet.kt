@@ -1,10 +1,12 @@
 package io.cdus.app.ui.components
 
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
@@ -100,33 +102,60 @@ fun SearchBottomSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surface
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp)
+                .padding(horizontal = 20.dp)
                 .padding(bottom = 32.dp)
         ) {
-            Text(
-                text = "Search Everything",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
+            Column(modifier = Modifier.padding(bottom = 12.dp)) {
+                Text(
+                    text = "Mesh Search",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Query paired devices, clipboard history, and shared transfers",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
 
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                placeholder = { Text("Search clipboard, files, devices...") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                placeholder = {
+                    Text(
+                        "Search clipboard, files, or peers...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Search,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                },
                 trailingIcon = {
                     if (query.isNotEmpty()) {
-                        IconButton(onClick = { query = "" }) {
+                        IconButton(
+                            onClick = { query = "" },
+                            modifier = Modifier.size(48.dp)
+                        ) {
                             Icon(Icons.Default.Close, contentDescription = "Clear query")
                         }
                     }
                 },
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+                ),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
@@ -138,36 +167,64 @@ fun SearchBottomSheet(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(200.dp),
+                            .height(180.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        CircularProgressIndicator()
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.primary,
+                            strokeWidth = 3.dp
+                        )
                     }
                 }
                 is SearchScreenState.Empty -> {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(200.dp),
+                            .height(180.dp)
+                            .padding(16.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = "No matching results found.",
-                            color = MaterialTheme.colorScheme.outline
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = if (query.isEmpty()) "Start typing to search" else "No matching records found",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = if (query.isEmpty()) 
+                                    "Search by text snippet, filename, extension (.pdf, .png), or peer label."
+                                else 
+                                    "No items matched \"$query\". Check spelling or search by file extension.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
                     }
                 }
                 is SearchScreenState.Error -> {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(200.dp),
+                            .height(180.dp)
+                            .padding(16.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = state.message,
-                            color = MaterialTheme.colorScheme.error
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "Search failed",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.error,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = state.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
                     }
                 }
                 is SearchScreenState.Success -> {
@@ -182,17 +239,18 @@ fun SearchBottomSheet(
                         grouped.forEach { (type, items) ->
                             item {
                                 val groupTitle = when (type) {
-                                    "clipboard" -> "Clipboard History"
-                                    "file" -> "Files"
-                                    "device" -> "Devices"
+                                    "clipboard" -> "Clipboard Records"
+                                    "file" -> "File Transfers"
+                                    "device" -> "Paired Devices"
                                     else -> "Other"
                                 }
                                 Text(
                                     text = groupTitle.uppercase(),
-                                    fontSize = 11.sp,
+                                    style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(vertical = 4.dp)
+                                    letterSpacing = 1.sp,
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
                                 )
                             }
 
@@ -229,8 +287,13 @@ fun SearchBottomSheet(
                                                 }
                                             }
                                         },
+                                    shape = RoundedCornerShape(10.dp),
                                     colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                        containerColor = MaterialTheme.colorScheme.surface
+                                    ),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                                     )
                                 ) {
                                     Row(
@@ -239,21 +302,33 @@ fun SearchBottomSheet(
                                             .padding(12.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(
-                                            text = item.icon,
-                                            fontSize = 24.sp,
-                                            modifier = Modifier.padding(end = 12.dp)
-                                        )
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                            modifier = Modifier.size(40.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Text(
+                                                    text = item.icon,
+                                                    fontSize = 20.sp
+                                                )
+                                            }
+                                        }
+                                        Spacer(Modifier.width(12.dp))
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
                                                 text = item.title,
+                                                style = MaterialTheme.typography.bodyMedium,
                                                 fontWeight = FontWeight.SemiBold,
-                                                fontSize = 14.sp
+                                                maxLines = 1,
+                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                             )
                                             Text(
                                                 text = item.subtitle,
-                                                fontSize = 12.sp,
-                                                color = MaterialTheme.colorScheme.outline
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.outline,
+                                                maxLines = 1,
+                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                             )
                                         }
                                     }
