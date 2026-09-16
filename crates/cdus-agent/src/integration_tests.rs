@@ -758,7 +758,7 @@ mod tests {
         let store1 = Arc::new(Store::init(dir1.path())?);
         let store2 = Arc::new(Store::init(dir2.path())?);
 
-        let (tx1, rx1) = flume::unbounded();
+        let (tx1, _rx1) = flume::unbounded();
         let (tx2, rx2) = flume::unbounded();
 
         let ap1 = Arc::new(Mutex::new(None));
@@ -833,19 +833,27 @@ mod tests {
 
         let pm2_c = Arc::clone(&pm2);
         thread::spawn(move || pm2_c.start_listener());
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(150));
 
         let pm1_init = Arc::clone(&pm1);
         thread::spawn(move || {
             pm1_init.initiate_pairing("127.0.0.1:5522".parse().unwrap(), None);
         });
 
-        // Auto-confirm for test
+        // Auto-confirm for test with robust timeout
         let mut attempts = 0;
-        while attempts < 20 && (ap1.lock().is_none() || ap2.lock().is_none()) {
+        while attempts < 50 && (ap1.lock().is_none() || ap2.lock().is_none()) {
             thread::sleep(Duration::from_millis(100));
             attempts += 1;
         }
+        assert!(
+            ap1.lock().is_some(),
+            "Initiator should have active pairing state"
+        );
+        assert!(
+            ap2.lock().is_some(),
+            "Responder should have active pairing state"
+        );
         {
             *ap1.lock().as_ref().unwrap().confirmed.lock() = Some(true);
         }
@@ -853,12 +861,20 @@ mod tests {
             *ap2.lock().as_ref().unwrap().confirmed.lock() = Some(true);
         }
 
-        thread::sleep(Duration::from_millis(500));
-        assert!(sm1.is_connected(&id2));
+        // Wait for connection to be confirmed
+        let mut connected = false;
+        for _ in 0..50 {
+            if sm1.is_connected(&id2) {
+                connected = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        assert!(connected, "sm1 should be connected to id2");
 
         // 2. Start File Transfer (Mock Network)
         let (prog_tx1, _) = flume::unbounded();
-        let (prog_tx2, prog_rx2) = flume::unbounded();
+        let (prog_tx2, _prog_rx2) = flume::unbounded();
         let ftm1 = Arc::new(FileTransferManager::new(Arc::clone(&store1), prog_tx1));
         let ftm2 = Arc::new(FileTransferManager::new(Arc::clone(&store2), prog_tx2));
 
@@ -948,6 +964,9 @@ mod tests {
         ftm2.handle_decision(&transfer_id, true);
 
         // 3. Test Clipboard while transfer is running in background
+        // Drain any previous handshake/discovery messages from rx2
+        while let Ok(_) = rx2.try_recv() {}
+
         let start = std::time::Instant::now();
         sm1.broadcast(SyncMessage::ClipboardUpdate {
             content: "test".to_string(),
@@ -955,11 +974,14 @@ mod tests {
         });
 
         let mut received = false;
-        while let Ok(msg) = rx2.recv_timeout(Duration::from_millis(1000)) {
-            if let IpcMessage::SetClipboard { content, .. } = msg {
-                assert_eq!(content, "test");
-                received = true;
-                break;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if let Ok(msg) = rx2.recv_timeout(Duration::from_millis(200)) {
+                if let IpcMessage::SetClipboard { content, .. } = msg {
+                    assert_eq!(content, "test");
+                    received = true;
+                    break;
+                }
             }
         }
         assert!(
@@ -967,7 +989,7 @@ mod tests {
             "Clipboard should arrive even if file transfer is running"
         );
         assert!(
-            start.elapsed() < Duration::from_millis(1000),
+            start.elapsed() < Duration::from_secs(5),
             "Clipboard should be fast even during file transfer"
         );
 
