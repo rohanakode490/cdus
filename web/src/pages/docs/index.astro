@@ -1,0 +1,341 @@
+---
+import { getCollection, render } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+
+const allDocs = await getCollection('docs');
+const sortedDocs = allDocs.sort((a, b) => a.data.order - b.data.order);
+const doc = sortedDocs.find((d) => d.id === 'getting-started') ?? sortedDocs[0];
+const { Content } = await render(doc);
+
+const canonicalUrl = new URL('/docs', Astro.site).href;
+const breadcrumbLd = {
+  '@context': 'https://schema.org',
+  '@type': 'BreadcrumbList',
+  itemListElement: [
+    {
+      '@type': 'ListItem',
+      position: 1,
+      name: 'Home',
+      item: new URL('/', Astro.site).href,
+    },
+    {
+      '@type': 'ListItem',
+      position: 2,
+      name: 'Documentation',
+      item: canonicalUrl,
+    },
+  ],
+};
+
+const articleLd = {
+  '@context': 'https://schema.org',
+  '@type': 'Article',
+  headline: doc.data.title,
+  description: doc.data.description,
+  datePublished: doc.data.publishedAt ? doc.data.publishedAt.toISOString() : undefined,
+  dateModified: doc.data.updatedAt ? doc.data.updatedAt.toISOString() : undefined,
+  mainEntityOfPage: canonicalUrl,
+  author: {
+    '@type': 'Organization',
+    name: 'CDUS Core Engineering Team',
+    url: 'https://cdus.dev',
+  },
+};
+---
+
+<BaseLayout
+  title="Documentation | CDUS"
+  description={doc.data.description}
+  type="article"
+  publishedAt={doc.data.publishedAt}
+  updatedAt={doc.data.updatedAt}
+  jsonLd={[breadcrumbLd, articleLd]}
+>
+  <div class="docs-wrapper">
+    <!-- Left Sidebar: Documentation Index -->
+    <aside class="docs-sidebar" aria-label="Documentation Index">
+      <div class="sidebar-header">
+        <span class="sidebar-label">Docs Index</span>
+      </div>
+      <nav class="sidebar-nav" aria-label="Documentation Navigation">
+        <ul class="nav-list">
+          {sortedDocs.map((item) => {
+            const isActive = item.id === doc.id;
+            return (
+              <li class="nav-item">
+                <a
+                  href={`/docs/${item.id}`}
+                  class={`nav-link ${isActive ? 'active' : ''}`}
+                  aria-current={isActive ? 'page' : undefined}
+                >
+                  {item.data.title}
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
+
+      <div class="sidebar-footer">
+        <a href="/download" class="sidebar-download-link">
+          <span class="status-dot online"></span>
+          <span>Download Client</span>
+        </a>
+      </div>
+    </aside>
+
+    <!-- Main Content Area: Centered in the middle -->
+    <div class="docs-main">
+      <article class="docs-article">
+        <nav class="breadcrumbs" aria-label="Breadcrumb">
+          <ol>
+            <li><a href="/">Home</a></li>
+            <li><span class="separator">/</span></li>
+            <li aria-current="page">Documentation</li>
+          </ol>
+        </nav>
+
+        <div class="doc-content">
+          <Content />
+        </div>
+
+        <footer class="doc-footer">
+          <div class="doc-footer-meta">
+            {doc.data.publishedAt && (
+              <span>Published: {new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' }).format(doc.data.publishedAt)}</span>
+            )}
+          </div>
+          <div class="doc-footer-actions">
+            <a href="https://github.com/rohanakode/cdus" target="_blank" rel="noopener" class="edit-link">
+              View Source on GitHub
+            </a>
+          </div>
+        </footer>
+      </article>
+    </div>
+  </div>
+</BaseLayout>
+
+<style>
+  .docs-wrapper {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    min-height: calc(100vh - var(--header-height));
+    width: 100%;
+  }
+
+  /* Left Sidebar - docked to far left, only separated by a single line */
+  .docs-sidebar {
+    grid-column: 1;
+    position: sticky;
+    top: var(--header-height);
+    align-self: start;
+    height: calc(100vh - var(--header-height));
+    overflow-y: auto;
+    padding: var(--space-8) var(--space-6) var(--space-8) var(--space-8);
+    background: transparent;
+    border: none;
+    border-right: 1px solid var(--cdus-dark-border);
+    border-radius: 0;
+  }
+
+  .sidebar-header {
+    margin-bottom: var(--space-4);
+    padding-bottom: var(--space-2);
+  }
+
+  .sidebar-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    color: var(--cdus-text-muted);
+  }
+
+  .nav-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: 0;
+    margin: 0;
+  }
+
+  .nav-link {
+    display: block;
+    padding: 0.45rem 0.65rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.9rem;
+    color: var(--cdus-text-secondary);
+    transition: color var(--duration-fast) var(--ease-standard);
+  }
+
+  .nav-link:hover {
+    color: var(--cdus-text-primary);
+  }
+
+  .nav-link.active {
+    color: var(--cdus-cyan);
+    font-weight: 600;
+  }
+
+  .sidebar-footer {
+    margin-top: var(--space-8);
+    padding-top: var(--space-4);
+  }
+
+  .sidebar-download-link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 0.82rem;
+    color: var(--cdus-text-secondary);
+  }
+
+  .sidebar-download-link:hover {
+    color: var(--cdus-cyan);
+  }
+
+  /* Main Content Area - Horizontally centered in the middle */
+  .docs-main {
+    grid-column: 2;
+    display: flex;
+    justify-content: center;
+    padding: var(--space-8) var(--space-8) var(--space-20) var(--space-8);
+    width: 100%;
+    min-width: 0;
+  }
+
+  .docs-article {
+    width: 100%;
+    max-width: 800px;
+    min-width: 0;
+  }
+
+  /* Breadcrumbs */
+  .breadcrumbs {
+    margin-bottom: var(--space-6);
+  }
+
+  .breadcrumbs ol {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 0.85rem;
+    color: var(--cdus-text-muted);
+  }
+
+  .breadcrumbs a {
+    color: var(--cdus-text-secondary);
+  }
+
+  .breadcrumbs a:hover {
+    color: var(--cdus-cyan);
+  }
+
+  .breadcrumbs .separator {
+    color: var(--cdus-dark-border-subtle);
+  }
+
+  .doc-content :global(h1) {
+    font-size: clamp(2rem, 3.5vw, 2.75rem);
+    margin-bottom: var(--space-6);
+    color: var(--cdus-text-primary);
+  }
+
+  .doc-content :global(h2) {
+    font-size: clamp(1.4rem, 2.5vw, 1.85rem);
+    margin-top: var(--space-12);
+    margin-bottom: var(--space-4);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--cdus-dark-border);
+    color: var(--cdus-text-primary);
+  }
+
+  .doc-content :global(h3) {
+    font-size: 1.25rem;
+    margin-top: var(--space-8);
+    margin-bottom: var(--space-2);
+    color: var(--cdus-text-primary);
+  }
+
+  .doc-content :global(p) {
+    margin-bottom: var(--space-4);
+    line-height: 1.7;
+    color: var(--cdus-text-secondary);
+  }
+
+  .doc-content :global(ul),
+  .doc-content :global(ol) {
+    margin-bottom: var(--space-6);
+    padding-left: var(--space-6);
+    color: var(--cdus-text-secondary);
+  }
+
+  .doc-content :global(li) {
+    margin-bottom: var(--space-2);
+    line-height: 1.6;
+  }
+
+  .doc-content :global(table) {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: var(--space-6);
+    margin-bottom: var(--space-8);
+    font-size: 0.9rem;
+  }
+
+  .doc-content :global(th),
+  .doc-content :global(td) {
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--cdus-dark-border);
+    text-align: left;
+  }
+
+  .doc-content :global(th) {
+    background: var(--cdus-dark-surface);
+    color: var(--cdus-text-primary);
+    font-weight: 600;
+  }
+
+  .doc-content :global(td) {
+    background: #15191A;
+    color: var(--cdus-text-secondary);
+  }
+
+  .doc-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: var(--space-16);
+    padding-top: var(--space-6);
+    border-top: 1px solid var(--cdus-dark-border);
+    font-size: 0.85rem;
+    color: var(--cdus-text-muted);
+  }
+
+  @media (max-width: 860px) {
+    .docs-wrapper {
+      grid-template-columns: 1fr;
+    }
+
+    .docs-sidebar {
+      grid-column: 1;
+      position: static;
+      height: auto;
+      border-right: none;
+      border-bottom: 1px solid var(--cdus-dark-border);
+      padding: var(--space-6);
+    }
+
+    .docs-main {
+      grid-column: 1;
+      padding: var(--space-6);
+    }
+
+    .docs-article {
+      max-width: 100%;
+    }
+  }
+</style>

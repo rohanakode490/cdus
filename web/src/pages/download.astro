@@ -1,0 +1,197 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { Icon } from 'astro-icon/components';
+import { platforms } from '../data/platforms';
+
+const pageTitle = 'Download CDUS | Linux, Windows, macOS & Android';
+const pageDescription = `Download CDUS for ${platforms.map((p) => p.name).join(', ')}. Fast, secure, open-source peer-to-peer sync.`;
+
+const softwareLd = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'CDUS',
+  operatingSystem: platforms.map((p) => p.name).join(', '),
+  applicationCategory: 'ProductivityApplication',
+  offers: {
+    '@type': 'Offer',
+    price: '0.00',
+    priceCurrency: 'USD',
+  },
+  downloadUrl: 'https://github.com/rohanakode490/cdus/releases',
+  softwareVersion: 'v0.1.0',
+};
+---
+
+<BaseLayout title={pageTitle} description={pageDescription} jsonLd={softwareLd}>
+  <section class="section">
+    <div class="container container-prose text-center">
+      <div class="badge" style="margin-bottom: var(--space-4);">
+        <span>Latest Release: v0.1.0 Beta</span>
+      </div>
+      <h1>Download CDUS</h1>
+      <p class="lead">
+        Choose the native package for your operating system. All releases are signed and include the complete native Rust daemon and GUI frontend.
+      </p>
+    </div>
+
+    <div class="container download-grid-container">
+      <div class="download-grid">
+        {
+          platforms.map((platform) => (
+            <div id={platform.id} class="card download-card">
+              <div class="download-card-header">
+                <div class="platform-icon-wrapper">
+                  <Icon name={platform.icon} class="platform-icon-svg" />
+                </div>
+                <div>
+                  <h3>{platform.name}</h3>
+                  <span class="os-spec">{platform.osSpec}</span>
+                </div>
+              </div>
+              <p>{platform.description}</p>
+              <div class="download-actions">
+                {platform.actions.map((action) => (
+                  <a href={action.href} class={`btn btn-${action.variant} btn-sm`}>
+                    {action.label}
+                  </a>
+                ))}
+              </div>
+              <div class="install-snippet">
+                <code>{platform.installSnippet}</code>
+              </div>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+
+    <!-- Checksum Verification -->
+    <div class="container container-prose" style="margin-top: var(--space-16);">
+      <div class="card">
+        <h3>Cryptographic Package Verification</h3>
+        <p>
+          Every build artifact published to GitHub Releases is accompanied by a <code>SHA256SUMS.txt</code> manifest and GPG signature. Verify the integrity of your download before running:
+        </p>
+        <pre><code>sha256sum -c SHA256SUMS.txt --ignore-missing</code></pre>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .download-grid-container {
+    margin-top: var(--space-12);
+    max-width: 1080px;
+  }
+
+  .download-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-8);
+    align-items: stretch;
+  }
+
+  @media (max-width: 768px) {
+    .download-grid {
+      grid-template-columns: 1fr;
+      gap: var(--space-6);
+    }
+  }
+
+  .download-card {
+    display: flex;
+    flex-direction: column;
+    padding: var(--space-8);
+    height: 100%;
+    min-width: 0;
+  }
+
+  .download-card-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    margin-bottom: var(--space-4);
+  }
+
+  .platform-icon-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-sm);
+    background: var(--cdus-dark-elevated);
+    border: 1px solid var(--cdus-dark-border);
+    flex-shrink: 0;
+  }
+
+  .platform-icon-svg {
+    width: 28px;
+    height: 28px;
+    color: var(--cdus-cyan);
+  }
+
+  .os-spec {
+    display: block;
+    font-size: 0.825rem;
+    color: var(--cdus-text-muted);
+    line-height: 1.4;
+    margin-top: 2px;
+  }
+
+  .download-card p {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: var(--cdus-text-secondary);
+    margin-bottom: var(--space-6);
+  }
+
+  .download-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+    margin-top: auto;
+    margin-bottom: var(--space-4);
+  }
+
+  @media (max-width: 520px) {
+    .download-actions {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .download-actions .btn {
+    width: 100%;
+    text-align: center;
+    justify-content: center;
+    font-size: 0.875rem;
+    padding: 0.6rem 0.9rem;
+    height: 2.5rem;
+    white-space: nowrap;
+    box-sizing: border-box;
+  }
+
+  .install-snippet {
+    background: #141819;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--cdus-dark-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    min-height: 2.5rem;
+    box-sizing: border-box;
+  }
+
+  .install-snippet code {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--cdus-text-secondary);
+    font-size: 0.8rem;
+    white-space: nowrap;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+  }
+</style>

@@ -1,0 +1,168 @@
+---
+const currentYear = 2026;
+---
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div class="footer-brand">
+      <div class="footer-logo-row">
+        <img src="/cdus-logo.svg" alt="" width="28" height="28" class="footer-icon" />
+        <span class="footer-title">CDUS</span>
+      </div>
+      <p class="footer-tagline">
+        Cross-Device Unified System. Direct peer-to-peer sync of clipboard, files, and sessions with native Rust performance and zero cloud reliance.
+      </p>
+      <div class="footer-status">
+        <span class="status-dot online"></span>
+        <span class="status-text">P2P Mesh Direct • BLAKE3 Verified • Noise XX/IK</span>
+      </div>
+    </div>
+
+    <div class="footer-links-grid">
+      <div class="footer-column">
+        <h4>Product</h4>
+        <ul>
+          <li><a href="/download">Download Client</a></li>
+          <li><a href="/#how-it-works">How It Works</a></li>
+          <li><a href="/#comparison">System Comparison</a></li>
+          <li><a href="https://github.com/rohanakode490/cdus/releases" target="_blank" rel="noopener">Release Notes</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-column">
+        <h4>Architecture</h4>
+        <ul>
+          <li><a href="/security">Security Model</a></li>
+          <li><a href="/docs/architecture">Thread Pipeline Engine</a></li>
+          <li><a href="/docs/pairing-and-security">Noise Protocol Handshake</a></li>
+          <li><a href="https://github.com/rohanakode490/cdus" target="_blank" rel="noopener">Source Repository</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-column">
+        <h4>Resources</h4>
+        <ul>
+          <li><a href="/docs/getting-started">Documentation</a></li>
+          <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+          <li><a href="/privacy">Privacy Policy</a></li>
+          <li><a href="https://github.com/rohanakode490/cdus/issues" target="_blank" rel="noopener">Issue Tracker</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="container footer-bottom">
+    <p class="copyright">
+      &copy; {currentYear} CDUS Open Source Project. Released under MIT &amp; Apache 2.0.
+    </p>
+    <div class="theme-info">
+      <span>Canonical Desktop Theme Standard</span>
+    </div>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    margin-top: auto;
+    background-color: #141819;
+    border-top: 1px solid var(--cdus-dark-border);
+    padding-top: var(--space-16);
+    padding-bottom: var(--space-8);
+  }
+
+  .footer-inner {
+    display: grid;
+    grid-template-columns: 1.5fr 2fr;
+    gap: var(--space-12);
+    margin-bottom: var(--space-12);
+  }
+
+  .footer-logo-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+  }
+
+  .footer-title {
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: var(--cdus-text-primary);
+  }
+
+  .footer-tagline {
+    font-size: 0.9375rem;
+    color: var(--cdus-text-secondary);
+    line-height: 1.6;
+    max-width: 380px;
+    margin-bottom: var(--space-4);
+  }
+
+  .footer-status {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0.35rem 0.75rem;
+    border-radius: var(--radius-pill);
+    background: var(--cdus-dark-surface);
+    border: 1px solid var(--cdus-dark-border);
+    font-size: 0.78rem;
+    color: var(--cdus-text-secondary);
+  }
+
+  .footer-links-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-6);
+  }
+
+  .footer-column h4 {
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--cdus-text-muted);
+    margin-bottom: var(--space-3);
+  }
+
+  .footer-column ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .footer-column a {
+    font-size: 0.9375rem;
+    color: var(--cdus-text-secondary);
+    transition: color var(--duration-fast) var(--ease-standard);
+  }
+
+  .footer-column a:hover {
+    color: var(--cdus-cyan);
+  }
+
+  .footer-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: var(--space-6);
+    border-top: 1px solid var(--cdus-dark-border);
+    font-size: 0.8125rem;
+    color: var(--cdus-text-muted);
+  }
+
+  @media (max-width: 768px) {
+    .footer-inner {
+      grid-template-columns: 1fr;
+      gap: var(--space-8);
+    }
+    .footer-links-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+    .footer-bottom {
+      flex-direction: column;
+      gap: var(--space-2);
+      align-items: flex-start;
+    }
+  }
+</style>

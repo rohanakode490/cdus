@@ -1,0 +1,233 @@
+---
+import '../styles/global.css';
+import Seo from '../components/Seo.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+
+export interface Props {
+  title: string;
+  description: string;
+  canonical?: string;
+  type?: 'website' | 'article' | 'software';
+  publishedAt?: Date;
+  updatedAt?: Date;
+  jsonLd?: Record<string, any> | Array<Record<string, any>>;
+}
+
+const {
+  title,
+  description,
+  canonical,
+  type = 'website',
+  publishedAt,
+  updatedAt,
+  jsonLd,
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="generator" content={Astro.generator} />
+
+    <Seo
+      title={title}
+      description={description}
+      canonical={canonical}
+      type={type}
+      publishedAt={publishedAt}
+      updatedAt={updatedAt}
+      jsonLd={jsonLd}
+    />
+  </head>
+  <body>
+    <Header />
+    <main id="main-content">
+      <slot />
+    </main>
+    <Footer />
+  </body>
+</html>
+
+<script>
+  function initCodeCopyFeature() {
+    // 1. Process all <pre> code blocks
+    document.querySelectorAll('pre').forEach((pre) => {
+      if (pre.dataset.copyInitialized) return;
+      pre.dataset.copyInitialized = 'true';
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'copy-code-btn';
+      copyBtn.setAttribute('aria-label', 'Copy code to clipboard');
+      copyBtn.innerHTML = `
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+        <span>Copy</span>
+      `;
+
+      copyBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const codeEl = pre.querySelector('code') || pre;
+        const textToCopy = (codeEl.innerText || codeEl.textContent || '').trim();
+
+        try {
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(textToCopy);
+          } else {
+            const textarea = document.createElement('textarea');
+            textarea.value = textToCopy;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+          }
+
+          copyBtn.classList.add('copied');
+          copyBtn.innerHTML = `
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            <span>Copied!</span>
+          `;
+
+          setTimeout(() => {
+            copyBtn.classList.remove('copied');
+            copyBtn.innerHTML = `
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span>Copy</span>
+            `;
+          }, 2000);
+        } catch (err) {
+          console.error('Failed to copy code:', err);
+        }
+      });
+
+      pre.appendChild(copyBtn);
+    });
+
+    // 2. Process terminal/install snippets (.install-snippet, .hero-install-hint)
+    document.querySelectorAll('.install-snippet, .hero-install-hint').forEach((snippet) => {
+      if (snippet.dataset.copyInitialized) return;
+      snippet.dataset.copyInitialized = 'true';
+
+      const codeEl = snippet.querySelector('code');
+      if (!codeEl) return;
+
+      const snippetBtn = document.createElement('button');
+      snippetBtn.type = 'button';
+      snippetBtn.className = 'copy-snippet-btn';
+      snippetBtn.setAttribute('aria-label', 'Copy snippet to clipboard');
+      snippetBtn.title = 'Copy to clipboard';
+      snippetBtn.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+      `;
+
+      const performCopy = async (e: Event) => {
+        e.stopPropagation();
+        const text = (codeEl.innerText || codeEl.textContent || '').trim();
+        try {
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+          } else {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+          }
+
+          snippetBtn.classList.add('copied');
+          snippetBtn.innerHTML = `
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          `;
+
+          setTimeout(() => {
+            snippetBtn.classList.remove('copied');
+            snippetBtn.innerHTML = `
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            `;
+          }, 2000);
+        } catch (err) {
+          console.error('Failed to copy snippet:', err);
+        }
+      };
+
+      snippetBtn.addEventListener('click', performCopy);
+      snippet.appendChild(snippetBtn);
+    });
+
+    // 3. Process all inline <code> tags (not inside pre or snippets)
+    document.querySelectorAll(':not(pre):not(.install-snippet):not(.hero-install-hint) > code').forEach((code) => {
+      if (code.dataset.copyInitialized) return;
+      code.dataset.copyInitialized = 'true';
+      code.setAttribute('title', 'Click to copy');
+
+      code.addEventListener('click', async () => {
+        const selection = window.getSelection()?.toString();
+        if (selection && selection.length > 0) return;
+
+        const text = (code.innerText || code.textContent || '').trim();
+        try {
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+          } else {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+          }
+
+          const existing = code.querySelector('.code-copy-tooltip');
+          if (existing) existing.remove();
+
+          const tooltip = document.createElement('span');
+          tooltip.className = 'code-copy-tooltip';
+          tooltip.textContent = 'Copied!';
+          code.appendChild(tooltip);
+
+          setTimeout(() => tooltip.remove(), 1500);
+        } catch (err) {
+          console.error('Failed to copy inline code:', err);
+        }
+      });
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initCodeCopyFeature);
+  } else {
+    initCodeCopyFeature();
+  }
+  document.addEventListener('astro:page-load', initCodeCopyFeature);
+</script>
+
+<style>
+  #main-content {
+    flex: 1;
+  }
+</style>

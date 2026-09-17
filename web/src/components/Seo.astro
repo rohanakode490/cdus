@@ -1,0 +1,67 @@
+---
+export interface Props {
+  title: string;
+  description: string;
+  image?: string;
+  imageAlt?: string;
+  canonical?: string;
+  type?: 'website' | 'article' | 'software';
+  noindex?: boolean;
+  publishedAt?: Date;
+  updatedAt?: Date;
+  jsonLd?: Record<string, any> | Array<Record<string, any>>;
+}
+
+const {
+  title,
+  description,
+  image = '/cdus-logo.svg',
+  imageAlt = 'CDUS - Cross-Device Unified System',
+  canonical,
+  type = 'website',
+  noindex = false,
+  publishedAt,
+  updatedAt,
+  jsonLd,
+} = Astro.props;
+
+// Ensure absolute canonical and OG image URLs
+const canonicalUrl = canonical ?? new URL(Astro.url.pathname, Astro.site).href;
+const ogImage = new URL(image, Astro.site).href;
+const siteName = 'CDUS';
+---
+
+<!-- Core Meta Tags -->
+<title>{title}</title>
+<meta name="description" content={description} />
+<link rel="canonical" href={canonicalUrl} />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#1A1A1A" />
+<meta name="author" content="CDUS Core Team" />
+{noindex && <meta name="robots" content="noindex, nofollow" />}
+
+<!-- Open Graph / Facebook -->
+<meta property="og:site_name" content={siteName} />
+<meta property="og:type" content={type === 'software' ? 'website' : type} />
+<meta property="og:url" content={canonicalUrl} />
+<meta property="og:title" content={title} />
+<meta property="og:description" content={description} />
+<meta property="og:image" content={ogImage} />
+{imageAlt && <meta property="og:image:alt" content={imageAlt} />}
+
+<!-- Twitter Cards -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:url" content={canonicalUrl} />
+<meta name="twitter:title" content={title} />
+<meta name="twitter:description" content={description} />
+<meta name="twitter:image" content={ogImage} />
+{imageAlt && <meta name="twitter:image:alt" content={imageAlt} />}
+
+<!-- Article Timestamps -->
+{publishedAt && <meta property="article:published_time" content={publishedAt.toISOString()} />}
+{updatedAt && <meta property="article:modified_time" content={updatedAt.toISOString()} />}
+
+<!-- Structured Data (JSON-LD) -->
+{jsonLd && (
+  <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
+)}

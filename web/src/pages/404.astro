@@ -1,0 +1,55 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const pageTitle = 'Page Not Found | CDUS';
+const pageDescription = 'The requested page does not exist. Navigate back to CDUS documentation, downloads, or homepage.';
+---
+
+<BaseLayout title={pageTitle} description={pageDescription}>
+  <section class="section">
+    <div class="container container-prose text-center">
+      <div class="card error-card">
+        <span class="error-code">404</span>
+        <h1>Page Not Found</h1>
+        <p>
+          The page you requested could not be located. It may have been moved or updated in a recent release.
+        </p>
+
+        <div class="recovery-links">
+          <a href="/" class="btn btn-primary">Return to Homepage</a>
+          <a href="/docs/getting-started" class="btn btn-secondary">Read Documentation</a>
+          <a href="/download" class="btn btn-secondary">Download Client</a>
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .error-card {
+    padding: var(--space-12) var(--space-6);
+    margin-top: var(--space-8);
+  }
+
+  .error-code {
+    font-size: clamp(3rem, 6vw, 5rem);
+    font-weight: 900;
+    font-family: var(--font-mono);
+    color: var(--cdus-cyan);
+    line-height: 1;
+    display: block;
+    margin-bottom: var(--space-2);
+  }
+
+  .recovery-links {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-top: var(--space-8);
+  }
+
+  .text-center {
+    text-align: center;
+  }
+</style>

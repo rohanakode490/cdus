@@ -1,0 +1,63 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const pageTitle = 'CDUS Privacy Policy | Zero Cloud Telemetry';
+const pageDescription = 'CDUS privacy principles: 100% local-first storage, zero third-party telemetry, zero account tracking, and encrypted peer-to-peer data synchronization.';
+
+const pageLd = {
+  '@context': 'https://schema.org',
+  '@type': 'WebPage',
+  name: 'CDUS Privacy Policy',
+  description: pageDescription,
+  url: 'https://cdus.dev/privacy',
+};
+---
+
+<BaseLayout title={pageTitle} description={pageDescription} jsonLd={pageLd}>
+  <section class="section">
+    <div class="container container-prose">
+      <div class="badge" style="margin-bottom: var(--space-4);">
+        <span>Privacy &amp; Data Autonomy</span>
+      </div>
+      <h1>Privacy Policy</h1>
+      <p class="lead">
+        CDUS was created because your personal data belongs to you—not on remote corporate cloud storage.
+      </p>
+
+      <div class="privacy-content" style="margin-top: var(--space-12);">
+        <h2>1. Zero Telemetry &amp; Tracking</h2>
+        <p>
+          CDUS contains no third-party tracking scripts, advertising trackers, or analytics SDKs. The application does not phone home, report usage metrics, or log user activity to any external server.
+        </p>
+
+        <h2>2. Local-First Architecture</h2>
+        <p>
+          All clipboard records, file manifests, and device keys reside exclusively on your physical devices. They are never uploaded to a cloud database or centralized synchronization cluster. When you delete a clipboard item on your computer or phone, it is permanently erased from local storage.
+        </p>
+
+        <h2>3. Peer-to-Peer Transmission</h2>
+        <p>
+          Data travels directly over your local network between paired devices. When fallback relays are used to bypass firewalls, the relay acts solely as a blind packet forwarder. The relay cannot decrypt or inspect your data because it does not possess your Noise private keys.
+        </p>
+
+        <h2>4. No Account Required</h2>
+        <p>
+          You do not need to provide an email address, phone number, or password to use CDUS. Trust is established device-to-device through cryptographically signed QR codes and local handshake verification.
+        </p>
+
+        <h2>5. Open Source Verification</h2>
+        <p>
+          The entire CDUS codebase is open source under permissive licenses. You are encouraged to inspect the source code, compile the binaries yourself, or run your own private signaling and relay servers.
+        </p>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .privacy-content h2 {
+    margin-top: var(--space-10);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--cdus-dark-border);
+  }
+</style>

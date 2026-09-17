@@ -1,0 +1,786 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { Icon } from 'astro-icon/components';
+import { platforms } from '../data/platforms';
+
+const pageTitle = 'CDUS | Peer-to-Peer Unified System & Sync Engine';
+const pageDescription = 'Native Rust cross-device synchronization engine. Real-time clipboard, files, and sessions with Noise XX/IK encryption and zero cloud reliance.';
+
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name: 'CDUS',
+    url: 'https://cdus.dev',
+    description: pageDescription,
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'CDUS',
+    operatingSystem: 'Linux, Windows, macOS, Android',
+    applicationCategory: 'ProductivityApplication',
+    offers: {
+      '@type': 'Offer',
+      price: '0.00',
+      priceCurrency: 'USD',
+    },
+    description: 'Cross-Device Unified System: open-source peer-to-peer clipboard and file synchronization with end-to-end encryption.',
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'Organization',
+    name: 'CDUS Open Source Project',
+    url: 'https://cdus.dev',
+    logo: 'https://cdus.dev/cdus-logo.svg',
+  },
+];
+---
+
+<BaseLayout title={pageTitle} description={pageDescription} jsonLd={jsonLd}>
+  <!-- Hero Section -->
+  <section class="section-hero">
+    <div class="container hero-layout">
+      <div class="hero-content">
+        <div class="hero-eyebrow">
+          <span class="status-dot online"></span>
+          <span>Zero cloud dependency • MIT &amp; Apache 2.0</span>
+        </div>
+        <h1>Cross-device clipboard and file sync that doesn't touch the cloud.</h1>
+        <p class="lead">
+          CDUS connects your Linux, Windows, macOS, and Android devices directly over your local Wi-Fi. Authenticated with the Noise Protocol. A single native Rust binary running quietly in the background under 18 MB of RAM.
+        </p>
+        <div class="hero-actions">
+          <a href="/download" class="btn btn-primary">
+            <Icon name="lucide:download" width="18" height="18" />
+            <span>Download v0.1.0 Beta</span>
+          </a>
+          <a href="/docs/getting-started" class="btn btn-secondary">
+            <span>Read Quickstart</span>
+          </a>
+        </div>
+        <div class="hero-install-hint">
+          <code>curl -fsSL https://cdus.dev/install.sh | bash</code>
+        </div>
+      </div>
+
+      <!-- Desktop Client Window Mockup -->
+      <div class="hero-visual" aria-hidden="true">
+        <div class="client-window">
+          <!-- Window Titlebar -->
+          <div class="window-titlebar">
+            <div class="window-controls">
+              <span class="control-dot dot-close"></span>
+              <span class="control-dot dot-minimize"></span>
+              <span class="control-dot dot-maximize"></span>
+            </div>
+            <div class="window-title-group">
+              <img src="/cdus-logo.svg" alt="" width="16" height="16" />
+              <span class="window-title-text">cdus-desktop</span>
+              <span class="window-status-pill">
+                <span class="status-dot online"></span>
+                Mesh Active
+              </span>
+            </div>
+            <span class="window-badge-os">v0.1.0 &bull; x86_64</span>
+          </div>
+
+          <!-- Window Inner Panels -->
+          <div class="window-surface">
+            <!-- Active Connected Peers -->
+            <div class="surface-card">
+              <div class="surface-card-header">
+                <span class="surface-heading">Connected Peers (2)</span>
+                <span class="surface-tag">P2P Mesh</span>
+              </div>
+              <div class="peer-rows">
+                <div class="peer-item">
+                  <div class="peer-primary">
+                    <Icon name="simple-icons:android" class="peer-brand-icon" />
+                    <div>
+                      <div class="peer-label">Pixel 8a (Android 15)</div>
+                      <div class="peer-sub">192.168.1.182:4242</div>
+                    </div>
+                  </div>
+                  <span class="pill-route pill-direct">LAN Direct &bull; Noise IK</span>
+                </div>
+
+                <div class="peer-item">
+                  <div class="peer-primary">
+                    <Icon name="simple-icons:apple" class="peer-brand-icon" />
+                    <div>
+                      <div class="peer-label">MacBook Work</div>
+                      <div class="peer-sub">Cellular NAT</div>
+                    </div>
+                  </div>
+                  <span class="pill-route pill-relay">Relay Fallback</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Real-time Clipboard Stream -->
+            <div class="surface-card">
+              <div class="surface-card-header">
+                <span class="surface-heading">Universal Clipboard</span>
+                <span class="surface-tag tag-cyan">14ms latency</span>
+              </div>
+              <div class="clipboard-box">
+                <div class="clipboard-top">
+                  <span class="clip-type">SSH Public Key</span>
+                  <span class="clip-time">synced just now</span>
+                </div>
+                <code class="clip-snippet">ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOr4eX9... dev@workstation</code>
+              </div>
+            </div>
+
+            <!-- Verified File Chunk Stream -->
+            <div class="surface-card">
+              <div class="surface-card-header">
+                <span class="surface-heading">File Transfer Stream</span>
+                <span class="surface-speed">94.2 MB/s</span>
+              </div>
+              <div class="transfer-box">
+                <div class="transfer-info">
+                  <span class="transfer-file">archlinux-2026.06.01-x86_64.iso</span>
+                  <span class="transfer-percent">78%</span>
+                </div>
+                <div class="progress-bar-bg">
+                  <div class="progress-bar-fill" style="width: 78%;"></div>
+                </div>
+                <div class="transfer-meta-row">
+                  <span>BLAKE3 verified: 1,872 / 2,400 chunks</span>
+                  <span>1.87 / 2.40 GB</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How It Works (Editorial Walkthrough) -->
+  <section id="how-it-works" class="section">
+    <div class="container">
+      <div class="section-heading-left">
+        <h2>How CDUS operates</h2>
+        <p>No cloud servers, no account logins, and no complex network setup.</p>
+      </div>
+
+      <!-- Step 1: Out-of-band QR Pairing -->
+      <div class="flow-row">
+        <div class="flow-text">
+          <span class="step-label">1. Pairing</span>
+          <h3>Out-of-band QR authentication with Noise XX</h3>
+          <p>
+            When pairing two untrusted devices, your desktop displays an ephemeral QR code encoding its local socket and temporary public key. Pointing your phone's camera at the screen initiates a 3-way <code>Noise_XX</code> Diffie-Hellman handshake.
+          </p>
+          <p>
+            Both screens display matching 6-digit confirmation numbers derived from the cryptographic transcript. Once accepted, devices store public keys in the operating system's native hardware keychain.
+          </p>
+          <a href="/security" class="text-link">Read the cryptographic specification &rarr;</a>
+        </div>
+        <div class="flow-code">
+          <div class="code-box">
+            <div class="code-box-header">
+              <span>Terminal &bull; Pairing Handshake</span>
+            </div>
+            <pre><code>$ cdus pair --qr
+Listening on 192.168.1.104:4242
+[+] Received Noise XX message 1 from 192.168.1.182
+[+] Sent Noise XX message 2 (e, s, ee, se)
+[+] Mutual authentication verified.
+Confirm 6-digit SAS matches on peer: [ 849 203 ]
+[+] Device 'Pixel 8a' added to OS keychain.</code></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2: Thread-Pipelined Concurrency -->
+      <div class="flow-row reversed">
+        <div class="flow-text">
+          <span class="step-label">2. Concurrency</span>
+          <h3>Thread-pipelined sync without async runtime starvation</h3>
+          <p>
+            Heavy asynchronous frameworks can suffer from thread-pool starvation when gigabyte disk I/O shares an executor with real-time socket events.
+          </p>
+          <p>
+            CDUS uses dedicated OS threads linked by bounded <strong>Flume</strong> channels. Sockets, decryption stages, disk writers, and clipboard pollers run on isolated pipelines. A 50 GB file transfer running at max wire speed will never add even 5 milliseconds of delay to your clipboard sync.
+          </p>
+          <a href="/docs/architecture" class="text-link">Explore the thread pipeline architecture &rarr;</a>
+        </div>
+        <div class="flow-code">
+          <div class="code-box">
+            <div class="code-box-header">
+              <span>Engine Metrics</span>
+            </div>
+            <pre><code>$ cdus status --verbose
+Daemon: Running (pid 14201, uptime 4d 12h)
+Memory RSS: 14.2 MB (sustained)
+Channels:
+  &bull; rx_socket_queue: 0 / 128 (empty)
+  &bull; decrypt_stage:   0 / 64  (empty)
+  &bull; disk_chunk_pool: 4 / 64  (streaming)
+Clipboard latency: 14 ms (p99)</code></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Resilient BLAKE3 Chunking & Fallback Relay -->
+      <div class="flow-row">
+        <div class="flow-text">
+          <span class="step-label">3. Transport</span>
+          <h3>Direct LAN sockets with zero-knowledge relay fallback</h3>
+          <p>
+            Whenever possible, devices stream directly across local Wi-Fi or Ethernet at native NIC speeds. But if you connect through a mobile hotspot or hotel Wi-Fi with client isolation enabled, CDUS falls back to an open-source TURN relay.
+          </p>
+          <p>
+            The relay forwards encrypted Noise packets blindly without holding private keys. Every 1 MB chunk is tree-hashed with <strong>BLAKE3</strong>. If your laptop drops off the network, the transfer resumes instantly from the exact missing chunk upon reconnection.
+          </p>
+          <a href="/docs/troubleshooting" class="text-link">Review network fallback mechanics &rarr;</a>
+        </div>
+        <div class="flow-code">
+          <div class="code-box">
+            <div class="code-box-header">
+              <span>Resume Integrity Check</span>
+            </div>
+            <pre><code>$ cdus transfer resume 9f84a2
+Target: /home/user/Downloads/backup.tar.zst (4.2 GB)
+Scanning existing chunks on disk...
+[========================] 3,410 / 3,410 verified (BLAKE3)
+Requesting missing chunks: 3,411..4,200
+Reconnected via LAN Direct (192.168.1.182:4242)
+Transfer completed in 6.4s without full retransmission.</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Technical Comparison Matrix -->
+  <section id="comparison" class="section section-dark">
+    <div class="container">
+      <div class="section-heading-left">
+        <h2>Comparison with alternatives</h2>
+        <p>A transparent look at architectural tradeoffs across popular tools.</p>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="comparison-table">
+          <thead>
+            <tr>
+              <th class="col-feature">Feature / Capability</th>
+              <th class="col-cdus highlight">CDUS</th>
+              <th class="col-alt">AirDrop</th>
+              <th class="col-alt">KDE Connect</th>
+              <th class="col-alt">LocalSend</th>
+              <th class="col-alt">Cloud Sync</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="feature-col">Operating Systems</td>
+              <td class="highlight check">Linux, Win, Mac, Android</td>
+              <td class="cross">Apple devices only</td>
+              <td>Linux, Android (Win/Mac partial)</td>
+              <td>Cross-platform</td>
+              <td>Cross-platform</td>
+            </tr>
+            <tr>
+              <td class="feature-col">End-to-End Encryption</td>
+              <td class="highlight check">Noise XX &amp; IK (ChaChaPoly)</td>
+              <td class="check">TLS / Apple Identity</td>
+              <td class="check">TLS (RSA/ECDSA)</td>
+              <td class="check">HTTPS / TLS</td>
+              <td class="cross">Varies / Cloud-managed keys</td>
+            </tr>
+            <tr>
+              <td class="feature-col">Zero Cloud Upload</td>
+              <td class="highlight check">100% Local-First</td>
+              <td class="check">Local P2P</td>
+              <td class="check">Local P2P</td>
+              <td class="check">Local P2P</td>
+              <td class="cross">Uploads to Cloud Servers</td>
+            </tr>
+            <tr>
+              <td class="feature-col">NAT / Firewall Fallback</td>
+              <td class="highlight check">Encrypted TURN Relay</td>
+              <td class="cross">Fails outside LAN/BT</td>
+              <td class="cross">Fails if LAN blocked</td>
+              <td class="cross">Fails if LAN blocked</td>
+              <td class="check">Cloud routed</td>
+            </tr>
+            <tr>
+              <td class="feature-col">Background Sync Footprint</td>
+              <td class="highlight check">&lt; 18 MB RAM (Native Rust)</td>
+              <td class="check">Native OS Daemon</td>
+              <td>50–120 MB (Qt / JVM)</td>
+              <td>70–160 MB (Flutter)</td>
+              <td>120–400 MB (Sync Clients)</td>
+            </tr>
+            <tr>
+              <td class="feature-col">Requires Account / Login</td>
+              <td class="highlight check">No account needed</td>
+              <td class="cross">Requires Apple ID</td>
+              <td class="check">No account needed</td>
+              <td class="check">No account needed</td>
+              <td class="cross">Mandatory Account</td>
+            </tr>
+            <tr>
+              <td class="feature-col">Chunked Transfer Resume</td>
+              <td class="highlight check">Yes (BLAKE3 1MB chunks)</td>
+              <td class="cross">Restarts from 0%</td>
+              <td class="cross">Restarts from 0%</td>
+              <td class="cross">Restarts from 0%</td>
+              <td class="check">Chunked upload</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Platform Matrix & Download Callout -->
+  <section class="section">
+    <div class="container">
+      <div class="section-heading-left">
+        <h2>Supported platforms</h2>
+        <p>Direct native installers built from our continuous integration matrix.</p>
+      </div>
+
+      <div class="grid-4 platform-grid">
+        {
+          platforms.map((platform) => (
+            <div class="card platform-card">
+              <div class="platform-icon">
+                <Icon name={platform.icon} class="platform-icon-svg" />
+              </div>
+              <h3>{platform.name}</h3>
+              <p>{platform.summary}</p>
+              <a href={`/download#${platform.id}`} class="btn btn-secondary btn-sm">
+                Get {platform.name}
+              </a>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  /* Hero */
+  .hero-layout {
+    display: grid;
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: var(--space-12);
+    align-items: center;
+  }
+
+  .hero-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--cdus-cyan-light);
+    margin-bottom: var(--space-3);
+  }
+
+  .hero-content h1 {
+    margin-bottom: var(--space-4);
+  }
+
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-top: var(--space-6);
+    margin-bottom: var(--space-4);
+  }
+
+  .hero-install-hint {
+    margin-top: var(--space-2);
+  }
+
+  .hero-install-hint code {
+    font-size: 0.85rem;
+    padding: 0.4rem 0.75rem;
+    display: inline-block;
+  }
+
+  /* Desktop Client Window Mockup */
+  .hero-visual {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .client-window {
+    width: 100%;
+    max-width: 480px;
+    background: #111415;
+    border: 1px solid #283235;
+    border-radius: var(--radius-md);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6), 0 0 1px rgba(36, 200, 219, 0.35);
+    overflow: hidden;
+  }
+
+  .window-titlebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    background: #181E20;
+    border-bottom: 1px solid #283235;
+  }
+
+  .window-controls {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .control-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  .dot-close { background-color: #EF4444; }
+  .dot-minimize { background-color: #F59E0B; }
+  .dot-maximize { background-color: #10B981; }
+
+  .window-title-group {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .window-title-text {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    color: var(--cdus-text-primary);
+    letter-spacing: -0.01em;
+  }
+
+  .window-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--cdus-cyan-light);
+    padding: 0.1rem 0.45rem;
+    background: var(--cdus-cyan-container);
+    border-radius: var(--radius-pill);
+    border: 1px solid rgba(36, 200, 219, 0.25);
+  }
+
+  .window-badge-os {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--cdus-text-muted);
+  }
+
+  .window-surface {
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    background: #111415;
+  }
+
+  .surface-card {
+    background: #181D1F;
+    border: 1px solid #283235;
+    border-radius: var(--radius-sm);
+    padding: 0.75rem 0.85rem;
+  }
+
+  .surface-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.55rem;
+  }
+
+  .surface-heading {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--cdus-text-muted);
+  }
+
+  .surface-tag {
+    font-size: 0.72rem;
+    color: var(--cdus-text-muted);
+    font-family: var(--font-mono);
+  }
+
+  .surface-tag.tag-cyan,
+  .surface-speed {
+    color: var(--cdus-cyan);
+    font-family: var(--font-mono);
+    font-weight: 600;
+  }
+
+  .peer-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  .peer-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.65rem;
+    background: #131718;
+    border: 1px solid #232B2D;
+    border-radius: var(--radius-sm);
+  }
+
+  .peer-primary {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  .peer-brand-icon {
+    width: 18px;
+    height: 18px;
+    color: var(--cdus-cyan);
+  }
+
+  .peer-label {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--cdus-text-primary);
+  }
+
+  .peer-sub {
+    font-size: 0.7rem;
+    color: var(--cdus-text-muted);
+    font-family: var(--font-mono);
+  }
+
+  .pill-route {
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 0.15rem 0.5rem;
+    border-radius: var(--radius-pill);
+    white-space: nowrap;
+  }
+
+  .pill-direct {
+    background: var(--cdus-cyan-container);
+    color: var(--cdus-cyan-light);
+    border: 1px solid rgba(36, 200, 219, 0.3);
+  }
+
+  .pill-relay {
+    background: #3B2314;
+    color: #FFCC80;
+    border: 1px solid rgba(239, 108, 0, 0.4);
+  }
+
+  .clipboard-box {
+    background: #0E1213;
+    border: 1px solid #232B2D;
+    border-radius: var(--radius-sm);
+    padding: 0.55rem 0.65rem;
+  }
+
+  .clipboard-top {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.7rem;
+    color: var(--cdus-text-muted);
+    margin-bottom: 0.25rem;
+  }
+
+  .clip-snippet {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--cdus-cyan-light);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    background: none;
+    border: none;
+    padding: 0;
+  }
+
+  .transfer-box {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .transfer-info {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--cdus-text-primary);
+  }
+
+  .transfer-percent {
+    color: var(--cdus-cyan);
+    font-family: var(--font-mono);
+  }
+
+  .progress-bar-bg {
+    width: 100%;
+    height: 6px;
+    background: #252D30;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #00838F, #24C8DB);
+    border-radius: 3px;
+  }
+
+  .transfer-meta-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.7rem;
+    color: var(--cdus-text-muted);
+    font-family: var(--font-mono);
+  }
+
+  /* Section Headings */
+  .section-heading-left {
+    max-width: 640px;
+    margin-bottom: var(--space-12);
+  }
+
+  .section-heading-left h2 {
+    margin-bottom: var(--space-2);
+  }
+
+  .section-dark {
+    background: #141819;
+    border-top: 1px solid var(--cdus-dark-border);
+    border-bottom: 1px solid var(--cdus-dark-border);
+  }
+
+  /* Flow Rows */
+  .step-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    color: var(--cdus-cyan);
+    display: block;
+    margin-bottom: var(--space-2);
+  }
+
+  .flow-text h3 {
+    margin-bottom: var(--space-3);
+  }
+
+  .flow-text p {
+    font-size: 0.95rem;
+    line-height: 1.65;
+    margin-bottom: var(--space-3);
+  }
+
+  .text-link {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--cdus-cyan);
+  }
+
+  .code-box {
+    background: #0E1213;
+    border: 1px solid var(--cdus-dark-border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+
+  .code-box-header {
+    padding: 0.5rem 0.85rem;
+    background: #181D1E;
+    border-bottom: 1px solid var(--cdus-dark-border);
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    color: var(--cdus-text-muted);
+  }
+
+  .code-box pre {
+    margin: 0;
+    background: none;
+    border: none;
+    padding: 1rem;
+    font-size: 0.82rem;
+    line-height: 1.55;
+  }
+
+  /* Platforms */
+  .platform-card {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    padding: var(--space-6);
+  }
+
+  .platform-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: var(--space-4);
+    height: 48px;
+  }
+
+  .platform-icon-svg {
+    width: 36px;
+    height: 36px;
+    color: var(--cdus-cyan-light);
+    transition: transform var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+  }
+
+  .platform-card:hover .platform-icon-svg {
+    color: var(--cdus-cyan);
+    transform: scale(1.08);
+  }
+
+  .platform-card h3 {
+    margin-bottom: var(--space-2);
+  }
+
+  .platform-card p {
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--cdus-text-secondary);
+    margin-bottom: var(--space-5);
+    flex-grow: 1;
+    min-height: 2.75rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .platform-card .btn {
+    margin-top: auto;
+    width: 100%;
+    max-width: 180px;
+    justify-content: center;
+  }
+
+  @media (max-width: 960px) {
+    .hero-layout {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

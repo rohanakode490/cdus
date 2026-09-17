@@ -1,0 +1,110 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const pageTitle = 'CDUS Security & Cryptographic Model | Noise & BLAKE3';
+const pageDescription = 'Complete security architecture of CDUS: Noise Protocol handshakes (XX & IK), BLAKE3 chunk hashing, zero-knowledge TURN fallback, and OS keychain storage.';
+
+const articleLd = {
+  '@context': 'https://schema.org',
+  '@type': 'Article',
+  headline: 'CDUS Security & Cryptographic Model',
+  description: pageDescription,
+  datePublished: '2026-06-01T00:00:00Z',
+  author: {
+    '@type': 'Organization',
+    name: 'CDUS Security Team',
+    url: 'https://cdus.dev',
+  },
+};
+---
+
+<BaseLayout title={pageTitle} description={pageDescription} type="article" jsonLd={articleLd}>
+  <section class="section">
+    <div class="container container-prose">
+      <div class="badge" style="margin-bottom: var(--space-4);">
+        <span>Cryptographic Audit &amp; Threat Model</span>
+      </div>
+      <h1>Security &amp; Cryptography</h1>
+      <p class="lead">
+        CDUS guarantees confidentiality, integrity, and authenticity for all synchronized data across your local devices and fallback relays.
+      </p>
+
+      <div class="security-pillars" style="margin-top: var(--space-12);">
+        <h2>1. The Noise Protocol Framework</h2>
+        <p>
+          Instead of wrapping brittle TLS stacks with complex certificate authorities, CDUS relies on formal, mathematically verified handshake patterns from the <strong>Noise Protocol Framework</strong> using the <code>Noise_XX_25519_ChaChaPoly_BLAKE2s</code> and <code>Noise_IK_25519_ChaChaPoly_BLAKE2s</code> cipher suites.
+        </p>
+
+        <h3>Out-of-Band Pairing (Noise XX)</h3>
+        <p>
+          When you pair a new computer or phone, neither device possesses the other's public key. The initiating device displays an ephemeral QR code encoding its listening socket and an out-of-band token. The devices then execute a three-phase mutual handshake:
+        </p>
+        <ul>
+          <li><strong>Message 1:</strong> Initiator sends ephemeral public key <code>e</code>.</li>
+          <li><strong>Message 2:</strong> Responder sends ephemeral public key <code>e</code>, executes Diffie-Hellman, and transmits its static public key <code>s</code> encrypted.</li>
+          <li><strong>Message 3:</strong> Initiator transmits its static public key <code>s</code> encrypted, achieving mutual authentication.</li>
+        </ul>
+        <p>
+          Both devices compute a visual 6-digit confirmation digest from the completed handshake transcript. Confirming these digits protects against active Man-in-the-Middle attackers on shared or hostile Wi-Fi networks.
+        </p>
+
+        <h3>Zero-RTT Reconnection (Noise IK)</h3>
+        <p>
+          Once paired, devices store each other's static public keys. Future sessions establish with a single round-trip using <strong>Noise IK</strong>. Ephemeral keys generate fresh session keys with authenticated forward secrecy for every connection cycle.
+        </p>
+
+        <h2>2. BLAKE3 Chunk Integrity &amp; Resumption</h2>
+        <p>
+          Transferred files are split into deterministic 1 MB chunks. Each chunk carries a 32-byte BLAKE3 cryptographic hash computed prior to transmission:
+        </p>
+        <ul>
+          <li><strong>Instant Rejection:</strong> If a bit flips in transit, the chunk hash check fails immediately upon disk flush, preventing corrupted data from entering the filesystem.</li>
+          <li><strong>Resilience:</strong> If a transfer disconnects at 99%, only the missing chunks are re-requested upon reconnection. The already-verified chunks remain valid.</li>
+        </ul>
+
+        <h2>3. Zero-Knowledge Fallback Relays</h2>
+        <p>
+          When devices cannot establish direct peer-to-peer connections due to symmetric NAT or firewall policies, CDUS routes packets through an open-source Go relay:
+        </p>
+        <ul>
+          <li>The relay never possesses decryption keys. All payloads passing through the relay are Noise-encrypted ciphertext.</li>
+          <li>The relay routes solely by ephemeral connection tokens. It has zero knowledge of device static keys, clipboard contents, or filenames.</li>
+        </ul>
+
+        <h2>4. Native Hardware Keychain Storage</h2>
+        <p>
+          Private static keys are never written to unencrypted plaintext config files:
+        </p>
+        <ul>
+          <li><strong>Linux:</strong> Stored via Secret Service API (GNOME Keyring / KWallet).</li>
+          <li><strong>macOS:</strong> Stored in Apple Keychain Services with hardware enclave backing.</li>
+          <li><strong>Windows:</strong> Stored via Windows Credential Manager with DPAPI protection.</li>
+          <li><strong>Android:</strong> Stored in Android KeyStore with StrongBox / TEE hardware isolation.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .security-pillars h2 {
+    margin-top: var(--space-12);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--cdus-dark-border);
+  }
+
+  .security-pillars h3 {
+    margin-top: var(--space-8);
+  }
+
+  .security-pillars ul {
+    margin-bottom: var(--space-6);
+    padding-left: var(--space-6);
+    color: var(--cdus-text-secondary);
+  }
+
+  .security-pillars li {
+    margin-bottom: var(--space-2);
+    line-height: 1.6;
+  }
+</style>

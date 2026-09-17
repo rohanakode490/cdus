@@ -13,7 +13,10 @@
     "check:macos": "cargo check --workspace --exclude tauri-app --target x86_64-apple-darwin",
     "check:protocols": "cargo check -p cdus-common --target x86_64-pc-windows-gnu && cargo check -p cdus-common --target x86_64-apple-darwin",
     "check:all-targets": "cargo check --workspace --exclude tauri-app && bun run check:protocols",
-    "test:e2e": "bun run tests/e2e/desktop.spec.ts"
+    "test:e2e": "bun run tests/e2e/desktop.spec.ts",
+    "web:dev": "cd web && bun run dev",
+    "web:build": "cd web && bun run build",
+    "web:check": "cd web && bun run astro check"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
