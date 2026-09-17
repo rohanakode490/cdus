@@ -1,118 +1,38 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
   <defs>
-    <!-- Background Gradient -->
-    <radialGradient id="bgGrad" cx="50%" cy="40%" r="60%">
-      <stop offset="0%" stop-color="#262626" />
-      <stop offset="100%" stop-color="#1A1A1A" />
+    <radialGradient id="favBg" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#18272A" />
+      <stop offset="100%" stop-color="#0B1214" />
     </radialGradient>
-
-    <!-- Cyan Glow Gradient -->
-    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#4DD0E1" />
-      <stop offset="50%" stop-color="#24C8DB" />
-      <stop offset="100%" stop-color="#00838F" />
+    <linearGradient id="favCyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00E5FF" />
+      <stop offset="100%" stop-color="#24C8DB" />
     </linearGradient>
-
-    <!-- Beam Glow -->
-    <linearGradient id="beamGrad" x1="0%" y1="50%" x2="100%" y2="50%">
-      <stop offset="0%" stop-color="#24C8DB" stop-opacity="0.2" />
-      <stop offset="50%" stop-color="#4DD0E1" stop-opacity="0.9" />
-      <stop offset="100%" stop-color="#24C8DB" stop-opacity="0.2" />
-    </linearGradient>
-
-    <!-- Device Screen Gradient -->
-    <linearGradient id="screenGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#1E2324" />
-      <stop offset="100%" stop-color="#141819" />
-    </linearGradient>
-
-    <!-- Subtle Drop Shadow for Mobile -->
-    <filter id="phoneShadow" x="-20%" y="-20%" width="150%" height="150%">
-      <feDropShadow dx="-8" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.6" />
-    </filter>
-
-    <!-- Soft Glow Filter -->
-    <filter id="cyanGlow" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="8" result="blur" />
-      <feMerge>
-        <feMergeNode in="blur" />
-        <feMergeNode in="SourceGraphic" />
-      </feMerge>
-    </filter>
   </defs>
 
-  <!-- Base Squircle Container -->
-  <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#bgGrad)" stroke="#333333" stroke-width="4" />
+  <!-- High-Contrast Squircle Badge for Browser Tabs -->
+  <rect x="16" y="16" width="480" height="480" rx="120" fill="url(#favBg)" stroke="#00E5FF" stroke-width="24" />
 
-  <!-- Subtle Inner Ring -->
-  <rect x="24" y="24" width="464" height="464" rx="100" fill="none" stroke="#24C8DB" stroke-width="1.5" stroke-opacity="0.15" />
+  <!-- Desktop Monitor Outline (High Visibility) -->
+  <rect x="75" y="105" width="245" height="185" rx="24" fill="#141E20" stroke="#24C8DB" stroke-width="20" />
+  <rect x="150" y="325" width="95" height="20" rx="10" fill="#24C8DB" />
+  <path d="M 187 290 L 208 290 L 204 325 L 191 325 Z" fill="#24C8DB" />
 
-  <!-- ==================== DESKTOP MONITOR ==================== -->
-  <!-- Monitor Stand Base -->
-  <rect x="175" y="372" width="130" height="12" rx="6" fill="#2D2D2D" stroke="#333333" stroke-width="2" />
-  <!-- Monitor Stand Neck -->
-  <path d="M 226 325 L 254 325 L 246 372 L 234 372 Z" fill="#262626" stroke="#333333" stroke-width="1.5" />
+  <!-- Mobile Phone Outline (Crisp Foreground White & Cyan) -->
+  <rect x="250" y="160" width="175" height="250" rx="34" fill="#0E1618" stroke="#FFFFFF" stroke-width="20" />
+  <rect x="310" y="180" width="55" height="10" rx="5" fill="#24C8DB" />
 
-  <!-- Monitor Body Outer Frame -->
-  <rect x="92" y="125" width="296" height="200" rx="20" fill="#262626" stroke="#333333" stroke-width="3" />
-  <!-- Monitor Screen Glass -->
-  <rect x="104" y="137" width="272" height="176" rx="12" fill="url(#screenGrad)" stroke="#00363A" stroke-width="1" />
+  <!-- Synchronized Conduit (Bold High-Luminance Bridge) -->
+  <path d="M 195 210 C 260 210, 250 285, 335 285" fill="none" stroke="url(#favCyan)" stroke-width="34" stroke-linecap="round" />
+  <path d="M 195 210 C 260 210, 250 285, 335 285" fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" />
 
-  <!-- Desktop Window Header / Chrome Dots -->
-  <circle cx="120" cy="151" r="3.5" fill="#333333" />
-  <circle cx="132" cy="151" r="3.5" fill="#333333" />
-  <circle cx="144" cy="151" r="3.5" fill="#24C8DB" opacity="0.8" />
-  <line x1="104" y1="162" x2="376" y2="162" stroke="#24C8DB" stroke-opacity="0.15" stroke-width="1" />
+  <!-- Pulse Nodes with White Cores -->
+  <circle cx="195" cy="210" r="24" fill="#00E5FF" />
+  <circle cx="195" cy="210" r="12" fill="#FFFFFF" />
 
-  <!-- Desktop Internal Content Grid / Code Lines -->
-  <line x1="120" y1="180" x2="190" y2="180" stroke="#00838F" stroke-width="3.5" stroke-linecap="round" opacity="0.7" />
-  <line x1="120" y1="195" x2="160" y2="195" stroke="#24C8DB" stroke-width="3.5" stroke-linecap="round" opacity="0.5" />
-  <line x1="120" y1="210" x2="210" y2="210" stroke="#333333" stroke-width="3.5" stroke-linecap="round" />
+  <circle cx="265" cy="248" r="22" fill="#FFFFFF" />
+  <circle cx="265" cy="248" r="12" fill="#00E5FF" />
 
-  <!-- ==================== THE SYNC BRIDGE (BACKGROUND PULSE) ==================== -->
-  <!-- Data Connection Waves -->
-  <path d="M 230 235 C 290 235, 280 280, 340 280" fill="none" stroke="url(#cyanGrad)" stroke-width="14" stroke-linecap="round" filter="url(#cyanGlow)" opacity="0.9" />
-  <path d="M 230 235 C 290 235, 280 280, 340 280" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" opacity="0.9" />
-
-  <!-- ==================== MOBILE PHONE (FOREGROUND OVERLAY) ==================== -->
-  <g filter="url(#phoneShadow)">
-    <!-- Phone Outer Body -->
-    <rect x="290" y="170" width="138" height="236" rx="28" fill="#262626" stroke="#444444" stroke-width="3" />
-    <!-- Phone Screen Glass -->
-    <rect x="298" y="178" width="122" height="220" rx="22" fill="url(#screenGrad)" stroke="#00363A" stroke-width="1" />
-
-    <!-- Phone Dynamic Island / Speaker -->
-    <rect x="341" y="186" width="36" height="7" rx="3.5" fill="#1A1A1A" />
-    <circle cx="347" cy="189.5" r="1.5" fill="#24C8DB" opacity="0.6" />
-
-    <!-- Phone Home Indicator Bar -->
-    <rect x="345" y="388" width="28" height="3" rx="1.5" fill="#333333" />
-
-    <!-- Phone Screen Content / Cards -->
-    <rect x="308" y="206" width="102" height="36" rx="8" fill="#262626" stroke="#24C8DB" stroke-width="1" stroke-opacity="0.3" />
-    <circle cx="322" cy="224" r="5" fill="#24C8DB" />
-    <line x1="334" y1="220" x2="380" y2="220" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" opacity="0.8" />
-    <line x1="334" y1="228" x2="365" y2="228" stroke="#00838F" stroke-width="2" stroke-linecap="round" />
-
-    <rect x="308" y="250" width="102" height="58" rx="8" fill="#1E2324" stroke="#333333" stroke-width="1" />
-  </g>
-
-  <!-- ==================== CENTRAL SYNC NEXUS (INTERACTION POINT) ==================== -->
-  <!-- Glowing Synchronized Nodes -->
-  <!-- Node on Desktop Screen -->
-  <circle cx="230" cy="235" r="9" fill="#24C8DB" filter="url(#cyanGlow)" />
-  <circle cx="230" cy="235" r="4.5" fill="#FFFFFF" />
-
-  <!-- Central Bridge Intersection Pulse -->
-  <g filter="url(#cyanGlow)">
-    <circle cx="288" cy="256" r="7" fill="#4DD0E1" />
-    <circle cx="288" cy="256" r="3" fill="#FFFFFF" />
-    <!-- Radiating Wave Rings -->
-    <circle cx="288" cy="256" r="15" fill="none" stroke="#24C8DB" stroke-width="1.5" stroke-dasharray="3 3" opacity="0.7" />
-  </g>
-
-  <!-- Node on Mobile Screen -->
-  <circle cx="340" cy="280" r="9" fill="#24C8DB" filter="url(#cyanGlow)" />
-  <circle cx="340" cy="280" r="4.5" fill="#FFFFFF" />
-
+  <circle cx="335" cy="285" r="24" fill="#00E5FF" />
+  <circle cx="335" cy="285" r="12" fill="#FFFFFF" />
 </svg>

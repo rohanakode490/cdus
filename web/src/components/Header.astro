@@ -6,7 +6,7 @@ const isHome = pathname === '/';
 <header class="site-header">
   <div class="container header-inner">
     <a href="/" class="brand-link" aria-label="CDUS Home">
-      <img src="/cdus-logo.svg" alt="" width="34" height="34" class="brand-icon" />
+      <img src="/cdus-logo.svg" alt="CDUS Logo" width="34" height="34" loading="eager" decoding="async" fetchpriority="high" class="brand-icon" />
       <span class="brand-name">CDUS</span>
       <span class="brand-badge">v0.1 Beta</span>
     </a>
@@ -58,6 +58,20 @@ const isHome = pathname === '/';
     gap: var(--space-3);
     text-decoration: none;
     color: var(--cdus-text-primary);
+  }
+
+  .brand-icon {
+    width: 34px;
+    height: 34px;
+    display: block;
+    flex-shrink: 0;
+    filter: drop-shadow(0 0 6px rgba(36, 200, 219, 0.4));
+    transition: transform var(--duration-fast) var(--ease-standard), filter var(--duration-fast) var(--ease-standard);
+  }
+
+  .brand-link:hover .brand-icon {
+    transform: scale(1.06);
+    filter: drop-shadow(0 0 10px rgba(36, 200, 219, 0.7));
   }
 
   .brand-name {
