@@ -304,7 +304,7 @@ pre:hover .copy-code-btn,
   margin-right: auto;
 }
 
-/* Buttons */
+/* Buttons with tactile haptic physics */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -317,8 +317,21 @@ pre:hover .copy-code-btn,
   cursor: pointer;
   text-decoration: none;
   border: 1px solid transparent;
-  transition: all var(--duration-fast) var(--ease-standard);
+  transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1),
+              background-color var(--duration-fast) var(--ease-standard),
+              border-color var(--duration-fast) var(--ease-standard),
+              box-shadow var(--duration-fast) var(--ease-standard),
+              color var(--duration-fast) var(--ease-standard);
   min-height: 44px;
+  user-select: none;
+}
+
+.btn:hover {
+  transform: translateY(-1.5px);
+}
+
+.btn:active {
+  transform: scale(0.97) translateY(1px);
 }
 
 .btn-primary {
@@ -331,7 +344,7 @@ pre:hover .copy-code-btn,
 .btn-primary:hover {
   background-color: var(--cdus-cyan-hover);
   color: #051315;
-  box-shadow: 0 4px 14px rgba(36, 200, 219, 0.25);
+  box-shadow: 0 4px 20px rgba(36, 200, 219, 0.35);
 }
 
 .btn-secondary {
@@ -342,8 +355,9 @@ pre:hover .copy-code-btn,
 
 .btn-secondary:hover {
   background-color: var(--cdus-dark-elevated);
-  border-color: var(--cdus-dark-border-subtle);
+  border-color: rgba(36, 200, 219, 0.4);
   color: #FFFFFF;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
 }
 
 .btn-ghost {
@@ -354,6 +368,11 @@ pre:hover .copy-code-btn,
 .btn-ghost:hover {
   color: var(--cdus-text-primary);
   background: var(--cdus-dark-elevated);
+  transform: translateY(-1px);
+}
+
+.btn-ghost:active {
+  transform: scale(0.96);
 }
 
 /* Badge / Pill */
@@ -377,11 +396,27 @@ pre:hover .copy-code-btn,
   height: 8px;
   border-radius: 50%;
   display: inline-block;
+  position: relative;
 }
 
 .status-dot.online {
   background-color: var(--cdus-status-online);
-  box-shadow: 0 0 6px rgba(76, 175, 80, 0.6);
+  box-shadow: 0 0 8px rgba(76, 175, 80, 0.7);
+}
+
+.status-dot.online::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1.5px solid var(--cdus-status-online);
+  animation: statusRadarPing 2.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+  pointer-events: none;
+}
+
+@keyframes statusRadarPing {
+  0% { transform: scale(0.9); opacity: 0.85; }
+  100% { transform: scale(2.6); opacity: 0; }
 }
 
 .status-dot.relay {
@@ -394,11 +429,16 @@ pre:hover .copy-code-btn,
   border: 1px solid var(--cdus-dark-border);
   border-radius: var(--radius-md);
   padding: var(--space-6);
-  transition: border-color var(--duration-fast) var(--ease-standard);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.25s ease,
+              box-shadow 0.25s ease;
 }
 
 .card:hover {
-  border-color: var(--cdus-dark-border-subtle);
+  transform: translateY(-2px);
+  border-color: rgba(36, 200, 219, 0.35);
+  box-shadow: 0 16px 36px -8px rgba(0, 0, 0, 0.65),
+              0 0 0 1px rgba(36, 200, 219, 0.15);
 }
 
 /* Grid Utilities */
@@ -551,6 +591,25 @@ pre:hover .copy-code-btn,
   }
 }
 
+/* Scroll Reveal (0-CLS, GPU-Accelerated) */
+.reveal {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.55s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.55s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, opacity;
+}
+
+.reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.reveal-stagger > *:nth-child(1) { transition-delay: 0.04s; }
+.reveal-stagger > *:nth-child(2) { transition-delay: 0.10s; }
+.reveal-stagger > *:nth-child(3) { transition-delay: 0.16s; }
+.reveal-stagger > *:nth-child(4) { transition-delay: 0.22s; }
+
 /* Motion Accessibility */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -558,5 +617,12 @@ pre:hover .copy-code-btn,
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+  .reveal {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .status-dot.online::after {
+    display: none !important;
   }
 }

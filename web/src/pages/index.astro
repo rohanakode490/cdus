@@ -160,7 +160,7 @@ const jsonLd = [
   </section>
 
   <!-- How It Works (Editorial Walkthrough) -->
-  <section id="how-it-works" class="section">
+  <section id="how-it-works" class="section reveal">
     <div class="container">
       <div class="section-heading-left">
         <h2>How CDUS operates</h2>
@@ -258,7 +258,7 @@ Transfer completed in 6.4s without full retransmission.</code></pre>
   </section>
 
   <!-- Technical Comparison Matrix -->
-  <section id="comparison" class="section section-dark">
+  <section id="comparison" class="section section-dark reveal">
     <div class="container">
       <div class="section-heading-left">
         <h2>Comparison with alternatives</h2>
@@ -341,14 +341,14 @@ Transfer completed in 6.4s without full retransmission.</code></pre>
   </section>
 
   <!-- Platform Matrix & Download Callout -->
-  <section class="section">
+  <section class="section reveal">
     <div class="container">
       <div class="section-heading-left">
         <h2>Supported platforms</h2>
         <p>Direct native installers built from our continuous integration matrix.</p>
       </div>
 
-      <div class="grid-4 platform-grid">
+      <div class="grid-4 platform-grid reveal-stagger">
         {
           platforms.map((platform) => (
             <div class="card platform-card">
@@ -425,6 +425,13 @@ Transfer completed in 6.4s without full retransmission.</code></pre>
     border-radius: var(--radius-md);
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6), 0 0 1px rgba(36, 200, 219, 0.35);
     overflow: hidden;
+    transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.35s ease, border-color 0.35s ease;
+  }
+
+  .client-window:hover {
+    transform: translateY(-4px);
+    border-color: rgba(36, 200, 219, 0.5);
+    box-shadow: 0 32px 70px rgba(0, 0, 0, 0.75), 0 0 24px rgba(36, 200, 219, 0.2);
   }
 
   .window-titlebar {

@@ -12,7 +12,6 @@ const isHome = pathname === '/';
     </a>
 
     <nav class="nav-menu" aria-label="Primary Navigation">
-      <a href="/download" class={`nav-link ${pathname === '/download' ? 'active' : ''}`}>Download</a>
       <a href={isHome ? "#how-it-works" : "/#how-it-works"} class="nav-link">How It Works</a>
       <a href={isHome ? "#comparison" : "/#comparison"} class="nav-link">Comparison</a>
       <a href="/security" class={`nav-link ${pathname === '/security' ? 'active' : ''}`}>Security</a>

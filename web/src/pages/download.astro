@@ -34,8 +34,8 @@ const softwareLd = {
       </p>
     </div>
 
-    <div class="container download-grid-container">
-      <div class="download-grid">
+    <div class="container download-grid-container reveal">
+      <div class="download-grid reveal-stagger">
         {
           platforms.map((platform) => (
             <div id={platform.id} class="card download-card">
@@ -66,7 +66,7 @@ const softwareLd = {
     </div>
 
     <!-- Checksum Verification -->
-    <div class="container container-prose" style="margin-top: var(--space-16);">
+    <div class="container container-prose reveal" style="margin-top: var(--space-16);">
       <div class="card">
         <h3>Cryptographic Package Verification</h3>
         <p>
