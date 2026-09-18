@@ -56,6 +56,25 @@ const {
 </html>
 
 <script>
+  async function copyToClipboard(text: string): Promise<void> {
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      (document as { execCommand?: (cmd: string) => boolean }).execCommand?.('copy');
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  }
+
   function initCodeCopyFeature() {
     // 1. Process all <pre> code blocks
     document.querySelectorAll('pre').forEach((pre) => {
@@ -80,18 +99,7 @@ const {
         const textToCopy = (codeEl.innerText || codeEl.textContent || '').trim();
 
         try {
-          if (navigator.clipboard && window.isSecureContext) {
-            await navigator.clipboard.writeText(textToCopy);
-          } else {
-            const textarea = document.createElement('textarea');
-            textarea.value = textToCopy;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand('copy');
-            document.body.removeChild(textarea);
-          }
+          await copyToClipboard(textToCopy);
 
           copyBtn.classList.add('copied');
           copyBtn.innerHTML = `
@@ -116,15 +124,16 @@ const {
         }
       });
 
+      pre.style.position = 'relative';
       pre.appendChild(copyBtn);
     });
 
     // 2. Process terminal/install snippets (.install-snippet, .hero-install-hint)
-    document.querySelectorAll('.install-snippet, .hero-install-hint').forEach((snippet) => {
+    document.querySelectorAll<HTMLElement>('.install-snippet, .hero-install-hint').forEach((snippet) => {
       if (snippet.dataset.copyInitialized) return;
       snippet.dataset.copyInitialized = 'true';
 
-      const codeEl = snippet.querySelector('code');
+      const codeEl = snippet.querySelector<HTMLElement>('code');
       if (!codeEl) return;
 
       const snippetBtn = document.createElement('button');
@@ -143,18 +152,7 @@ const {
         e.stopPropagation();
         const text = (codeEl.innerText || codeEl.textContent || '').trim();
         try {
-          if (navigator.clipboard && window.isSecureContext) {
-            await navigator.clipboard.writeText(text);
-          } else {
-            const textarea = document.createElement('textarea');
-            textarea.value = text;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand('copy');
-            document.body.removeChild(textarea);
-          }
+          await copyToClipboard(text);
 
           snippetBtn.classList.add('copied');
           snippetBtn.innerHTML = `
@@ -182,7 +180,7 @@ const {
     });
 
     // 3. Process all inline <code> tags (not inside pre or snippets)
-    document.querySelectorAll(':not(pre):not(.install-snippet):not(.hero-install-hint) > code').forEach((code) => {
+    document.querySelectorAll<HTMLElement>(':not(pre):not(.install-snippet):not(.hero-install-hint) > code').forEach((code) => {
       if (code.dataset.copyInitialized) return;
       code.dataset.copyInitialized = 'true';
       code.setAttribute('title', 'Click to copy');
@@ -193,18 +191,7 @@ const {
 
         const text = (code.innerText || code.textContent || '').trim();
         try {
-          if (navigator.clipboard && window.isSecureContext) {
-            await navigator.clipboard.writeText(text);
-          } else {
-            const textarea = document.createElement('textarea');
-            textarea.value = text;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand('copy');
-            document.body.removeChild(textarea);
-          }
+          await copyToClipboard(text);
 
           const existing = code.querySelector('.code-copy-tooltip');
           if (existing) existing.remove();
