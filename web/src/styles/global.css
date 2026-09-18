@@ -240,10 +240,28 @@ pre:hover .copy-code-btn,
 .copy-snippet-btn:hover {
   color: var(--cdus-cyan);
   background: var(--cdus-dark-elevated);
+  transform: scale(1.08);
 }
 
-.copy-snippet-btn.copied {
+.copy-snippet-btn:active {
+  transform: scale(0.92);
+}
+
+.copy-snippet-btn.copied,
+.copy-code-btn.copied {
   color: var(--cdus-status-online);
+}
+
+.copy-snippet-btn.copied svg,
+.copy-code-btn.copied svg {
+  animation: springPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes springPop {
+  0% { transform: scale(0.65); opacity: 0; }
+  50% { transform: scale(1.22); }
+  75% { transform: scale(0.94); }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 /* Inline Code Click to Copy */
@@ -335,16 +353,40 @@ pre:hover .copy-code-btn,
 }
 
 .btn-primary {
+  position: relative;
+  overflow: hidden;
   background-color: var(--cdus-cyan);
   color: #0A1E22;
   font-weight: 700;
   border-color: var(--cdus-cyan);
 }
 
+.btn-primary::after {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(
+    60deg,
+    transparent 35%,
+    rgba(255, 255, 255, 0.32) 50%,
+    transparent 65%
+  );
+  transform: translateX(-120%);
+  pointer-events: none;
+  transition: transform 0.65s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.btn-primary:hover::after {
+  transform: translateX(120%);
+}
+
 .btn-primary:hover {
   background-color: var(--cdus-cyan-hover);
   color: #051315;
-  box-shadow: 0 4px 20px rgba(36, 200, 219, 0.35);
+  box-shadow: 0 4px 20px rgba(36, 200, 219, 0.4);
 }
 
 .btn-secondary {
@@ -439,6 +481,37 @@ pre:hover .copy-code-btn,
   border-color: rgba(36, 200, 219, 0.35);
   box-shadow: 0 16px 36px -8px rgba(0, 0, 0, 0.65),
               0 0 0 1px rgba(36, 200, 219, 0.15);
+}
+
+/* Card Spotlight Glow (Linear/Vercel style cursor follow) */
+.spotlight-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.spotlight-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    360px circle at var(--mouse-x, -999px) var(--mouse-y, -999px),
+    rgba(36, 200, 219, 0.16),
+    transparent 75%
+  );
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 1;
+}
+
+.spotlight-card:hover::before {
+  opacity: 1;
+}
+
+.spotlight-card > * {
+  position: relative;
+  z-index: 2;
 }
 
 /* Grid Utilities */
@@ -594,7 +667,7 @@ pre:hover .copy-code-btn,
 /* Scroll Reveal (0-CLS, GPU-Accelerated) */
 .reveal {
   opacity: 0;
-  transform: translateY(20px);
+  transform: translateY(22px) scale(0.985);
   transition: opacity 0.55s cubic-bezier(0.16, 1, 0.3, 1),
               transform 0.55s cubic-bezier(0.16, 1, 0.3, 1);
   will-change: transform, opacity;
@@ -602,7 +675,7 @@ pre:hover .copy-code-btn,
 
 .reveal.is-visible {
   opacity: 1;
-  transform: translateY(0);
+  transform: translateY(0) scale(1);
 }
 
 .reveal-stagger > *:nth-child(1) { transition-delay: 0.04s; }
@@ -622,7 +695,9 @@ pre:hover .copy-code-btn,
     opacity: 1 !important;
     transform: none !important;
   }
-  .status-dot.online::after {
+  .status-dot.online::after,
+  .btn-primary::after,
+  .spotlight-card::before {
     display: none !important;
   }
 }

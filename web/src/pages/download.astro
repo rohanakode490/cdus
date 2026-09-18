@@ -34,11 +34,22 @@ const softwareLd = {
       </p>
     </div>
 
+    <!-- Platform Filter Tabs -->
+    <div class="container download-filter-container reveal">
+      <div class="filter-pills" role="tablist" aria-label="Filter packages by operating system">
+        <button type="button" class="filter-pill active" data-filter="all">All Packages (4)</button>
+        <button type="button" class="filter-pill" data-filter="linux">Linux</button>
+        <button type="button" class="filter-pill" data-filter="windows">Windows</button>
+        <button type="button" class="filter-pill" data-filter="macos">macOS</button>
+        <button type="button" class="filter-pill" data-filter="android">Android</button>
+      </div>
+    </div>
+
     <div class="container download-grid-container reveal">
       <div class="download-grid reveal-stagger">
         {
           platforms.map((platform) => (
-            <div id={platform.id} class="card download-card">
+            <div id={platform.id} class="card download-card spotlight-card" data-platform={platform.id}>
               <div class="download-card-header">
                 <div class="platform-icon-wrapper">
                   <Icon name={platform.icon} class="platform-icon-svg" />
@@ -194,4 +205,102 @@ const softwareLd = {
     overflow-x: auto;
     font-family: var(--font-mono);
   }
+
+  /* Filter Pills */
+  .download-filter-container {
+    display: flex;
+    justify-content: center;
+    margin-top: var(--space-8);
+  }
+
+  .filter-pills {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0.3rem;
+    background: #121617;
+    border: 1px solid var(--cdus-dark-border);
+    border-radius: var(--radius-pill);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .filter-pill {
+    background: transparent;
+    border: none;
+    color: var(--cdus-text-secondary);
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 0.4rem 0.95rem;
+    border-radius: var(--radius-pill);
+    cursor: pointer;
+    transition: all var(--duration-fast) var(--ease-standard);
+  }
+
+  .filter-pill:hover {
+    color: var(--cdus-text-primary);
+  }
+
+  .filter-pill.active {
+    background: var(--cdus-cyan);
+    color: #0A1E22;
+    box-shadow: 0 0 12px rgba(36, 200, 219, 0.4);
+  }
+
+  .download-card {
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 0.3s ease,
+                box-shadow 0.3s ease,
+                opacity 0.25s ease;
+  }
+
+  .download-card.is-hidden {
+    display: none;
+  }
+
+  .download-card:hover .platform-icon-wrapper {
+    transform: translateY(-3px) scale(1.08);
+    border-color: rgba(36, 200, 219, 0.5);
+    box-shadow: 0 4px 14px rgba(36, 200, 219, 0.3);
+  }
+
+  .platform-icon-wrapper {
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 0.3s ease,
+                box-shadow 0.3s ease;
+  }
 </style>
+
+<script>
+  function initDownloadFilter() {
+    const pills = document.querySelectorAll<HTMLButtonElement>('.filter-pill');
+    const cards = document.querySelectorAll<HTMLElement>('.download-card');
+    if (!pills.length || !cards.length) return;
+
+    pills.forEach((pill) => {
+      pill.addEventListener('click', () => {
+        const targetFilter = pill.dataset.filter || 'all';
+
+        pills.forEach((p) => p.classList.remove('active'));
+        pill.classList.add('active');
+
+        cards.forEach((card) => {
+          const platform = card.dataset.platform;
+          if (targetFilter === 'all' || platform === targetFilter) {
+            card.classList.remove('is-hidden');
+          } else {
+            card.classList.add('is-hidden');
+          }
+        });
+      });
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initDownloadFilter);
+  } else {
+    initDownloadFilter();
+  }
+  document.addEventListener('astro:page-load', initDownloadFilter);
+</script>

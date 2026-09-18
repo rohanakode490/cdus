@@ -246,9 +246,28 @@ const {
     reveals.forEach((el) => observer.observe(el));
   }
 
+  function initCardSpotlights() {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    document.querySelectorAll('.spotlight-card').forEach((card) => {
+      if ((card as HTMLElement).dataset.spotlightInit) return;
+      (card as HTMLElement).dataset.spotlightInit = 'true';
+
+      card.addEventListener('pointermove', (e: Event) => {
+        const mouseEvent = e as MouseEvent;
+        const rect = (card as HTMLElement).getBoundingClientRect();
+        const x = mouseEvent.clientX - rect.left;
+        const y = mouseEvent.clientY - rect.top;
+        (card as HTMLElement).style.setProperty('--mouse-x', `${x}px`);
+        (card as HTMLElement).style.setProperty('--mouse-y', `${y}px`);
+      });
+    });
+  }
+
   function initPageEnhancements() {
     initCodeCopyFeature();
     initScrollReveals();
+    initCardSpotlights();
   }
 
   if (document.readyState === 'loading') {

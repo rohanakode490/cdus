@@ -88,7 +88,7 @@ const jsonLd = [
           <!-- Window Inner Panels -->
           <div class="window-surface">
             <!-- Active Connected Peers -->
-            <div class="surface-card">
+            <div class="surface-card spotlight-card">
               <div class="surface-card-header">
                 <span class="surface-heading">Connected Peers (2)</span>
                 <span class="surface-tag">P2P Mesh</span>
@@ -119,7 +119,7 @@ const jsonLd = [
             </div>
 
             <!-- Real-time Clipboard Stream -->
-            <div class="surface-card">
+            <div class="surface-card spotlight-card">
               <div class="surface-card-header">
                 <span class="surface-heading">Universal Clipboard</span>
                 <span class="surface-tag tag-cyan">14ms latency</span>
@@ -134,7 +134,7 @@ const jsonLd = [
             </div>
 
             <!-- Verified File Chunk Stream -->
-            <div class="surface-card">
+            <div class="surface-card spotlight-card">
               <div class="surface-card-header">
                 <span class="surface-heading">File Transfer Stream</span>
                 <span class="surface-speed">94.2 MB/s</span>
@@ -181,7 +181,7 @@ const jsonLd = [
           <a href="/security" class="text-link">Read the cryptographic specification &rarr;</a>
         </div>
         <div class="flow-code">
-          <div class="code-box">
+          <div class="code-box spotlight-card">
             <div class="code-box-header">
               <span>Terminal &bull; Pairing Handshake</span>
             </div>
@@ -210,7 +210,7 @@ Confirm 6-digit SAS matches on peer: [ 849 203 ]
           <a href="/docs/architecture" class="text-link">Explore the thread pipeline architecture &rarr;</a>
         </div>
         <div class="flow-code">
-          <div class="code-box">
+          <div class="code-box spotlight-card">
             <div class="code-box-header">
               <span>Engine Metrics</span>
             </div>
@@ -240,7 +240,7 @@ Clipboard latency: 14 ms (p99)</code></pre>
           <a href="/docs/troubleshooting" class="text-link">Review network fallback mechanics &rarr;</a>
         </div>
         <div class="flow-code">
-          <div class="code-box">
+          <div class="code-box spotlight-card">
             <div class="code-box-header">
               <span>Resume Integrity Check</span>
             </div>
@@ -351,7 +351,7 @@ Transfer completed in 6.4s without full retransmission.</code></pre>
       <div class="grid-4 platform-grid reveal-stagger">
         {
           platforms.map((platform) => (
-            <div class="card platform-card">
+            <div class="card platform-card spotlight-card">
               <div class="platform-icon">
                 <Icon name={platform.icon} class="platform-icon-svg" />
               </div>
@@ -549,6 +549,23 @@ Transfer completed in 6.4s without full retransmission.</code></pre>
     background: #131718;
     border: 1px solid #232B2D;
     border-radius: var(--radius-sm);
+    transition: transform var(--duration-fast) var(--ease-standard),
+                background var(--duration-fast) var(--ease-standard),
+                border-color var(--duration-fast) var(--ease-standard);
+  }
+
+  .peer-item:hover {
+    background: rgba(36, 200, 219, 0.08);
+    border-color: rgba(36, 200, 219, 0.4);
+    transform: translateX(3px);
+  }
+
+  .peer-item:hover .pill-direct {
+    box-shadow: 0 0 10px rgba(36, 200, 219, 0.5);
+  }
+
+  .peer-item:hover .pill-relay {
+    box-shadow: 0 0 10px rgba(239, 108, 0, 0.5);
   }
 
   .peer-primary {
@@ -581,6 +598,7 @@ Transfer completed in 6.4s without full retransmission.</code></pre>
     padding: 0.15rem 0.5rem;
     border-radius: var(--radius-pill);
     white-space: nowrap;
+    transition: box-shadow var(--duration-fast) var(--ease-standard);
   }
 
   .pill-direct {
@@ -593,6 +611,31 @@ Transfer completed in 6.4s without full retransmission.</code></pre>
     background: #3B2314;
     color: #FFCC80;
     border: 1px solid rgba(239, 108, 0, 0.4);
+  }
+
+  .surface-speed {
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--cdus-cyan);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .surface-speed::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--cdus-cyan);
+    box-shadow: 0 0 6px var(--cdus-cyan);
+    animation: speedBlink 1.4s ease-in-out infinite alternate;
+  }
+
+  @keyframes speedBlink {
+    0% { opacity: 0.4; transform: scale(0.8); }
+    100% { opacity: 1; transform: scale(1.25); box-shadow: 0 0 10px var(--cdus-cyan); }
   }
 
   .clipboard-box {
@@ -651,9 +694,30 @@ Transfer completed in 6.4s without full retransmission.</code></pre>
   }
 
   .progress-bar-fill {
+    position: relative;
     height: 100%;
     background: linear-gradient(90deg, #00838F, #24C8DB);
     border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .progress-bar-fill::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.55) 50%,
+      transparent 100%
+    );
+    transform: translateX(-100%);
+    animation: transferShimmer 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  @keyframes transferShimmer {
+    0% { transform: translateX(-100%); }
+    60%, 100% { transform: translateX(100%); }
   }
 
   .transfer-meta-row {
@@ -748,18 +812,23 @@ Transfer completed in 6.4s without full retransmission.</code></pre>
     justify-content: center;
     margin-bottom: var(--space-4);
     height: 48px;
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), filter 0.3s ease;
+  }
+
+  .platform-card:hover .platform-icon {
+    transform: translateY(-4px) scale(1.12);
+    filter: drop-shadow(0 6px 16px rgba(36, 200, 219, 0.45));
   }
 
   .platform-icon-svg {
     width: 36px;
     height: 36px;
     color: var(--cdus-cyan-light);
-    transition: transform var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+    transition: color var(--duration-fast) var(--ease-standard);
   }
 
   .platform-card:hover .platform-icon-svg {
     color: var(--cdus-cyan);
-    transform: scale(1.08);
   }
 
   .platform-card h3 {
