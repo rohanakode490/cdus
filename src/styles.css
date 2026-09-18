@@ -1268,7 +1268,17 @@ input[type="text"] {
 }
 
 .favicon-fallback {
-  font-size: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: #888;
+}
+
+.favicon-fallback svg {
+  width: 18px;
+  height: 18px;
 }
 
 .url-metadata-text {
@@ -1484,8 +1494,27 @@ input[type="text"] {
 }
 
 .feature-icon {
-  font-size: 1.4rem;
-  line-height: 1;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(36, 200, 219, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #00838f;
+}
+
+@media (prefers-color-scheme: dark) {
+  .feature-icon {
+    background: rgba(36, 200, 219, 0.15);
+    color: #4dd0e1;
+  }
+}
+
+.feature-icon svg {
+  width: 20px;
+  height: 20px;
 }
 
 .feature-text {
@@ -1719,9 +1748,16 @@ input[type="text"] {
 }
 
 .search-overlay-header .search-icon {
-  font-size: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin-right: 12px;
   color: #888;
+}
+
+.search-overlay-header .search-icon svg {
+  width: 20px;
+  height: 20px;
 }
 
 #global-search-input {
@@ -1835,21 +1871,28 @@ input[type="text"] {
 }
 
 .result-icon {
-  font-size: 1.2rem;
   margin-right: 14px;
   width: 28px;
   height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.03);
+  background: rgba(0, 0, 0, 0.04);
   border-radius: 6px;
+  color: #555;
+  flex-shrink: 0;
 }
 
 @media (prefers-color-scheme: dark) {
   .result-icon {
-    background: rgba(255, 255, 255, 0.03);
+    background: rgba(255, 255, 255, 0.05);
+    color: #bbb;
   }
+}
+
+.result-icon svg {
+  width: 16px;
+  height: 16px;
 }
 
 .result-main {

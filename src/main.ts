@@ -6,6 +6,14 @@ import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import QRCode from "qrcode";
 import { Html5Qrcode } from "html5-qrcode";
+import { 
+  SVG_GLOBE, 
+  SVG_CLIPBOARD, 
+  SVG_IMAGE, 
+  SVG_DOCUMENT, 
+  SVG_DEVICE, 
+  renderIcons 
+} from "./icons";
 
 function formatTimestamp(timestampStr: string): string {
   try {
@@ -428,7 +436,7 @@ function filterAndRenderClipboard() {
           isRich = true;
           const faviconHtml = parsed.favicon 
             ? `<img src="${parsed.favicon}" class="favicon-icon" alt="" />`
-            : `<span class="favicon-fallback">🌐</span>`;
+            : `<span class="favicon-fallback">${SVG_GLOBE}</span>`;
           displayHtml = `
             <div class="clipboard-content rich-content url-content">
               <div class="url-metadata-container">
@@ -1119,6 +1127,7 @@ function showPairingModal(device: any, isInitiator: boolean, silent: boolean = f
 // --- Main Application Lifecycle ---
 
 window.addEventListener("DOMContentLoaded", () => {
+  renderIcons();
   // Initialize UI Element references
   fileTransferModal = document.querySelector("#file-transfer-modal");
   fileAcceptBtn = document.querySelector("#file-accept-btn");
@@ -2044,7 +2053,11 @@ window.addEventListener("DOMContentLoaded", () => {
         itemDiv.setAttribute("tabindex", "0");
         (itemDiv as any)._searchItem = item;
 
-        const icon = item.type === "clipboard" ? "📋" : (item.type === "file" ? (item.text.endsWith(".png") ? "🖼️" : "📄") : "💻");
+        const icon = item.type === "clipboard" 
+          ? SVG_CLIPBOARD 
+          : (item.type === "file" 
+              ? (item.text.endsWith(".png") || item.text.endsWith(".jpg") || item.text.endsWith(".jpeg") ? SVG_IMAGE : SVG_DOCUMENT) 
+              : SVG_DEVICE);
         
         itemDiv.innerHTML = `
           <div class="result-icon">${icon}</div>
@@ -2151,7 +2164,7 @@ window.addEventListener("DOMContentLoaded", () => {
           isRich = true;
           const faviconHtml = parsed.favicon 
             ? `<img src="${parsed.favicon}" style="width:16px; height:16px; object-fit:contain; border-radius:2px;" alt="" />`
-            : `🌐`;
+            : SVG_GLOBE;
           displayHtml = `
             <div class="preview-title" style="display:flex; align-items:center; gap:6px;">
               ${faviconHtml}

@@ -26,7 +26,7 @@
           <button class="nav-item" data-view="notifications">Notifications</button>
           <button class="nav-item" data-view="audit">Audit Log</button>
           <button class="nav-item" data-view="settings">Settings</button>
-          <button class="nav-item" id="sidebar-search-btn" style="margin-top: 10px; border-top: 1px solid rgba(0,0,0,0.05); padding-top: 15px;">🔍 Search <span class="shortcut-tag" style="font-size: 0.75rem; background: rgba(0,0,0,0.05); padding: 2px 6px; border-radius: 4px; float: right; font-family: monospace;">Ctrl+S</span></button>
+          <button class="nav-item" id="sidebar-search-btn" style="margin-top: 10px; border-top: 1px solid rgba(0,0,0,0.05); padding-top: 15px; display: flex; align-items: center; gap: 8px;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span style="flex: 1; text-align: left;">Search</span><span class="shortcut-tag" style="font-size: 0.75rem; background: rgba(0,0,0,0.05); padding: 2px 6px; border-radius: 4px; font-family: monospace;">Ctrl+S</span></button>
         </nav>
     </aside>
 
@@ -455,21 +455,40 @@
         
         <div class="onboarding-features-list">
           <div class="feature-row">
-            <span class="feature-icon">📋</span>
+            <span class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+                <path d="M9 12h6"></path>
+                <path d="M9 16h6"></path>
+              </svg>
+            </span>
             <div class="feature-text">
               <span class="feature-title">Clipboard Synchronization</span>
               <span class="feature-detail">Automatically syncs text and images securely across devices.</span>
             </div>
           </div>
           <div class="feature-row">
-            <span class="feature-icon">📁</span>
+            <span class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                <path d="M12 11v6"></path>
+                <path d="m9 14 3 3 3-3"></path>
+              </svg>
+            </span>
             <div class="feature-text">
               <span class="feature-title">P2P File Transfer</span>
               <span class="feature-detail">Send files of any size directly, with resume support.</span>
             </div>
           </div>
           <div class="feature-row">
-            <span class="feature-icon">🔒</span>
+            <span class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                <circle cx="12" cy="11" r="1.5"></circle>
+                <path d="M12 12.5V15"></path>
+              </svg>
+            </span>
             <div class="feature-text">
               <span class="feature-title">End-to-End Encryption</span>
               <span class="feature-detail">Your data is secured using the Noise Protocol before it leaves.</span>
@@ -490,7 +509,7 @@
   <div id="search-overlay" class="modal hidden">
     <div class="search-overlay-content">
       <div class="search-overlay-header">
-        <span class="search-icon">🔍</span>
+        <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></span>
         <input type="text" id="global-search-input" placeholder="Search clipboard, files, devices..." autocomplete="off" />
         <span class="search-shortcut-hint">ESC to close</span>
       </div>
@@ -527,7 +546,7 @@
           <span><kbd>↵</kbd> to select</span>
         </div>
         <div class="feedback-trigger-container">
-          <button id="search-feedback-btn" class="text-btn">💡 Send Feedback</button>
+          <button id="search-feedback-btn" class="text-btn" style="display: inline-flex; align-items: center; gap: 6px;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6"></path><path d="M10 22h4"></path><path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14"></path></svg>Send Feedback</button>
         </div>
       </div>
     </div>
@@ -561,7 +580,7 @@
   <div id="error-modal" class="modal hidden">
     <div class="modal-content error-modal-content" style="width: 420px;">
       <div class="error-modal-header" style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px; width: 100%;">
-        <span class="error-icon" style="font-size: 1.8rem; color: #f44336;">⚠️</span>
+        <span class="error-icon" style="display: inline-flex; align-items: center; color: #ef4444;" aria-hidden="true"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></span>
         <h3 id="error-modal-title" style="margin: 0; font-size: 1.3rem;">Error Occurred</h3>
       </div>
       <p id="error-modal-message" style="margin-bottom: 20px; font-size: 0.95rem; color: #333; line-height: 1.5; text-align: left; width: 100%;"></p>
