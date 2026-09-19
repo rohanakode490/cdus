@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -520,7 +521,12 @@ fun ClipboardListItem(
                                         .clip(RoundedCornerShape(4.dp))
                                 )
                             } else {
-                                Text("🌐", style = MaterialTheme.typography.bodyMedium)
+                                Icon(
+                                    imageVector = Icons.Default.Language,
+                                    contentDescription = "Web link",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
                             }
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {

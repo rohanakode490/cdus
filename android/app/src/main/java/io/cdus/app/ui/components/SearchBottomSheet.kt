@@ -22,6 +22,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.HelpOutline
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import uniffi.cdus_ffi.search
@@ -32,24 +38,24 @@ data class SearchItem(
     val type: String, // "clipboard", "file", "device"
     val title: String,
     val subtitle: String,
-    val icon: String
+    val icon: ImageVector
 )
 
 fun FfiSearchResult.toSearchItem(): SearchItem {
     val icon = when (itemType) {
-        "clipboard" -> "📋"
+        "clipboard" -> Icons.Default.ContentPaste
         "file" -> {
             if (title.endsWith(".png", ignoreCase = true) ||
                 title.endsWith(".jpg", ignoreCase = true) ||
                 title.endsWith(".jpeg", ignoreCase = true) ||
                 title.endsWith(".gif", ignoreCase = true)) {
-                "🖼️"
+                Icons.Default.Image
             } else {
-                "📄"
+                Icons.Default.Description
             }
         }
-        "device" -> "💻"
-        else -> "❓"
+        "device" -> Icons.Default.Devices
+        else -> Icons.Default.HelpOutline
     }
     return SearchItem(
         id = id,
@@ -308,9 +314,11 @@ fun SearchBottomSheet(
                                             modifier = Modifier.size(40.dp)
                                         ) {
                                             Box(contentAlignment = Alignment.Center) {
-                                                Text(
-                                                    text = item.icon,
-                                                    fontSize = 20.sp
+                                                Icon(
+                                                    imageVector = item.icon,
+                                                    contentDescription = item.type,
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(22.dp)
                                                 )
                                             }
                                         }
