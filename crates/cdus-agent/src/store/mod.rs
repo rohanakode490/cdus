@@ -1273,6 +1273,11 @@ impl Store {
                 if self.get_state("id_migrated_v3")?.is_some() {
                     // Check if it's actually a valid PeerId string (Base58)
                     if existing_id.parse::<libp2p::PeerId>().is_ok() {
+                        if let Ok(priv_arr) = priv_bytes.clone().try_into() as Result<[u8; 32], _> {
+                            let secret = x25519_dalek::StaticSecret::from(priv_arr);
+                            let pubkey = x25519_dalek::PublicKey::from(&secret);
+                            let _ = self.set_state("static_key", &hex::encode(pubkey.as_bytes()));
+                        }
                         return Ok((existing_id, priv_bytes));
                     }
                 }
@@ -1289,6 +1294,14 @@ impl Store {
                             info!("Migrating hex node_id to PeerId: {}", node_id);
                             self.set_state("node_id", &node_id)?;
                             self.set_state("id_migrated_v3", "true")?;
+                            if let Ok(priv_arr) =
+                                priv_bytes.clone().try_into() as Result<[u8; 32], _>
+                            {
+                                let secret = x25519_dalek::StaticSecret::from(priv_arr);
+                                let pubkey = x25519_dalek::PublicKey::from(&secret);
+                                let _ =
+                                    self.set_state("static_key", &hex::encode(pubkey.as_bytes()));
+                            }
                             return Ok((node_id, priv_bytes));
                         }
                     }
@@ -1310,6 +1323,13 @@ impl Store {
 
         // Save to local database
         self.set_state("private_key", &hex::encode(&priv_bytes))?;
+
+        // Cache static Noise public key
+        if let Ok(priv_arr) = priv_bytes.clone().try_into() as Result<[u8; 32], _> {
+            let secret = x25519_dalek::StaticSecret::from(priv_arr);
+            let pubkey = x25519_dalek::PublicKey::from(&secret);
+            let _ = self.set_state("static_key", &hex::encode(pubkey.as_bytes()));
+        }
 
         // Save to keyring (best effort, do not crash if unsupported/fails)
         if let Ok(entry) = Entry::new(&service_name, "private_key") {
@@ -1416,6 +1436,47 @@ impl Store {
             |row| row.get(0),
         )
         .optional()
+    }
+
+    pub fn get_local_static_key(&self) -> Option<Vec<u8>> {
+        if let Ok(Some(key_hex)) = self.get_state("static_key") {
+            if let Ok(bytes) = hex::decode(key_hex) {
+                return Some(bytes);
+            }
+        }
+
+        // Try getting private_key via keyring (using data_dir) or state fallback
+        let mut priv_bytes_opt = None;
+        if let Ok(Some(data_dir_str)) = self.get_state("data_dir") {
+            let dir_hash = blake3::hash(data_dir_str.as_bytes()).to_hex().to_string();
+            let service_name = format!("com.cdus.agent.{}", &dir_hash[..8]);
+            if let Ok(entry) = keyring::Entry::new(&service_name, "private_key") {
+                if let Ok(priv_key_hex) = entry.get_password() {
+                    if let Ok(b) = hex::decode(priv_key_hex) {
+                        priv_bytes_opt = Some(b);
+                    }
+                }
+            }
+        }
+
+        if priv_bytes_opt.is_none() {
+            if let Ok(Some(priv_key_hex)) = self.get_state("private_key") {
+                if let Ok(b) = hex::decode(priv_key_hex) {
+                    priv_bytes_opt = Some(b);
+                }
+            }
+        }
+
+        if let Some(priv_bytes) = priv_bytes_opt {
+            if let Ok(priv_arr) = priv_bytes.try_into() as Result<[u8; 32], _> {
+                let secret = x25519_dalek::StaticSecret::from(priv_arr);
+                let pubkey = x25519_dalek::PublicKey::from(&secret);
+                let pub_bytes = pubkey.as_bytes().to_vec();
+                let _ = self.set_state("static_key", &hex::encode(&pub_bytes));
+                return Some(pub_bytes);
+            }
+        }
+        None
     }
 
     pub fn is_device_paired(&self, node_id: &str) -> Result<bool> {

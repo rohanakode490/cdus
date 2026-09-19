@@ -36,28 +36,40 @@ pub struct SessionKey(pub [u8; 32]);
 /// Derives a deterministic 32-byte symmetric session key for a peer pair.
 ///
 /// Canonicalizes the local and peer identities in lexicographical order,
-/// incorporates any stored Noise static public key, and applies BLAKE3 key derivation.
+/// incorporates both peers' static Noise public keys (ordered by peer identity),
+/// and applies BLAKE3 key derivation to produce an identical key on both sides.
 pub fn derive_peer_session_key(store: &Store, peer_node_id: &str) -> SessionKey {
     let local_node_id = store
         .get_state("node_id")
         .ok()
         .flatten()
         .unwrap_or_default();
-    let remote_device = store.get_paired_device(peer_node_id).ok().flatten();
+    let local_static_key = store.get_local_static_key();
+    let remote_static_key = store
+        .get_paired_device(peer_node_id)
+        .ok()
+        .flatten()
+        .and_then(|d| d.static_key);
 
     let mut hasher = blake3::Hasher::new_derive_key("cdus-v1-file-transfer-session-key");
 
     if local_node_id.as_str() <= peer_node_id {
         hasher.update(local_node_id.as_bytes());
+        if let Some(ref k) = local_static_key {
+            hasher.update(k);
+        }
         hasher.update(peer_node_id.as_bytes());
+        if let Some(ref k) = remote_static_key {
+            hasher.update(k);
+        }
     } else {
         hasher.update(peer_node_id.as_bytes());
+        if let Some(ref k) = remote_static_key {
+            hasher.update(k);
+        }
         hasher.update(local_node_id.as_bytes());
-    }
-
-    if let Some(device) = remote_device {
-        if let Some(ref static_key) = device.static_key {
-            hasher.update(static_key);
+        if let Some(ref k) = local_static_key {
+            hasher.update(k);
         }
     }
 
@@ -2192,6 +2204,43 @@ mod tests {
         let encrypted = key.encrypt(data)?;
         let decrypted = key.decrypt(&encrypted)?;
         assert_eq!(data, &decrypted[..]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_derive_peer_session_key_reciprocal() -> Result<()> {
+        let dir1 = tempdir()?;
+        let store1 = Arc::new(Store::init(dir1.path())?);
+        let (id1, _) = store1
+            .get_or_create_identity(dir1.path())
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+        let key1 = store1.get_local_static_key().expect("local key 1");
+
+        let dir2 = tempdir()?;
+        let store2 = Arc::new(Store::init(dir2.path())?);
+        let (id2, _) = store2
+            .get_or_create_identity(dir2.path())
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+        let key2 = store2.get_local_static_key().expect("local key 2");
+
+        // Pair 1 with 2, and 2 with 1
+        store1.add_paired_device(&id2, "Device 2", Some(&key2))?;
+        store2.add_paired_device(&id1, "Device 1", Some(&key1))?;
+
+        // Derive keys from both perspectives
+        let session_key1 = derive_peer_session_key(&store1, &id2);
+        let session_key2 = derive_peer_session_key(&store2, &id1);
+
+        assert_eq!(
+            session_key1.0, session_key2.0,
+            "Session keys derived by reciprocal peers must match!"
+        );
+
+        // Test encryption from peer 1 and decryption by peer 2
+        let plaintext = b"Hello from Peer 1 to Peer 2";
+        let ciphertext = session_key1.encrypt(plaintext)?;
+        let decrypted = session_key2.decrypt(&ciphertext)?;
+        assert_eq!(plaintext, &decrypted[..]);
         Ok(())
     }
 }

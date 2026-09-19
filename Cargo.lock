@@ -1004,6 +1004,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "webrtc-util",
+ "x25519-dalek",
 ]
 
 [[package]]
