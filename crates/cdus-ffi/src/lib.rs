@@ -578,6 +578,24 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                         listener.on_remote_dismiss_request(key);
                                     }
                                 }
+                                IpcMessage::RevokeDevice { uuid } => {
+                                    if let Some(store) = STORE.lock().unwrap().as_ref() {
+                                        let _ = store.remove_paired_device(&uuid);
+                                    }
+                                    if let Some(tm) = TRANSFER_MANAGER.lock().unwrap().as_ref() {
+                                        tm.cancel_all_transfers_for_peer(&uuid);
+                                    }
+                                    if let Some(lm) = LIBP2P_MANAGER.lock().unwrap().as_ref() {
+                                        if let Ok(peer_id) = uuid.parse::<libp2p::PeerId>() {
+                                            lm.disconnect_peer(peer_id);
+                                        }
+                                    }
+                                    if let Some(listener) =
+                                        FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
+                                    {
+                                        listener.on_peer_disconnected(uuid);
+                                    }
+                                }
                                 _ => {
                                     info!("FFI Core: Received IPC message: {:?}", msg);
                                 }
@@ -971,6 +989,27 @@ pub fn get_paired_devices() -> Vec<PairedDevice> {
 pub fn unpair_device(node_id: String) {
     if let Some(store) = STORE.lock().unwrap().as_ref() {
         let _ = store.remove_paired_device(&node_id);
+    }
+}
+
+#[uniffi::export]
+pub fn revoke_device(node_id: String) {
+    if let Some(rm) = RELAY_MANAGER.lock().unwrap().as_ref() {
+        let _ = rm.revoke_device(node_id.clone());
+    }
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let _ = store.remove_paired_device(&node_id);
+    }
+    if let Some(tm) = TRANSFER_MANAGER.lock().unwrap().as_ref() {
+        tm.cancel_all_transfers_for_peer(&node_id);
+    }
+    if let Some(lm) = LIBP2P_MANAGER.lock().unwrap().as_ref() {
+        if let Ok(peer_id) = node_id.parse::<libp2p::PeerId>() {
+            lm.disconnect_peer(peer_id);
+        }
+    }
+    if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
+        listener.on_peer_disconnected(node_id);
     }
 }
 

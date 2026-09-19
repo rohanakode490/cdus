@@ -1032,8 +1032,6 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_telemetry_opt_in(uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_cdus_ffi_fn_func_greet_from_rust(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_init_core(`dataDir`: RustBuffer.ByValue,`deviceName`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_init_logging(uniffi_out_err: UniffiRustCallStatus, 
@@ -1047,6 +1045,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_reject_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_resume_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_revoke_device(`nodeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_save_clipboard_local(`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1236,8 +1236,6 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_telemetry_opt_in(
     ): Short
-    fun uniffi_cdus_ffi_checksum_func_greet_from_rust(
-    ): Short
     fun uniffi_cdus_ffi_checksum_func_init_core(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_init_logging(
@@ -1251,6 +1249,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_func_reject_file_transfer(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_resume_file_transfer(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_revoke_device(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_save_clipboard_local(
     ): Short
@@ -1401,9 +1401,6 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_get_telemetry_opt_in() != 16765.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_cdus_ffi_checksum_func_greet_from_rust() != 12695.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_cdus_ffi_checksum_func_init_core() != 61803.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1423,6 +1420,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_resume_file_transfer() != 13935.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_revoke_device() != 22702.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_save_clipboard_local() != 13978.toShort()) {
@@ -3001,15 +3001,6 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     )
     }
     
- fun `greetFromRust`(`name`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_greet_from_rust(
-        FfiConverterString.lower(`name`),_status)
-}
-    )
-    }
-    
  fun `initCore`(`dataDir`: kotlin.String, `deviceName`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
@@ -3064,6 +3055,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_resume_file_transfer(
         FfiConverterString.lower(`transferId`),_status)
+}
+    
+    
+ fun `revokeDevice`(`nodeId`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_revoke_device(
+        FfiConverterString.lower(`nodeId`),_status)
 }
     
     
