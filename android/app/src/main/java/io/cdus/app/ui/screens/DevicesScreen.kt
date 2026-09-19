@@ -44,6 +44,9 @@ import uniffi.cdus_ffi.cancelPairing
 import uniffi.cdus_ffi.clearDiscoveredDevices
 import uniffi.cdus_ffi.getPairedDevices
 import uniffi.cdus_ffi.unpairDevice
+import uniffi.cdus_ffi.revokeDevice
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import uniffi.cdus_ffi.PairedDevice
 import uniffi.cdus_ffi.sendFile
 import uniffi.cdus_ffi.startBenchmark
@@ -105,6 +108,7 @@ fun DevicesScreen() {
     // --- Reconnection & Relay Dialog States ---
     val connectionStates = remember { mutableStateMapOf<String, DeviceConnectionState>() }
     var showRelayErrorDialog by remember { mutableStateOf(false) }
+    var deviceToRevoke by remember { mutableStateOf<PairedDevice?>(null) }
     val scope = rememberCoroutineScope()
 
     fun triggerActualConnect(deviceId: String) {
@@ -275,6 +279,54 @@ fun DevicesScreen() {
                 dismissButton = {
                     TextButton(onClick = { showRelayErrorDialog = false }) {
                         Text("Close")
+                    }
+                }
+            )
+        }
+
+        if (deviceToRevoke != null) {
+            val target = deviceToRevoke!!
+            AlertDialog(
+                onDismissRequest = { deviceToRevoke = null },
+                icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                title = { Text("Revoke Device & Remote Lock?", fontWeight = FontWeight.Bold) },
+                text = {
+                    Text("This will permanently invalidate relay credentials for \"${UIUtils.formatDeviceLabel(target.label)}\", disconnect it, and lock it out from the CDUS mesh network.")
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val targetNodeId = target.nodeId
+                            val targetLabel = target.label
+                            deviceToRevoke = null
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    revokeDevice(targetNodeId)
+                                    val updated = getPairedDevices()
+                                    withContext(Dispatchers.Main) {
+                                        pairedDevices = updated
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "Revoked and locked out ${UIUtils.formatDeviceLabel(targetLabel)}",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                } catch (e: Exception) {
+                                    Logger.e("Error revoking device: ${e.message}")
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        )
+                    ) {
+                        Text("Revoke & Ban")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { deviceToRevoke = null }) {
+                        Text("Cancel")
                     }
                 }
             )
@@ -557,6 +609,7 @@ fun DevicesScreen() {
                         connectionState = connectionStates[device.nodeId],
                         isDeveloperMode = isDeveloperMode,
                         onUnpairClick = { unpairDevice(device.nodeId) },
+                        onRevokeClick = { deviceToRevoke = device },
                         onSendFileClick = {
                             selectedDeviceForFile = device.nodeId
                             filePickerLauncher.launch("*/*")
@@ -659,7 +712,8 @@ fun PairedDeviceItem(
     device: PairedDevice, 
     connectionState: DeviceConnectionState?,
     isDeveloperMode: Boolean = false,
-    onUnpairClick: () -> Unit, 
+    onUnpairClick: () -> Unit,
+    onRevokeClick: () -> Unit,
     onSendFileClick: () -> Unit,
     onReconnectClick: () -> Unit,
     onDisconnectClick: () -> Unit,
@@ -821,10 +875,17 @@ fun PairedDeviceItem(
                                 )
                             }
                             DropdownMenuItem(
-                                text = { Text("Unpair", color = MaterialTheme.colorScheme.error) },
+                                text = { Text("Unpair") },
                                 onClick = {
                                     showMenu = false
                                     onUnpairClick()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Revoke & Lockout", color = MaterialTheme.colorScheme.error) },
+                                onClick = {
+                                    showMenu = false
+                                    onRevokeClick()
                                 }
                             )
                         }
