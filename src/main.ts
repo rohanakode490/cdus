@@ -915,6 +915,7 @@ async function renderPairedDevices() {
           ${actionBtnHtml}
           ${(connState.status === "online" && isDeveloperMode) ? `<button class="tertiary-btn benchmark-btn" data-id="${id}" style="margin-right: 8px;">Benchmark</button>` : ""}
           <button class="secondary-btn unpair-btn" data-id="${id}">Unpair</button>
+          <button class="danger-btn revoke-btn" data-id="${id}" style="margin-left: 8px;">Revoke</button>
         </div>
       `;
 
@@ -929,6 +930,10 @@ async function renderPairedDevices() {
 
       row.querySelector(".unpair-btn")?.addEventListener("click", () => {
         unpairDevice(id);
+      });
+
+      row.querySelector(".revoke-btn")?.addEventListener("click", () => {
+        revokeDevice(id, name);
       });
 
       row.querySelector(".reconnect-now-btn")?.addEventListener("click", async () => {
@@ -985,6 +990,23 @@ async function unpairDevice(id: string) {
       renderPairedDevices();
     } catch (err) {
       console.error("Failed to unpair device:", err);
+    }
+  }
+}
+
+async function revokeDevice(id: string, name: string) {
+  if (
+    confirm(
+      `Are you sure you want to revoke and lock out "${name}"?\n\nThis will permanently invalidate its relay credentials, kick it from the mesh network, and remove it from paired devices.`
+    )
+  ) {
+    try {
+      await invoke("revoke_device", { uuid: id });
+      addAuditLog("system", `Revoked device credentials for ${name} (${id})`);
+      renderPairedDevices();
+    } catch (err) {
+      console.error("Failed to revoke device:", err);
+      alert(`Failed to revoke device: ${err}`);
     }
   }
 }

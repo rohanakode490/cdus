@@ -116,4 +116,28 @@ describe("Frontend UI Contracts & Template Integrity", () => {
       expect(mainTsContent).toContain("renderIcons();");
     });
   });
+
+  describe("Device Revocation UI Contracts (src/main.ts & src/styles.css)", () => {
+    it("includes a Revoke action button with danger styling in paired device rows", () => {
+      expect(mainTsContent).toContain('class="danger-btn revoke-btn"');
+      expect(mainTsContent).toContain('data-id="${id}"');
+    });
+
+    it("wires the revoke-btn click listener to revokeDevice", () => {
+      expect(mainTsContent).toContain('.querySelector(".revoke-btn")?.addEventListener("click"');
+      expect(mainTsContent).toContain("revokeDevice(id, name);");
+    });
+
+    it("prompts the user with a security lockout confirmation and calls revoke_device invoke", () => {
+      expect(mainTsContent).toContain("async function revokeDevice");
+      expect(mainTsContent).toContain('invoke("revoke_device"');
+      expect(mainTsContent).toContain("uuid: id");
+      expect(mainTsContent).toContain('addAuditLog("system"');
+    });
+
+    it("verifies danger-btn CSS rules for visual affordance", () => {
+      expect(stylesContent).toContain(".danger-btn {");
+      expect(stylesContent).toContain("cursor: pointer;");
+    });
+  });
 });

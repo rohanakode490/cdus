@@ -293,6 +293,11 @@ fn unpair_device(node_id: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn revoke_device(uuid: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::RevokeDevice { uuid })
+}
+
+#[tauri::command]
 fn disconnect_device(node_id: String) -> Result<String, String> {
     send_ipc_log_response(IpcMessage::DisconnectDevice { node_id })
 }
@@ -859,6 +864,7 @@ pub fn run() {
             get_pairing_status,
             get_paired_devices,
             unpair_device,
+            revoke_device,
             disconnect_device,
             send_file,
             accept_file_transfer,
