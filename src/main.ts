@@ -625,8 +625,8 @@ async function loadFileHistory() {
     transfers.clear();
     history.forEach((record) => {
       let status = record.status;
-      if (status === "in_progress" || status === "paused" || status === "awaiting_acceptance") {
-        status = "paused";
+      if (status === "in_progress" || status === "paused" || status === "awaiting_acceptance" || status === "pending") {
+        status = "error";
       } else if (status === "failed") {
         status = "error";
       } else if (status === "declined") {
@@ -640,8 +640,10 @@ async function loadFileHistory() {
         progress: record.total_bytes > 0 ? Math.round((Number(record.bytes_confirmed) / Number(record.total_bytes)) * 100) : 0,
         status: status,
         direction: record.direction,
-        error: record.error_message,
-        totalBytes: Number(record.total_bytes)
+        error: record.error_message || (status === "error" ? "Transfer interrupted or timed out" : undefined),
+        totalBytes: Number(record.total_bytes),
+        createdAt: Number(record.created_at),
+        updatedAt: Number(record.updated_at)
       });
     });
     loadingEl?.classList.add("hidden");
@@ -653,6 +655,18 @@ async function loadFileHistory() {
     errorEl?.classList.remove("hidden");
     listEl?.classList.add("hidden");
   }
+}
+
+function formatTransferTime(timestampMs?: number): string {
+  if (!timestampMs || timestampMs <= 0) return "";
+  const ms = timestampMs < 100000000000 ? timestampMs * 1000 : timestampMs;
+  const date = new Date(ms);
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 let currentSortOrder = "newest";
@@ -708,8 +722,9 @@ function renderFiles() {
         </div>
         <div class="transfer-meta">
           <span>${transfer.direction === "incoming" ? "from" : "to"} ${getDeviceLabel(transfer.nodeId)}</span>
-          <span style="color: var(--tertiary-color);">${transfer.speedMbps ? transfer.speedMbps.toFixed(1) + " Mbps" : ""}</span>
-          <span>${transfer.progress}%</span>
+          ${transfer.createdAt ? `<span class="transfer-time">• ${formatTransferTime(transfer.createdAt)}</span>` : ""}
+          ${!isFinished && transfer.speedMbps ? `<span style="color: var(--tertiary-color);">${transfer.speedMbps.toFixed(1)} Mbps</span>` : ""}
+          <span>${transfer.status === "complete" ? "Done" : transfer.status === "error" ? "Failed" : transfer.status === "rejected" ? "Declined" : `${transfer.progress}%`}</span>
         </div>
       </div>
       <div class="transfer-actions-menu">
@@ -1033,7 +1048,8 @@ async function initiateFileSend(nodeId: string) {
           nodeId: nodeId,
           progress: 0,
           status: "preparing",
-          direction: "outgoing"
+          direction: "outgoing",
+          createdAt: Date.now()
       });
       renderFiles();
 
@@ -1539,19 +1555,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  document.querySelector("#manual-connect-btn")?.addEventListener("click", async () => {
-    const ipInput = document.querySelector("#manual-ip") as HTMLInputElement;
-    const portInput = document.querySelector("#manual-port") as HTMLInputElement;
-    const ip = ipInput.value;
-    const port = parseInt(portInput.value);
-    
-    try {
-      await invoke("manual_pair", { ip, port });
-    } catch (err) {
-      console.error("Manual pairing failed:", err);
-      alert("Failed to connect to IP.");
-    }
-  });
+
 
   // --- File Transfer Listeners ---
 
@@ -1619,7 +1623,8 @@ window.addEventListener("DOMContentLoaded", () => {
       progress: 0,
       status: "offered",
       direction: "incoming",
-      totalBytes: Number(offer.total_size)
+      totalBytes: Number(offer.total_size),
+      createdAt: Date.now()
     });
     renderFiles();
 
@@ -1649,7 +1654,8 @@ window.addEventListener("DOMContentLoaded", () => {
       progress: 0,
       status: "pending",
       direction: "incoming",
-      totalBytes: Number(manifest.total_size)
+      totalBytes: Number(manifest.total_size),
+      createdAt: Date.now()
     });
     renderFiles();
 
@@ -1685,7 +1691,8 @@ window.addEventListener("DOMContentLoaded", () => {
         nodeId: "Remote",
         progress: Math.round(progress),
         status: "hashing",
-        direction: "outgoing"
+        direction: "outgoing",
+        createdAt: Date.now()
       });
       renderFiles();
     }
@@ -1776,7 +1783,15 @@ window.addEventListener("DOMContentLoaded", () => {
     renderClipboard();
   });
 
-  listen("peer-disconnected", (_event: any) => {
+  listen("peer-disconnected", (event: any) => {
+    const nodeId = event.payload;
+    if (nodeId && typeof nodeId === "string") {
+      const connState = deviceConnectionStates.get(nodeId);
+      if (connState?.timerId) {
+        clearTimeout(connState.timerId);
+      }
+      deviceConnectionStates.set(nodeId, { status: "offline", transport: null });
+    }
     renderPairedDevices();
   });
 
