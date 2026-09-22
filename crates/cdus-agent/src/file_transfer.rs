@@ -874,16 +874,16 @@ fn handle_incoming_transfer_inner(
             || rec.status == "awaiting_acceptance"
             || rec.status == "pending"
         {
-            let err_msg = if let Err(ref e) = loop_res {
-                format!("{}", e)
+            if let Err(ref e) = loop_res {
+                let err_msg = format!("{}", e);
+                let _ = db.update_transfer_status_error(&transfer_id, &err_msg);
+                let _ = manager.progress_tx.send(ProgressEvent::Failed {
+                    transfer_id: transfer_id.clone(),
+                    reason: err_msg,
+                });
             } else {
-                "Transfer interrupted or peer disconnected".to_string()
-            };
-            let _ = db.update_transfer_status_error(&transfer_id, &err_msg);
-            let _ = manager.progress_tx.send(ProgressEvent::Failed {
-                transfer_id: transfer_id.clone(),
-                reason: err_msg,
-            });
+                let _ = db.update_transfer_status(&transfer_id, "paused");
+            }
         }
     }
     loop_res
@@ -913,16 +913,16 @@ pub fn handle_outgoing_transfer(
             || rec.status == "awaiting_acceptance"
             || rec.status == "pending"
         {
-            let err_msg = if let Err(ref e) = res {
-                format!("{}", e)
+            if let Err(ref e) = res {
+                let err_msg = format!("{}", e);
+                let _ = db.update_transfer_status_error(&transfer_id, &err_msg);
+                let _ = manager.progress_tx.send(ProgressEvent::Failed {
+                    transfer_id: transfer_id.clone(),
+                    reason: err_msg,
+                });
             } else {
-                "Transfer interrupted or peer disconnected".to_string()
-            };
-            let _ = db.update_transfer_status_error(&transfer_id, &err_msg);
-            let _ = manager.progress_tx.send(ProgressEvent::Failed {
-                transfer_id: transfer_id.clone(),
-                reason: err_msg,
-            });
+                let _ = db.update_transfer_status(&transfer_id, "paused");
+            }
         }
     }
     res
