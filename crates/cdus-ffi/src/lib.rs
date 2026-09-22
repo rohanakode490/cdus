@@ -956,20 +956,13 @@ pub fn get_paired_devices() -> Vec<PairedDevice> {
             Ok(devices) => {
                 let pm_lock = PAIRING_MANAGER.lock().unwrap();
                 let sync_manager = pm_lock.as_ref().map(|pm| &pm.sync_manager);
-                let peer_map = PEER_MAP.lock().unwrap();
 
                 devices
                     .into_iter()
                     .map(|record| {
                         let is_online = sync_manager
                             .map(|sm| sm.is_connected(&record.node_id))
-                            .unwrap_or(false)
-                            || peer_map
-                                .get(&record.node_id)
-                                .map(|(_, instant)| {
-                                    instant.elapsed() < std::time::Duration::from_secs(30)
-                                })
-                                .unwrap_or(false);
+                            .unwrap_or(false);
                         PairedDevice {
                             node_id: record.node_id,
                             label: record.label,

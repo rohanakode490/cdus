@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 use tungstenite::{accept, client, Message, WebSocket};
 
@@ -2457,44 +2457,53 @@ fn run_sync_session(
         .get_ref()
         .set_read_timeout(Some(Duration::from_millis(100)));
 
+    let mut last_ping = Instant::now();
+    let mut last_activity = Instant::now();
+    let ping_interval = Duration::from_secs(10);
+    let peer_timeout = Duration::from_secs(25);
+
     loop {
         // 1. Check for incoming messages from peer
         match read_ws_framed(&mut ws, &mut transport) {
             Ok(data) => {
-                if let Ok(msg) = SyncMessage::from_slice(&data) {
-                    match msg {
-                        SyncMessage::ClipboardUpdate { content, timestamp } => {
-                            info!("Received clipboard update from peer {}: {}", label, content);
-                            let _ = ipc_tx.send(IpcMessage::SetClipboard {
-                                content,
-                                timestamp,
-                                source: label.clone(),
-                            });
-                        }
-                        SyncMessage::NotificationMirror(payload) => {
-                            let _ = ipc_tx.send(IpcMessage::NotificationMirrored(payload));
-                        }
-                        SyncMessage::NotificationDismiss { key } => {
-                            let _ = ipc_tx.send(IpcMessage::NotificationDismissed { key });
-                        }
-                        SyncMessage::PeerExchange { peers } => {
-                            info!("Received PEX update from {} ({} peers)", label, peers.len());
-                            for peer in peers {
-                                if let Ok(peer_id) = peer.node_id.parse::<libp2p::PeerId>() {
-                                    for addr_str in peer.addresses {
-                                        if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
-                                            libp2p_manager.inject_address(peer_id, addr);
+                last_activity = Instant::now();
+                if !data.is_empty() {
+                    if let Ok(msg) = SyncMessage::from_slice(&data) {
+                        match msg {
+                            SyncMessage::ClipboardUpdate { content, timestamp } => {
+                                info!("Received clipboard update from peer {}: {}", label, content);
+                                let _ = ipc_tx.send(IpcMessage::SetClipboard {
+                                    content,
+                                    timestamp,
+                                    source: label.clone(),
+                                });
+                            }
+                            SyncMessage::NotificationMirror(payload) => {
+                                let _ = ipc_tx.send(IpcMessage::NotificationMirrored(payload));
+                            }
+                            SyncMessage::NotificationDismiss { key } => {
+                                let _ = ipc_tx.send(IpcMessage::NotificationDismissed { key });
+                            }
+                            SyncMessage::PeerExchange { peers } => {
+                                info!("Received PEX update from {} ({} peers)", label, peers.len());
+                                for peer in peers {
+                                    if let Ok(peer_id) = peer.node_id.parse::<libp2p::PeerId>() {
+                                        for addr_str in peer.addresses {
+                                            if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>()
+                                            {
+                                                libp2p_manager.inject_address(peer_id, addr);
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
-                        SyncMessage::Disconnect => {
-                            info!(
-                                "Received Disconnect request from peer {}, closing session",
-                                label
-                            );
-                            break;
+                            SyncMessage::Disconnect => {
+                                info!(
+                                    "Received Disconnect request from peer {}, closing session",
+                                    label
+                                );
+                                break;
+                            }
                         }
                     }
                 }
@@ -2509,7 +2518,29 @@ fn run_sync_session(
             }
         }
 
-        // 2. Check for outgoing messages
+        // 2. Periodic heartbeat ping to keep connection alive and detect dead sockets
+        if last_ping.elapsed() >= ping_interval {
+            last_ping = Instant::now();
+            if let Err(e) = ws.send(Message::Ping(vec![])) {
+                info!(
+                    "Failed to send ping to peer {}: {}, closing session",
+                    label, e
+                );
+                break;
+            }
+            let _ = ws.flush();
+        }
+
+        // 3. Inactivity watchdog: if no activity received within peer_timeout, consider connection lost
+        if last_activity.elapsed() >= peer_timeout {
+            info!(
+                "Peer {} heartbeat timed out after {:?}, closing session",
+                label, peer_timeout
+            );
+            break;
+        }
+
+        // 4. Check for outgoing messages
         match rx.try_recv() {
             Ok(msg) => {
                 let is_disconnect = msg == SyncMessage::Disconnect;
@@ -2566,6 +2597,12 @@ fn read_ws_framed(
                 Err(e) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             }
         }
+        Ok(Message::Ping(payload)) => {
+            let _ = ws.send(Message::Pong(payload));
+            let _ = ws.flush();
+            Ok(Vec::new())
+        }
+        Ok(Message::Pong(_)) => Ok(Vec::new()),
         Ok(Message::Close(_)) => Err(std::io::Error::new(
             std::io::ErrorKind::ConnectionAborted,
             "Connection closed by peer",

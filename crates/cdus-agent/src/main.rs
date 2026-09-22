@@ -1088,17 +1088,15 @@ fn main() {
                                                     )> = devices
                                                         .into_iter()
                                                         .map(|record| {
-                                                            let mut transport = sync_manager_ipc
-                                                                .get_peer_transport(&record.node_id);
-                                                            if transport.is_none() {
-                                                                let map = peer_map_clone.lock();
-                                                                if let Some((_, _, _, _, last_seen)) = map.get(&record.node_id) {
-                                                                    if last_seen.elapsed() < std::time::Duration::from_secs(30) {
-                                                                        transport = Some(cdus_common::TransportType::Lan);
-                                                                    }
-                                                                }
-                                                            }
-                                                            (record.node_id, record.label, transport)
+                                                            let transport = sync_manager_ipc
+                                                                .get_peer_transport(
+                                                                    &record.node_id,
+                                                                );
+                                                            (
+                                                                record.node_id,
+                                                                record.label,
+                                                                transport,
+                                                            )
                                                         })
                                                         .collect();
                                                     let resp_bytes = serde_json::to_vec(
