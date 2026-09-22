@@ -18,6 +18,7 @@ val CdusDarkSurface = Color(0xFF262626)       // Desktop sidebar, card, and moda
 val CdusDarkSurfaceVariant = Color(0xFF2D2D2D)// Desktop elevated surface / hover
 val CdusDarkBorder = Color(0xFF333333)        // Desktop card and divider border
 val CdusDarkBorderSubtle = Color(0xFF444444)  // Desktop secondary border
+val CdusDarkOutline = Color(0xFF9E9E9E)       // Readable secondary text, hints, icons & outline accents
 
 // Light Theme (Desktop: background #FFFFFF, surface #F6F6F6, border #E0E0E0)
 val CdusLightBase = Color(0xFFFFFFFF)         // Desktop root light background
@@ -26,6 +27,7 @@ val CdusLightCard = Color(0xFFFFFFFF)         // Desktop white card surface
 val CdusLightSurfaceVariant = Color(0xFFEDEDED) // Desktop hover / secondary container
 val CdusLightBorder = Color(0xFFE0E0E0)       // Desktop border
 val CdusLightBorderSubtle = Color(0xFFEEEEEE) // Desktop subtle divider
+val CdusLightOutline = Color(0xFF757575)      // Readable secondary text, hints, icons & outline accents
 
 // Text Hierarchies
 val CdusTextPrimaryDark = Color(0xFFF6F6F6)   // Desktop dark text

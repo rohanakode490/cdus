@@ -34,8 +34,8 @@ private val DarkColorScheme = darkColorScheme(
     onSurface = CdusTextPrimaryDark,
     surfaceVariant = CdusDarkSurfaceVariant,
     onSurfaceVariant = CdusTextSecondaryDark,
-    outline = CdusDarkBorder,
-    outlineVariant = CdusDarkBorderSubtle
+    outline = CdusDarkOutline,
+    outlineVariant = CdusDarkBorder
 )
 
 private val LightColorScheme = lightColorScheme(
@@ -61,8 +61,8 @@ private val LightColorScheme = lightColorScheme(
     onSurface = CdusTextPrimaryLight,
     surfaceVariant = CdusLightSurface,
     onSurfaceVariant = CdusTextSecondaryLight,
-    outline = CdusLightBorder,
-    outlineVariant = CdusLightBorderSubtle
+    outline = CdusLightOutline,
+    outlineVariant = CdusLightBorder
 )
 
 @Composable
