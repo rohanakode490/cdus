@@ -651,6 +651,11 @@ fn handle_incoming_transfer_inner(
             Ok(a) => a,
             Err(_) => {
                 error!("User decision timeout for {}", transfer_id);
+                let _ = db.update_transfer_status_error(&transfer_id, "User decision timeout");
+                let _ = manager.progress_tx.send(ProgressEvent::Failed {
+                    transfer_id: transfer_id.clone(),
+                    reason: "User decision timeout".to_string(),
+                });
                 manager.unregister_transfer(&transfer_id);
                 return Err(anyhow!("User decision timeout"));
             }
@@ -865,8 +870,20 @@ fn handle_incoming_transfer_inner(
 
     manager.unregister_transfer(&transfer_id);
     if let Ok(Some(rec)) = db.get_transfer(&transfer_id) {
-        if rec.status == "in_progress" {
-            db.update_transfer_status(&transfer_id, "paused")?;
+        if rec.status == "in_progress"
+            || rec.status == "awaiting_acceptance"
+            || rec.status == "pending"
+        {
+            let err_msg = if let Err(ref e) = loop_res {
+                format!("{}", e)
+            } else {
+                "Transfer interrupted or peer disconnected".to_string()
+            };
+            let _ = db.update_transfer_status_error(&transfer_id, &err_msg);
+            let _ = manager.progress_tx.send(ProgressEvent::Failed {
+                transfer_id: transfer_id.clone(),
+                reason: err_msg,
+            });
         }
     }
     loop_res
@@ -892,8 +909,20 @@ pub fn handle_outgoing_transfer(
     );
     manager.unregister_transfer(&transfer_id);
     if let Ok(Some(rec)) = db.get_transfer(&transfer_id) {
-        if rec.status == "in_progress" || rec.status == "awaiting_acceptance" {
-            db.update_transfer_status(&transfer_id, "paused")?;
+        if rec.status == "in_progress"
+            || rec.status == "awaiting_acceptance"
+            || rec.status == "pending"
+        {
+            let err_msg = if let Err(ref e) = res {
+                format!("{}", e)
+            } else {
+                "Transfer interrupted or peer disconnected".to_string()
+            };
+            let _ = db.update_transfer_status_error(&transfer_id, &err_msg);
+            let _ = manager.progress_tx.send(ProgressEvent::Failed {
+                transfer_id: transfer_id.clone(),
+                reason: err_msg,
+            });
         }
     }
     res

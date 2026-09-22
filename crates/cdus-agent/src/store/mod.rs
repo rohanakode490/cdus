@@ -214,6 +214,20 @@ impl Store {
             [],
         )?;
 
+        // Cleanup any stale/dangling transfers from prior crashed or killed sessions
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let _ = state_conn.execute(
+            "UPDATE file_transfers
+             SET status = 'failed',
+                 error_message = COALESCE(error_message, 'Transfer interrupted or timed out'),
+                 updated_at = ?1
+             WHERE status IN ('pending', 'awaiting_acceptance', 'in_progress', 'paused')",
+            [now_ms],
+        );
+
         state_conn.execute(
             "CREATE TABLE IF NOT EXISTS audit_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -858,6 +872,22 @@ impl Store {
 
     pub fn get_transfer_history(&self, limit: u32) -> Result<Vec<TransferRecord>> {
         let conn = self.state_conn.lock();
+
+        // Mark stale in-progress/pending/paused transfers (older than 2 minutes) as failed
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let stale_cutoff_ms = now_ms - (120 * 1000);
+        let _ = conn.execute(
+            "UPDATE file_transfers
+             SET status = 'failed',
+                 error_message = COALESCE(error_message, 'Transfer timed out or peer disconnected'),
+                 updated_at = ?1
+             WHERE updated_at < ?2 AND status IN ('pending', 'awaiting_acceptance', 'in_progress', 'paused')",
+            rusqlite::params![now_ms, stale_cutoff_ms],
+        );
+
         let mut stmt = conn.prepare(
             "SELECT transfer_id, direction, peer_node_id, file_path, file_name,
                     total_bytes, bytes_confirmed, chunk_size, file_hash, status,
