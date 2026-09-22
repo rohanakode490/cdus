@@ -206,7 +206,7 @@ fun FilesScreen() {
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)),
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp)),
                         shape = RoundedCornerShape(14.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                     ) {
@@ -275,7 +275,7 @@ fun TransferItem(transfer: FileTransferInfo) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp)),
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp)),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
@@ -318,6 +318,15 @@ fun TransferItem(transfer: FileTransferInfo) {
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    val formattedTime = UIUtils.formatTimestamp(transfer.timestamp)
+                    if (formattedTime.isNotBlank()) {
+                        Text(
+                            text = formattedTime,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                            modifier = Modifier.padding(top = 1.dp)
+                        )
+                    }
                     if (transfer.status == TransferStatus.ERROR) {
                         Text(
                             text = UIUtils.sanitizeErrorMessage(transfer.error),
@@ -345,6 +354,13 @@ fun TransferItem(transfer: FileTransferInfo) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.align(Alignment.End)
+                        )
+                    } else if (transfer.status == TransferStatus.COMPLETE) {
+                        Text(
+                            text = "Done",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.padding(top = 2.dp)
                         )
                     } else if (transfer.status != TransferStatus.INCOMING) {
                         LinearProgressIndicator(
@@ -423,6 +439,30 @@ fun TransferItem(transfer: FileTransferInfo) {
                                             }
                                         )
                                     }
+                                    if (transfer.status == TransferStatus.ERROR) {
+                                        DropdownMenuItem(
+                                            text = { Text("Retry") },
+                                            onClick = {
+                                                showMenu = false
+                                                scope.launch {
+                                                    withContext(Dispatchers.IO) {
+                                                        try {
+                                                            uniffi.cdus_ffi.resumeFileTransfer(transfer.transferId)
+                                                        } catch (e: Exception) {
+                                                            Logger.e("Failed to resume transfer: ${e.message}")
+                                                        }
+                                                    }
+                                                    FileTransferManager.updateTransfer(
+                                                        transfer.copy(
+                                                            status = TransferStatus.DOWNLOADING,
+                                                            progress = 0f,
+                                                            error = null
+                                                        )
+                                                    )
+                                                }
+                                            }
+                                        )
+                                    }
                                     DropdownMenuItem(
                                         text = { Text("Dismiss") },
                                         onClick = {
@@ -476,7 +516,7 @@ fun TransferItem(transfer: FileTransferInfo) {
             }
 
             if (transfer.status == TransferStatus.ERROR) {
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(4.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
@@ -489,23 +529,6 @@ fun TransferItem(transfer: FileTransferInfo) {
                         }
                     ) {
                         Text("Troubleshoot", color = MaterialTheme.colorScheme.outline)
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                withContext(Dispatchers.IO) {
-                                    try {
-                                        uniffi.cdus_ffi.resumeFileTransfer(transfer.transferId)
-                                    } catch (e: Exception) {
-                                        Logger.e("Failed to resume transfer: ${e.message}")
-                                    }
-                                }
-                                FileTransferManager.updateTransfer(transfer.copy(status = TransferStatus.DOWNLOADING, progress = 0f, error = null))
-                            }
-                        }
-                    ) {
-                        Text("Retry")
                     }
                 }
             }

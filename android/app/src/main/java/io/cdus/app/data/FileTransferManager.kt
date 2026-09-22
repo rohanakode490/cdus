@@ -18,7 +18,8 @@ data class FileTransferInfo(
     val senderLabel: String? = null,
     val error: String? = null,
     val speedMbps: Float? = null,
-    val totalBytes: Long = 0L
+    val totalBytes: Long = 0L,
+    val timestamp: Long = System.currentTimeMillis()
 )
 
 object FileTransferManager {
@@ -108,12 +109,17 @@ object FileTransferManager {
                     "complete" -> TransferStatus.COMPLETE
                     "failed" -> TransferStatus.ERROR
                     "declined" -> TransferStatus.REJECTED
-                    "in_progress", "paused" -> {
-                        // If it was in progress/paused but we just restarted, it's effectively "paused"
-                        if (record.direction == "outgoing") TransferStatus.OUTGOING else TransferStatus.DOWNLOADING
+                    "in_progress", "paused", "awaiting_acceptance", "pending" -> {
+                        // Dangling or interrupted transfers loaded from history are marked as failed
+                        TransferStatus.ERROR
                     }
-                    "awaiting_acceptance" -> TransferStatus.INCOMING
                     else -> TransferStatus.ERROR
+                }
+
+                val errorMsg = if (record.status in listOf("in_progress", "paused", "awaiting_acceptance", "pending") && record.errorMessage.isNullOrBlank()) {
+                    "Transfer interrupted or timed out"
+                } else {
+                    record.errorMessage
                 }
 
                 val info = FileTransferInfo(
@@ -122,8 +128,9 @@ object FileTransferManager {
                     progress = if (record.totalBytes > 0uL) (record.bytesConfirmed.toFloat() / record.totalBytes.toFloat()) * 100f else 0f,
                     status = status,
                     nodeId = record.peerNodeId,
-                    error = record.errorMessage,
-                    totalBytes = record.totalBytes.toLong()
+                    error = errorMsg,
+                    totalBytes = record.totalBytes.toLong(),
+                    timestamp = record.createdAt.toLong()
                 )
                 transfers[record.transferId] = info
             }

@@ -246,12 +246,23 @@ class SyncService : Service(), ClipboardListener, FileTransferListener, Notifica
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+        val contentIntent = Intent(this, io.cdus.app.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val contentPendingIntent = android.app.PendingIntent.getActivity(
+            this,
+            0,
+            contentIntent,
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         val sizeMb = totalSize / 1024f / 1024f
         val notification = NotificationCompat.Builder(this, FILE_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle("Incoming File")
             .setContentText("$fileName (%.2f MB) from ${io.cdus.app.data.DeviceManager.getLabel(nodeId)}".format(sizeMb))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(contentPendingIntent)
             .addAction(android.R.drawable.checkbox_on_background, "Accept", acceptPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePendingIntent)
             .setAutoCancel(true)
@@ -610,8 +621,11 @@ class SyncService : Service(), ClipboardListener, FileTransferListener, Notifica
         val fileChannel = NotificationChannel(
             FILE_CHANNEL_ID,
             "File Transfers",
-            NotificationManager.IMPORTANCE_LOW
-        )
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Notifications for file transfer requests and progress"
+            enableVibration(true)
+        }
         manager.createNotificationChannel(fileChannel)
     }
 }

@@ -31,4 +31,15 @@ object UIUtils {
         sanitized = sanitized.replace(Regex("\\b[0-9a-fA-F]{32,}\\b"), "[id]")
         return sanitized
     }
+
+    /**
+     * Formats epoch millisecond timestamp into user-friendly date and time (e.g. 'Sep 19, 06:03 PM').
+     */
+    fun formatTimestamp(timestampMs: Long?): String {
+        if (timestampMs == null || timestampMs <= 0L) return ""
+        val ms = if (timestampMs < 100000000000L) timestampMs * 1000L else timestampMs
+        val date = java.util.Date(ms)
+        val format = java.text.SimpleDateFormat("MMM d, hh:mm a", java.util.Locale.getDefault())
+        return format.format(date)
+    }
 }

@@ -34,7 +34,11 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import android.app.NotificationManager
+import io.cdus.app.data.FileTransferManager
+import io.cdus.app.data.TransferStatus
 import io.cdus.app.ui.components.DevicePickerDialog
+import io.cdus.app.ui.components.IncomingTransferDialog
 import io.cdus.app.ui.components.SearchBottomSheet
 import io.cdus.app.ui.navigation.Screen
 import io.cdus.app.ui.navigation.navItems
@@ -186,6 +190,25 @@ fun MainScreen(sharedFilePath: String?, onFileSent: () -> Unit) {
                 onFileSent()
             },
             onDismiss = onFileSent
+        )
+    }
+
+    val incomingTransfer = FileTransferManager.transfers.values.firstOrNull { it.status == TransferStatus.INCOMING }
+    if (incomingTransfer != null) {
+        IncomingTransferDialog(
+            transfer = incomingTransfer,
+            onAccept = {
+                uniffi.cdus_ffi.acceptFileTransfer(incomingTransfer.transferId)
+                FileTransferManager.updateTransfer(incomingTransfer.copy(status = TransferStatus.DOWNLOADING))
+                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                notificationManager.cancel(2) // FILE_NOTIFICATION_ID
+            },
+            onDecline = {
+                uniffi.cdus_ffi.rejectFileTransfer(incomingTransfer.transferId)
+                FileTransferManager.updateTransfer(incomingTransfer.copy(status = TransferStatus.REJECTED))
+                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                notificationManager.cancel(2) // FILE_NOTIFICATION_ID
+            }
         )
     }
 
