@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://cdus.dev/sitemap-index.xml
+Sitemap: https://cdus.rohanakode.dev/sitemap-index.xml
