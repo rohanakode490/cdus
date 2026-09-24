@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "cdus-agent"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "cdus-common"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rmp-serde",
  "serde",
@@ -1019,7 +1019,7 @@ dependencies = [
 
 [[package]]
 name = "cdus-ffi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cdus-agent",
  "cdus-common",
@@ -6996,7 +6996,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arboard",
  "cdus-common",
