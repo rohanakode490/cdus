@@ -13,6 +13,7 @@ pub mod integration_tests;
 use cdus_common::{IpcMessage, SyncMessage};
 use flume::{Receiver, Sender};
 use parking_lot::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -37,6 +38,21 @@ pub fn broadcast_event(msg: IpcMessage) {
     bus.retain(|tx| tx.send(msg.clone()).is_ok());
 }
 
+/// Atomically claims a newer timestamp using compare-and-swap (fetch_update).
+/// Returns true if the incoming timestamp is strictly greater than the current timestamp and updates it.
+/// Returns false if the incoming timestamp is older or equal.
+pub fn claim_newer_timestamp(atomic_ts: &AtomicU64, new_ts: u64) -> bool {
+    atomic_ts
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |curr| {
+            if new_ts > curr {
+                Some(new_ts)
+            } else {
+                None
+            }
+        })
+        .is_ok()
+}
+
 pub fn daemon_loop(
     tx: Sender<IpcMessage>,
     rx: Receiver<IpcMessage>,
@@ -47,7 +63,7 @@ pub fn daemon_loop(
     _active_pairing: Arc<Mutex<Option<ActivePairingState>>>,
     sync_manager: Arc<SyncManager>,
     pm: Arc<PairingManager>,
-    last_processed_timestamp: Arc<Mutex<u64>>,
+    last_processed_timestamp: Arc<AtomicU64>,
     peer_map: Arc<
         Mutex<
             std::collections::HashMap<
@@ -106,9 +122,7 @@ pub fn daemon_loop(
                     if content.trim().is_empty() {
                         continue;
                     }
-                    let mut last_ts = last_processed_timestamp.lock();
-                    if timestamp > *last_ts {
-                        *last_ts = timestamp;
+                    if claim_newer_timestamp(&last_processed_timestamp, timestamp) {
                         let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
                         let _ = store.set_state("last_clipboard_content", &content);
 
@@ -157,9 +171,7 @@ pub fn daemon_loop(
                         continue;
                     }
 
-                    let mut last_ts = last_processed_timestamp.lock();
-                    if timestamp > *last_ts {
-                        *last_ts = timestamp;
+                    if claim_newer_timestamp(&last_processed_timestamp, timestamp) {
                         let _ = store.set_state("last_sync_timestamp", &timestamp.to_string());
                         let _ = store.set_state("last_clipboard_content", &content);
 
@@ -341,8 +353,10 @@ pub fn daemon_loop(
                             "Pairing successful with {} ({}). Removing from discovery list.",
                             label, node_id
                         );
-                        let mut list = discovered_devices.lock();
-                        list.retain(|(id, _, _, _, _)| id != &node_id);
+                        {
+                            let mut list = discovered_devices.lock();
+                            list.retain(|(id, _, _, _, _)| id != &node_id);
+                        }
                         let _ = store.append_audit_log(
                             "pairing",
                             &format!(
@@ -379,8 +393,10 @@ pub fn daemon_loop(
                     broadcast_event(IpcMessage::StalePairing { node_id, label });
                 }
                 IpcMessage::DeviceLost { node_id } => {
-                    let mut list = discovered_devices.lock();
-                    list.retain(|(id, _, _, _, _)| !id.starts_with(&node_id));
+                    {
+                        let mut list = discovered_devices.lock();
+                        list.retain(|(id, _, _, _, _)| !id.starts_with(&node_id));
+                    }
                     broadcast_event(IpcMessage::DeviceLost { node_id });
                 }
                 IpcMessage::PeerDisconnected { node_id } => {
@@ -648,13 +664,17 @@ pub fn daemon_loop(
                     }
                 }
                 IpcMessage::GetActiveNotifications => {
-                    let _ = tx.send(IpcMessage::ActiveNotificationsResponse(
-                        ACTIVE_NOTIFICATIONS.lock().values().cloned().collect(),
-                    ));
+                    let notifications = {
+                        let active = ACTIVE_NOTIFICATIONS.lock();
+                        active.values().cloned().collect::<Vec<_>>()
+                    };
+                    let _ = tx.send(IpcMessage::ActiveNotificationsResponse(notifications));
                 }
                 IpcMessage::DismissNotification { key } => {
-                    ACTIVE_NOTIFICATIONS.lock().remove(&key);
-                    LAST_ALERT_TIMESTAMPS.lock().remove(&key);
+                    {
+                        ACTIVE_NOTIFICATIONS.lock().remove(&key);
+                        LAST_ALERT_TIMESTAMPS.lock().remove(&key);
+                    }
                     info!("Dismissing notification: {}", key);
                     sync_manager.broadcast(SyncMessage::NotificationDismiss { key: key.clone() });
                     broadcast_event(IpcMessage::NotificationDismissed { key });
@@ -693,9 +713,10 @@ pub fn daemon_loop(
                         );
                     }
 
-                    ACTIVE_NOTIFICATIONS
-                        .lock()
-                        .insert(payload.key.clone(), payload.clone());
+                    {
+                        let mut active = ACTIVE_NOTIFICATIONS.lock();
+                        active.insert(payload.key.clone(), payload.clone());
+                    }
 
                     #[cfg(not(target_os = "android"))]
                     {
@@ -717,8 +738,10 @@ pub fn daemon_loop(
                 }
                 IpcMessage::NotificationDismissed { key } => {
                     info!("Daemon processing remote dismiss: {}", key);
-                    ACTIVE_NOTIFICATIONS.lock().remove(&key);
-                    LAST_ALERT_TIMESTAMPS.lock().remove(&key);
+                    {
+                        ACTIVE_NOTIFICATIONS.lock().remove(&key);
+                        LAST_ALERT_TIMESTAMPS.lock().remove(&key);
+                    }
 
                     #[cfg(target_os = "android")]
                     {

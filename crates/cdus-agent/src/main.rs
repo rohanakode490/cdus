@@ -5,6 +5,7 @@ use interprocess::local_socket::LocalSocketListener;
 use parking_lot::Mutex;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -268,12 +269,12 @@ fn main() {
 
     // Shared state for loop prevention and LWW
     let last_written = Arc::new(Mutex::new(None::<String>));
-    let last_processed_timestamp = Arc::new(Mutex::new(0u64));
+    let last_processed_timestamp = Arc::new(AtomicU64::new(0));
 
     // Initialize timestamp from store if available
     if let Ok(Some(ts_str)) = store.get_state("last_sync_timestamp") {
         if let Ok(ts) = ts_str.parse::<u64>() {
-            *last_processed_timestamp.lock() = ts;
+            last_processed_timestamp.store(ts, Ordering::SeqCst);
             info!("Initialized LWW timestamp from store: {}", ts);
         }
     }

@@ -10,6 +10,7 @@ mod tests {
     use cdus_common::{IpcMessage, SyncMessage, TransportType};
     use parking_lot::Mutex;
     use std::collections::HashMap;
+    use std::sync::atomic::AtomicU64;
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
@@ -219,7 +220,7 @@ mod tests {
             tm,
             lm.clone(),
         ));
-        let lpt = Arc::new(Mutex::new(0u64));
+        let lpt = Arc::new(AtomicU64::new(0));
 
         // Initial state
         let ts1 = 1000u64;
@@ -698,7 +699,7 @@ mod tests {
             tm,
             lm.clone(),
         ));
-        let lpt = Arc::new(Mutex::new(0u64));
+        let lpt = Arc::new(AtomicU64::new(0));
         let peer_map = Arc::new(Mutex::new(HashMap::new()));
 
         // 2. Simulate discovery of the ALREADY PAIRED device
@@ -1203,7 +1204,7 @@ mod tests {
             tm,
             lm.clone(),
         ));
-        let lpt = Arc::new(Mutex::new(0u64));
+        let lpt = Arc::new(AtomicU64::new(0));
 
         // 1. Append a clipboard item and toggle it as local_only = true
         let payload = "Private Password".to_string();
@@ -1288,7 +1289,7 @@ mod tests {
             tm,
             lm.clone(),
         ));
-        let lpt = Arc::new(Mutex::new(0u64));
+        let lpt = Arc::new(AtomicU64::new(0));
 
         // 1. Simulate a NotificationMirrored event sent to the daemon loop
         let payload = cdus_common::NotificationPayload {
@@ -1433,7 +1434,7 @@ mod tests {
             tm,
             lm.clone(),
         ));
-        let lpt = Arc::new(Mutex::new(0u64));
+        let lpt = Arc::new(AtomicU64::new(0));
 
         // Append a clipboard item and set it as local_only = true
         let payload = "Secret Password".to_string();
@@ -1487,5 +1488,42 @@ mod tests {
             }
             _ => panic!("Expected ClipboardUpdate message"),
         }
+    }
+
+    #[test]
+    fn test_claim_newer_timestamp() {
+        use crate::claim_newer_timestamp;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let clock = AtomicU64::new(100);
+
+        // Older timestamp should be rejected
+        assert!(!claim_newer_timestamp(&clock, 50));
+        assert_eq!(clock.load(Ordering::SeqCst), 100);
+
+        // Equal timestamp should be rejected
+        assert!(!claim_newer_timestamp(&clock, 100));
+        assert_eq!(clock.load(Ordering::SeqCst), 100);
+
+        // Newer timestamp should be accepted and update atomic clock
+        assert!(claim_newer_timestamp(&clock, 150));
+        assert_eq!(clock.load(Ordering::SeqCst), 150);
+
+        // Concurrent updates from threads
+        let clock = Arc::new(AtomicU64::new(0));
+        let handles: Vec<_> = (1..=50)
+            .map(|i| {
+                let clk = Arc::clone(&clock);
+                thread::spawn(move || {
+                    claim_newer_timestamp(&clk, i * 10);
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(clock.load(Ordering::SeqCst), 500);
     }
 }
