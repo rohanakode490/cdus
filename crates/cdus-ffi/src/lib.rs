@@ -1038,6 +1038,18 @@ pub fn is_device_revoked(node_id: String) -> bool {
 }
 
 #[uniffi::export]
+pub fn is_local_device_revoked() -> bool {
+    if let (Some(store), Some(pm)) = (
+        STORE.lock().unwrap().as_ref(),
+        PAIRING_MANAGER.lock().unwrap().as_ref(),
+    ) {
+        store.is_device_revoked(pm.node_id()).unwrap_or(false)
+    } else {
+        false
+    }
+}
+
+#[uniffi::export]
 pub fn get_pairing_status() -> Option<PairingStatus> {
     let ap = ACTIVE_PAIRING.lock();
     ap.as_ref().map(|s| PairingStatus {

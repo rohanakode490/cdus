@@ -9,6 +9,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,20 +26,34 @@ import io.cdus.app.utils.Logger
 import android.net.Uri
 import android.provider.Settings
 import android.widget.Toast
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun SettingsScreen() {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val sharedPref = remember { context.getSharedPreferences("cdus_settings", Context.MODE_PRIVATE) }
     
     var isSyncEnabled by remember { 
         mutableStateOf(sharedPref.getBoolean("clipboard_sync", false)) 
     }
 
+    var isTelemetryOptIn by remember {
+        mutableStateOf(sharedPref.getBoolean("telemetry_opt_in", false))
+    }
+
+    var isLocalDeviceRevoked by remember {
+        mutableStateOf(false)
+    }
+
     DisposableEffect(context) {
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             if (key == "clipboard_sync") {
                 isSyncEnabled = sharedPref.getBoolean("clipboard_sync", false)
+            } else if (key == "telemetry_opt_in") {
+                isTelemetryOptIn = sharedPref.getBoolean("telemetry_opt_in", false)
             }
         }
         sharedPref.registerOnSharedPreferenceChangeListener(listener)
@@ -53,6 +69,27 @@ fun SettingsScreen() {
         mutableStateOf(sharedPref.getBoolean("developer_mode", false)) 
     }
     var tapCount by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            val syncVal = uniffi.cdus_ffi.getSetting("sync_enabled")?.toBooleanStrictOrNull()
+            if (syncVal != null) {
+                isSyncEnabled = syncVal
+                sharedPref.edit().putBoolean("clipboard_sync", syncVal).apply()
+            }
+            val limitVal = uniffi.cdus_ffi.getSetting("clipboard_limit")?.toFloatOrNull()
+            if (limitVal != null) {
+                clipboardLimit = limitVal
+                sharedPref.edit().putInt("history_limit", limitVal.toInt()).apply()
+            }
+            val telemVal = uniffi.cdus_ffi.getSetting("telemetry_opt_in")?.toBooleanStrictOrNull()
+                ?: uniffi.cdus_ffi.getTelemetryOptIn()
+            isTelemetryOptIn = telemVal
+            sharedPref.edit().putBoolean("telemetry_opt_in", telemVal).apply()
+
+            isLocalDeviceRevoked = uniffi.cdus_ffi.isLocalDeviceRevoked()
+        }
+    }
 
     val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager }
     var isIgnoringBatteryOptimizations by remember {
@@ -92,6 +129,9 @@ fun SettingsScreen() {
                     true
                 }
                 hasNotificationPermission = isNotificationServiceEnabled(context)
+                coroutineScope.launch(Dispatchers.IO) {
+                    isLocalDeviceRevoked = uniffi.cdus_ffi.isLocalDeviceRevoked()
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -113,11 +153,61 @@ fun SettingsScreen() {
                 color = MaterialTheme.colorScheme.onBackground
             )
             Text(
-                text = "Sync rules, battery policy, and notifications",
+                text = "Sync rules, battery policy, security, and notifications",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+
+        // Device Security & Trust Card
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(
+                    1.dp,
+                    if (isLocalDeviceRevoked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outlineVariant,
+                    RoundedCornerShape(14.dp)
+                ),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (isLocalDeviceRevoked) {
+                    MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
+                } else {
+                    MaterialTheme.colorScheme.surface
+                }
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isLocalDeviceRevoked) Icons.Default.Warning else Icons.Default.Security,
+                        contentDescription = null,
+                        tint = if (isLocalDeviceRevoked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Text(
+                        text = if (isLocalDeviceRevoked) "Remote Lockout Active" else "Device Security & Trust",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (isLocalDeviceRevoked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = if (isLocalDeviceRevoked) {
+                        "REMOTE LOCKOUT ACTIVE: This device has been remotely revoked by an authorized peer. All session keys and paired devices have been wiped. Re-enrollment via QR pairing is required to rejoin."
+                    } else {
+                        "Mesh Status: Active & Authorized. Cryptographic keys are intact and enrolled in your trusted personal device mesh."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isLocalDeviceRevoked) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         Card(
             modifier = Modifier
@@ -127,7 +217,7 @@ fun SettingsScreen() {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text(text = "General", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                Text(text = "General & Sync", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(modifier = Modifier.height(16.dp))
 
                 OutlinedTextField(
@@ -147,13 +237,16 @@ fun SettingsScreen() {
                 ) {
                     Column {
                         Text(text = "Clipboard Sync", style = MaterialTheme.typography.bodyLarge)
-                        Text(text = "Sync clipboard across devices", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+                        Text(text = "Sync clipboard across mesh devices", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
                     }
                     Switch(
                         checked = isSyncEnabled,
                         onCheckedChange = { enabled ->
                             isSyncEnabled = enabled
                             sharedPref.edit().putBoolean("clipboard_sync", enabled).apply()
+                            coroutineScope.launch(Dispatchers.IO) {
+                                uniffi.cdus_ffi.updateSetting("sync_enabled", if (enabled) "true" else "false")
+                            }
                         }
                     )
                 }
@@ -167,8 +260,41 @@ fun SettingsScreen() {
                         clipboardLimit = it
                         sharedPref.edit().putInt("history_limit", it.toInt()).apply()
                     },
+                    onValueChangeFinished = {
+                        coroutineScope.launch(Dispatchers.IO) {
+                            uniffi.cdus_ffi.updateSetting("clipboard_limit", clipboardLimit.toInt().toString())
+                        }
+                    },
                     valueRange = 10f..200f
                 )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                        Text(text = "Anonymous Telemetry", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            text = "Share crash reports and anonymous performance metrics to help improve CDUS",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = isTelemetryOptIn,
+                        onCheckedChange = { enabled ->
+                            isTelemetryOptIn = enabled
+                            sharedPref.edit().putBoolean("telemetry_opt_in", enabled).apply()
+                            coroutineScope.launch(Dispatchers.IO) {
+                                uniffi.cdus_ffi.setTelemetryOptIn(enabled)
+                                uniffi.cdus_ffi.updateSetting("telemetry_opt_in", if (enabled) "true" else "false")
+                            }
+                        }
+                    )
+                }
             }
         }
 
