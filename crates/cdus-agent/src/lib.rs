@@ -412,6 +412,12 @@ pub fn daemon_loop(
                         let mut list = discovered_devices.lock();
                         list.retain(|(id, _, _, _, _)| id != &node_id);
                     }
+                    if let Ok(settings) = store.get_all_settings() {
+                        if !settings.is_empty() {
+                            sync_manager
+                                .send_to_peer(&node_id, SyncMessage::SettingsUpdate { settings });
+                        }
+                    }
                     broadcast_event(IpcMessage::PeerConnected { node_id });
                 }
                 IpcMessage::RelayMessage {
@@ -749,6 +755,90 @@ pub fn daemon_loop(
                     }
 
                     broadcast_event(IpcMessage::NotificationDismissed { key });
+                }
+                IpcMessage::UpdateSetting { key, value } => {
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+
+                    match store.set_setting(&key, &value, timestamp) {
+                        Ok(true) => {
+                            info!("Updated setting locally: {} = {}", key, value);
+                            let _ = store.append_audit_log(
+                                "settings",
+                                &format!("Locally updated setting '{}' = '{}'", key, value),
+                            );
+                            sync_manager.broadcast(SyncMessage::SettingsUpdate {
+                                settings: vec![cdus_common::SettingRecord {
+                                    key: key.clone(),
+                                    value: value.clone(),
+                                    timestamp,
+                                }],
+                            });
+                            broadcast_event(IpcMessage::SettingChanged {
+                                key,
+                                value,
+                                timestamp,
+                            });
+                        }
+                        Ok(false) => {
+                            debug!("Local setting update ignored (timestamp conflict): {}", key);
+                        }
+                        Err(e) => {
+                            error!("Failed to store local setting {}: {}", key, e);
+                        }
+                    }
+                }
+                IpcMessage::SettingChanged {
+                    key,
+                    value,
+                    timestamp,
+                } => match store.set_setting(&key, &value, timestamp) {
+                    Ok(true) => {
+                        info!("Applied remote setting update via LWW: {} = {}", key, value);
+                        let _ = store.append_audit_log(
+                            "settings",
+                            &format!("Updated setting '{}' = '{}' (LWW)", key, value),
+                        );
+                        broadcast_event(IpcMessage::SettingChanged {
+                            key,
+                            value,
+                            timestamp,
+                        });
+                    }
+                    Ok(false) => {
+                        debug!(
+                            "Ignored outdated setting update for {}: ts {}",
+                            key, timestamp
+                        );
+                    }
+                    Err(e) => {
+                        error!("Failed to apply remote setting {}: {}", key, e);
+                    }
+                },
+                IpcMessage::GetSetting { key } => match store.get_setting(&key) {
+                    Ok(Some(s)) => {
+                        let _ = tx.send(IpcMessage::SettingResponse {
+                            key: s.key,
+                            value: Some(s.value),
+                            timestamp: s.timestamp,
+                        });
+                    }
+                    Ok(None) => {
+                        let _ = tx.send(IpcMessage::SettingResponse {
+                            key,
+                            value: None,
+                            timestamp: 0,
+                        });
+                    }
+                    Err(e) => {
+                        error!("Failed to get setting {}: {}", key, e);
+                    }
+                },
+                IpcMessage::GetAllSettings => {
+                    let settings = store.get_all_settings().unwrap_or_default();
+                    let _ = tx.send(IpcMessage::AllSettingsResponse(settings));
                 }
                 _ => {
                     info!("Daemon: Unhandled message: {:?}", msg);

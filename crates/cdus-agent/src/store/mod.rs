@@ -1,4 +1,4 @@
-use cdus_common::ClipboardEvent;
+use cdus_common::{ClipboardEvent, SettingRecord};
 use parking_lot::Mutex;
 use rusqlite::{Connection, OptionalExtension, Result};
 use std::path::Path;
@@ -120,6 +120,16 @@ impl Store {
             "CREATE TABLE IF NOT EXISTS state (
                 key TEXT PRIMARY KEY,
                 value TEXT
+            )",
+            [],
+        )?;
+
+        // Settings table for synchronized key-value settings with LWW timestamp
+        state_conn.execute(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
             )",
             [],
         )?;
@@ -1262,6 +1272,75 @@ impl Store {
         .optional()
     }
 
+    /// Sets a synchronized setting enforcing Last-Write-Wins (LWW) semantics.
+    /// Returns Ok(true) if the setting was updated/inserted (i.e. timestamp > existing_timestamp or new key).
+    /// Returns Ok(false) if the incoming timestamp is older or equal to the existing setting's updated_at.
+    pub fn set_setting(&self, key: &str, value: &str, timestamp: u64) -> Result<bool> {
+        let conn = self.state_conn.lock();
+        let existing: Option<i64> = conn
+            .query_row(
+                "SELECT updated_at FROM settings WHERE key = ?",
+                [key],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if let Some(existing_ts) = existing {
+            if timestamp <= existing_ts as u64 {
+                return Ok(false);
+            }
+        }
+
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
+            (key, value, timestamp as i64),
+        )?;
+        Ok(true)
+    }
+
+    /// Retrieves a setting value and its timestamp.
+    pub fn get_setting(&self, key: &str) -> Result<Option<SettingRecord>> {
+        let conn = self.state_conn.lock();
+        conn.query_row(
+            "SELECT key, value, updated_at FROM settings WHERE key = ?",
+            [key],
+            |row| {
+                let key: String = row.get(0)?;
+                let value: String = row.get(1)?;
+                let updated_at: i64 = row.get(2)?;
+                Ok(SettingRecord {
+                    key,
+                    value,
+                    timestamp: updated_at as u64,
+                })
+            },
+        )
+        .optional()
+    }
+
+    /// Retrieves all synchronized settings with their timestamps.
+    pub fn get_all_settings(&self) -> Result<Vec<SettingRecord>> {
+        let conn = self.state_conn.lock();
+        let mut stmt =
+            conn.prepare("SELECT key, value, updated_at FROM settings ORDER BY key ASC")?;
+        let rows = stmt.query_map([], |row| {
+            let key: String = row.get(0)?;
+            let value: String = row.get(1)?;
+            let updated_at: i64 = row.get(2)?;
+            Ok(SettingRecord {
+                key,
+                value,
+                timestamp: updated_at as u64,
+            })
+        })?;
+
+        let mut settings = Vec::new();
+        for row in rows {
+            settings.push(row?);
+        }
+        Ok(settings)
+    }
+
     pub fn get_or_create_identity(
         &self,
         data_dir: &std::path::Path,
@@ -2080,5 +2159,49 @@ mod tests {
             .map(|val| val == "true")
             .unwrap_or(false);
         assert!(!opt_in);
+    }
+
+    #[test]
+    fn test_settings_lww() {
+        let dir = tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+
+        // 1. Initial insert at t=100
+        let updated = store.set_setting("sync_enabled", "true", 100).unwrap();
+        assert!(updated);
+
+        let s = store.get_setting("sync_enabled").unwrap().unwrap();
+        assert_eq!(s.key, "sync_enabled");
+        assert_eq!(s.value, "true");
+        assert_eq!(s.timestamp, 100);
+
+        // 2. Outdated update at t=50 should be rejected by LWW
+        let updated = store.set_setting("sync_enabled", "false", 50).unwrap();
+        assert!(!updated);
+        let s = store.get_setting("sync_enabled").unwrap().unwrap();
+        assert_eq!(s.value, "true"); // still true
+        assert_eq!(s.timestamp, 100);
+
+        // 3. Same timestamp t=100 should also be rejected
+        let updated = store.set_setting("sync_enabled", "false", 100).unwrap();
+        assert!(!updated);
+        let s = store.get_setting("sync_enabled").unwrap().unwrap();
+        assert_eq!(s.value, "true");
+
+        // 4. Newer timestamp t=200 should win
+        let updated = store.set_setting("sync_enabled", "false", 200).unwrap();
+        assert!(updated);
+        let s = store.get_setting("sync_enabled").unwrap().unwrap();
+        assert_eq!(s.value, "false");
+        assert_eq!(s.timestamp, 200);
+
+        // 5. Test another setting and get_all_settings
+        store.set_setting("clipboard_limit", "50", 150).unwrap();
+        let all = store.get_all_settings().unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].key, "clipboard_limit");
+        assert_eq!(all[0].value, "50");
+        assert_eq!(all[1].key, "sync_enabled");
+        assert_eq!(all[1].value, "false");
     }
 }

@@ -462,6 +462,16 @@ impl Libp2pManager {
                                                         SyncMessage::Disconnect => {
                                                             info!("Received Disconnect request over Gossipsub from {}", propagation_source);
                                                         }
+                                                        SyncMessage::SettingsUpdate { settings } => {
+                                                            info!("Received SettingsUpdate via Gossipsub from {} ({} settings)", propagation_source, settings.len());
+                                                            for setting in settings {
+                                                                let _ = tx.send(IpcMessage::SettingChanged {
+                                                                    key: setting.key,
+                                                                    value: setting.value,
+                                                                    timestamp: setting.timestamp,
+                                                                });
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }

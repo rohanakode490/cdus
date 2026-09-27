@@ -30,6 +30,13 @@ pub struct NotificationPayload {
     pub only_alert_once: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+pub struct SettingRecord {
+    pub key: String,
+    pub value: String,
+    pub timestamp: u64,
+}
+
 pub fn is_sensitive_content(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
@@ -262,6 +269,26 @@ pub enum IpcMessage {
     NotificationDismissed {
         key: String,
     },
+    // Settings Synchronization IPC
+    GetSetting {
+        key: String,
+    },
+    SettingResponse {
+        key: String,
+        value: Option<String>,
+        timestamp: u64,
+    },
+    GetAllSettings,
+    AllSettingsResponse(Vec<SettingRecord>),
+    UpdateSetting {
+        key: String,
+        value: String,
+    },
+    SettingChanged {
+        key: String,
+        value: String,
+        timestamp: u64,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -409,6 +436,7 @@ pub enum SyncMessage {
     Disconnect,
     NotificationMirror(NotificationPayload),
     NotificationDismiss { key: String },
+    SettingsUpdate { settings: Vec<SettingRecord> },
 }
 
 impl SyncMessage {
@@ -443,5 +471,26 @@ mod tests {
         let mut de = rmp_serde::Deserializer::new(&buf[..]);
         let deserialized: IpcMessage = Deserialize::deserialize(&mut de).unwrap();
         assert_eq!(msg, deserialized);
+    }
+
+    #[test]
+    fn test_settings_sync_message_roundtrip() {
+        let msg = SyncMessage::SettingsUpdate {
+            settings: vec![
+                SettingRecord {
+                    key: "clipboard_sync".to_string(),
+                    value: "true".to_string(),
+                    timestamp: 1700000000000,
+                },
+                SettingRecord {
+                    key: "clipboard_limit".to_string(),
+                    value: "50".to_string(),
+                    timestamp: 1700000001000,
+                },
+            ],
+        };
+        let bytes = msg.to_vec().unwrap();
+        let decoded = SyncMessage::from_slice(&bytes).unwrap();
+        assert_eq!(msg, decoded);
     }
 }

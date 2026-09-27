@@ -585,8 +585,8 @@ async function loadSettings() {
 
   try {
     const deviceName: string | null = await invoke("get_state", { key: "device_name" });
-    const syncEnabled: string | null = await invoke("get_state", { key: "sync_enabled" });
-    const limit: string | null = await invoke("get_state", { key: "clipboard_limit" });
+    const syncEnabled: string | null = (await invoke("get_setting", { key: "sync_enabled" })) ?? (await invoke("get_state", { key: "sync_enabled" }));
+    const limit: string | null = (await invoke("get_setting", { key: "clipboard_limit" })) ?? (await invoke("get_state", { key: "clipboard_limit" }));
     const telemetryOptIn: boolean = await invoke("get_telemetry_opt_in");
 
     if (deviceName && deviceNameInput) deviceNameInput.value = deviceName;
@@ -1401,9 +1401,9 @@ window.addEventListener("DOMContentLoaded", () => {
     
     try {
       await invoke("set_state", { key: "device_name", value: deviceName });
-      await invoke("set_state", { key: "sync_enabled", value: syncEnabled.toString() });
+      await invoke("update_setting", { key: "sync_enabled", value: syncEnabled.toString() });
       await invoke("set_telemetry_opt_in", { optIn: telemetryOptIn });
-      await invoke("set_state", { key: "clipboard_limit", value: limit });
+      await invoke("update_setting", { key: "clipboard_limit", value: limit });
       alert("Settings saved successfully!");
     } catch (err) {
       console.error("Failed to save settings:", err);
@@ -1864,6 +1864,25 @@ window.addEventListener("DOMContentLoaded", () => {
     const notificationsView = document.querySelector("#view-notifications");
     if (notificationsView?.classList.contains("active")) {
       renderNotifications();
+    }
+  });
+
+  listen("setting-changed", (event: any) => {
+    console.log("UI: Received setting-changed", event.payload);
+    const [key, value] = event.payload;
+    if (key === "sync_enabled") {
+      const syncEnabledInput = document.querySelector("#sync-enabled") as HTMLInputElement;
+      if (syncEnabledInput) syncEnabledInput.checked = value === "true";
+    } else if (key === "clipboard_limit") {
+      const limitSlider = document.querySelector("#clipboard-limit") as HTMLInputElement;
+      const limitValue = document.querySelector("#limit-value");
+      if (limitSlider) {
+        limitSlider.value = value;
+        if (limitValue) limitValue.textContent = `${value} items`;
+      }
+    } else if (key === "telemetry_opt_in") {
+      const telemetryOptInInput = document.querySelector("#telemetry-opt-in") as HTMLInputElement;
+      if (telemetryOptInInput) telemetryOptInInput.checked = value === "true";
     }
   });
 

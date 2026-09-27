@@ -1330,6 +1330,25 @@ fn main() {
                                             }
                                         }
                                         IpcMessage::SetState { key, value } => {
+                                            // Also update and broadcast synchronized setting via LWW
+                                            let timestamp = now_ms();
+                                            let _ =
+                                                store_clone.set_setting(&key, &value, timestamp);
+                                            sync_manager_ipc.broadcast(
+                                                SyncMessage::SettingsUpdate {
+                                                    settings: vec![cdus_common::SettingRecord {
+                                                        key: key.clone(),
+                                                        value: value.clone(),
+                                                        timestamp,
+                                                    }],
+                                                },
+                                            );
+                                            broadcast_event(IpcMessage::SettingChanged {
+                                                key: key.clone(),
+                                                value: value.clone(),
+                                                timestamp,
+                                            });
+
                                             match store_clone.set_state(&key, &value) {
                                                 Ok(_) => {
                                                     if key == "device_name" {
@@ -1355,6 +1374,98 @@ fn main() {
                                                     let _ = stream.write_all(&resp_bytes);
                                                 }
                                             }
+                                        }
+                                        IpcMessage::UpdateSetting { key, value } => {
+                                            let timestamp = now_ms();
+                                            match store_clone.set_setting(&key, &value, timestamp) {
+                                                Ok(true) => {
+                                                    sync_manager_ipc.broadcast(
+                                                        SyncMessage::SettingsUpdate {
+                                                            settings: vec![
+                                                                cdus_common::SettingRecord {
+                                                                    key: key.clone(),
+                                                                    value: value.clone(),
+                                                                    timestamp,
+                                                                },
+                                                            ],
+                                                        },
+                                                    );
+                                                    broadcast_event(IpcMessage::SettingChanged {
+                                                        key,
+                                                        value,
+                                                        timestamp,
+                                                    });
+                                                    let resp_bytes =
+                                                        serde_json::to_vec(&IpcMessage::Log(
+                                                            "Setting updated successfully"
+                                                                .to_string(),
+                                                        ))
+                                                        .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Ok(false) => {
+                                                    let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
+                                                        "Setting update ignored (outdated timestamp)".to_string(),
+                                                    ))
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!(
+                                                            "Error updating setting: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
+                                        IpcMessage::GetSetting { key } => {
+                                            match store_clone.get_setting(&key) {
+                                                Ok(Some(s)) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::SettingResponse {
+                                                            key: s.key,
+                                                            value: Some(s.value),
+                                                            timestamp: s.timestamp,
+                                                        },
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Ok(None) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::SettingResponse {
+                                                            key,
+                                                            value: None,
+                                                            timestamp: 0,
+                                                        },
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                                Err(e) => {
+                                                    let resp_bytes = serde_json::to_vec(
+                                                        &IpcMessage::Log(format!(
+                                                            "Error fetching setting: {}",
+                                                            e
+                                                        )),
+                                                    )
+                                                    .unwrap();
+                                                    let _ = stream.write_all(&resp_bytes);
+                                                }
+                                            }
+                                        }
+                                        IpcMessage::GetAllSettings => {
+                                            let settings =
+                                                store_clone.get_all_settings().unwrap_or_default();
+                                            let resp_bytes = serde_json::to_vec(
+                                                &IpcMessage::AllSettingsResponse(settings),
+                                            )
+                                            .unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::SetClipboard {
                                             content,

@@ -1526,4 +1526,146 @@ mod tests {
 
         assert_eq!(clock.load(Ordering::SeqCst), 500);
     }
+
+    #[test]
+    fn test_settings_sync_daemon() {
+        let dir = tempdir().unwrap();
+        let store = Arc::new(Store::init(dir.path()).unwrap());
+        let (tx, _rx) = flume::unbounded();
+
+        let lw = Arc::new(Mutex::new(None::<String>));
+        let dd = Arc::new(Mutex::new(Vec::new()));
+        let ap = Arc::new(Mutex::new(None::<ActivePairingState>));
+        let sm = Arc::new(SyncManager::new());
+        let tm = Arc::new(TurnManager::new().unwrap());
+        let peer_map = Arc::new(Mutex::new(HashMap::new()));
+
+        let (p_tx, _p_rx) = flume::unbounded();
+        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
+        let lm = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap(),
+        );
+
+        let (relay, _) = RelayManager::new(
+            "test".to_string(),
+            "http://localhost".to_string(),
+            tx.clone(),
+        );
+        let pm = Arc::new(PairingManager::new(
+            Arc::clone(&store),
+            tx.clone(),
+            "test".to_string(),
+            vec![],
+            0,
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::new(relay),
+            tm,
+            lm.clone(),
+        ));
+        let lpt = Arc::new(AtomicU64::new(0));
+
+        // Register a mock peer to SyncManager
+        let (peer_tx, peer_rx) = flume::unbounded();
+        sm.add_peer("peer1".to_string(), peer_tx, TransportType::P2p);
+
+        // 1. Send UpdateSetting locally
+        let (tx_in, rx_in) = flume::unbounded();
+        tx_in
+            .send(IpcMessage::UpdateSetting {
+                key: "clipboard_sync".to_string(),
+                value: "true".to_string(),
+            })
+            .unwrap();
+
+        daemon_loop(
+            tx.clone(),
+            rx_in,
+            Some(1),
+            Arc::clone(&store),
+            Arc::clone(&lw),
+            Arc::clone(&dd),
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::clone(&pm),
+            Arc::clone(&lpt),
+            peer_map.clone(),
+            None,
+            lm.clone(),
+        );
+
+        // Verify setting exists in store
+        let s = store.get_setting("clipboard_sync").unwrap().unwrap();
+        assert_eq!(s.value, "true");
+        let initial_ts = s.timestamp;
+
+        // Verify broadcasted SyncMessage::SettingsUpdate
+        let received = peer_rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        match received {
+            SyncMessage::SettingsUpdate { settings } => {
+                assert_eq!(settings.len(), 1);
+                assert_eq!(settings[0].key, "clipboard_sync");
+                assert_eq!(settings[0].value, "true");
+            }
+            _ => panic!("Expected SettingsUpdate"),
+        }
+
+        // 2. Simulate older remote setting (should be ignored by LWW)
+        let (tx_in2, rx_in2) = flume::unbounded();
+        tx_in2
+            .send(IpcMessage::SettingChanged {
+                key: "clipboard_sync".to_string(),
+                value: "false".to_string(),
+                timestamp: initial_ts.saturating_sub(100),
+            })
+            .unwrap();
+
+        daemon_loop(
+            tx.clone(),
+            rx_in2,
+            Some(1),
+            Arc::clone(&store),
+            Arc::clone(&lw),
+            Arc::clone(&dd),
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::clone(&pm),
+            Arc::clone(&lpt),
+            peer_map.clone(),
+            None,
+            lm.clone(),
+        );
+
+        let s2 = store.get_setting("clipboard_sync").unwrap().unwrap();
+        assert_eq!(s2.value, "true"); // Still true!
+
+        // 3. Simulate newer remote setting (should win by LWW)
+        let (tx_in3, rx_in3) = flume::unbounded();
+        tx_in3
+            .send(IpcMessage::SettingChanged {
+                key: "clipboard_sync".to_string(),
+                value: "false".to_string(),
+                timestamp: initial_ts + 1000,
+            })
+            .unwrap();
+
+        daemon_loop(
+            tx.clone(),
+            rx_in3,
+            Some(1),
+            Arc::clone(&store),
+            Arc::clone(&lw),
+            Arc::clone(&dd),
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::clone(&pm),
+            Arc::clone(&lpt),
+            peer_map.clone(),
+            None,
+            lm.clone(),
+        );
+
+        let s3 = store.get_setting("clipboard_sync").unwrap().unwrap();
+        assert_eq!(s3.value, "false"); // Overwritten by LWW!
+    }
 }

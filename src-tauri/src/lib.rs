@@ -230,6 +230,31 @@ fn set_state(key: String, value: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn update_setting(key: String, value: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::UpdateSetting { key, value })
+}
+
+#[tauri::command]
+fn get_setting(key: String) -> Result<Option<String>, String> {
+    let msg = IpcMessage::GetSetting { key };
+    match send_ipc_message(msg)? {
+        IpcMessage::SettingResponse { value, .. } => Ok(value),
+        IpcMessage::Log(err) => Err(err),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+fn get_all_settings() -> Result<Vec<cdus_common::SettingRecord>, String> {
+    let msg = IpcMessage::GetAllSettings;
+    match send_ipc_message(msg)? {
+        IpcMessage::AllSettingsResponse(settings) => Ok(settings),
+        IpcMessage::Log(err) => Err(err),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
 fn start_scan() -> Result<String, String> {
     send_ipc_log_response(IpcMessage::StartScan)
 }
@@ -824,6 +849,16 @@ pub fn run() {
                                                 let _ = app_handle_events
                                                     .emit("notification-dismissed", key);
                                             }
+                                            IpcMessage::SettingChanged {
+                                                key,
+                                                value,
+                                                timestamp,
+                                            } => {
+                                                let _ = app_handle_events.emit(
+                                                    "setting-changed",
+                                                    (key, value, timestamp),
+                                                );
+                                            }
                                             _ => {}
                                         }
                                     }
@@ -855,6 +890,9 @@ pub fn run() {
             append_audit_log,
             get_state,
             set_state,
+            update_setting,
+            get_setting,
+            get_all_settings,
             start_scan,
             stop_scan,
             get_discovered_devices,

@@ -56,6 +56,13 @@ pub struct AuditLogItem {
     pub timestamp: u64,
 }
 
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiSettingRecord {
+    pub key: String,
+    pub value: String,
+    pub timestamp: u64,
+}
+
 #[uniffi::export(callback_interface)]
 pub trait ClipboardListener: Send + Sync {
     fn on_clipboard_update(&self, content: String, source: String);
@@ -1441,5 +1448,52 @@ pub fn get_telemetry_opt_in() -> bool {
             .unwrap_or(false)
     } else {
         false
+    }
+}
+
+#[uniffi::export]
+pub fn update_setting(key: String, value: String) {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let _ = store.set_setting(&key, &value, timestamp);
+        if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+            pm.sync_manager.broadcast(SyncMessage::SettingsUpdate {
+                settings: vec![cdus_common::SettingRecord {
+                    key,
+                    value,
+                    timestamp,
+                }],
+            });
+        }
+    }
+}
+
+#[uniffi::export]
+pub fn get_setting(key: String) -> Option<String> {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        store.get_setting(&key).unwrap_or(None).map(|s| s.value)
+    } else {
+        None
+    }
+}
+
+#[uniffi::export]
+pub fn get_all_settings() -> Vec<FfiSettingRecord> {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        store
+            .get_all_settings()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| FfiSettingRecord {
+                key: s.key,
+                value: s.value,
+                timestamp: s.timestamp,
+            })
+            .collect()
+    } else {
+        Vec::new()
     }
 }

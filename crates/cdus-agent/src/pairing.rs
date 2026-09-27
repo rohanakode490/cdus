@@ -1450,6 +1450,20 @@ fn run_turn_sync_session(
                                 info!("Received Disconnect request from peer {} via TURN, closing session", label);
                                 break;
                             }
+                            SyncMessage::SettingsUpdate { settings } => {
+                                info!(
+                                    "Received settings update from peer {} via TURN ({} settings)",
+                                    label,
+                                    settings.len()
+                                );
+                                for setting in settings {
+                                    let _ = ipc_tx.send(IpcMessage::SettingChanged {
+                                        key: setting.key,
+                                        value: setting.value,
+                                        timestamp: setting.timestamp,
+                                    });
+                                }
+                            }
                         }
                     }
                 }
@@ -2503,6 +2517,20 @@ fn run_sync_session(
                                     label
                                 );
                                 break;
+                            }
+                            SyncMessage::SettingsUpdate { settings } => {
+                                info!(
+                                    "Received settings update from peer {} ({} settings)",
+                                    label,
+                                    settings.len()
+                                );
+                                for setting in settings {
+                                    let _ = ipc_tx.send(IpcMessage::SettingChanged {
+                                        key: setting.key,
+                                        value: setting.value,
+                                        timestamp: setting.timestamp,
+                                    });
+                                }
                             }
                         }
                     }
