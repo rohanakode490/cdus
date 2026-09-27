@@ -83,7 +83,17 @@ impl RelayManager {
             .timeout(Duration::from_secs(5))
             .build();
 
-        let resp = agent.get(&url).call()?;
+        let resp = match agent.get(&url).call() {
+            Ok(r) => r,
+            Err(ureq::Error::Status(403, _)) => {
+                error!("Relay rejected TURN credentials: Device is REVOKED (403 Forbidden)");
+                let _ = self.tx.send(IpcMessage::RevokeDevice {
+                    uuid: self.node_id.clone(),
+                });
+                return Err(anyhow::anyhow!("Device is revoked by relay"));
+            }
+            Err(e) => return Err(anyhow::anyhow!("Failed to fetch TURN credentials: {}", e)),
+        };
 
         if resp.status() == 200 {
             let creds: TurnCredentials = resp.into_json()?;
@@ -124,7 +134,17 @@ impl RelayManager {
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(5))
             .build();
-        let resp = agent.post(&url).send_json(&req)?;
+        let resp = match agent.post(&url).send_json(&req) {
+            Ok(r) => r,
+            Err(ureq::Error::Status(403, _)) => {
+                error!("Relay rejected registration: Device is REVOKED (403 Forbidden)");
+                let _ = self.tx.send(IpcMessage::RevokeDevice {
+                    uuid: self.node_id.clone(),
+                });
+                return Err(anyhow::anyhow!("Device is revoked by relay"));
+            }
+            Err(e) => return Err(anyhow::anyhow!("Registration failed: {}", e)),
+        };
 
         if resp.status() == 201 || resp.status() == 200 {
             info!("Device registered successfully.");
@@ -306,6 +326,14 @@ impl RelayManager {
                         }
                     }
                     Err(e) => {
+                        if let tungstenite::Error::Http(ref resp) = e {
+                            if resp.status() == tungstenite::http::StatusCode::FORBIDDEN {
+                                error!("Relay: Connection rejected with 403 Forbidden - Device is REVOKED!");
+                                let _ = tx.send(IpcMessage::RevokeDevice {
+                                    uuid: manager.node_id.clone(),
+                                });
+                            }
+                        }
                         let err_msg = format!("Connection failed: {}", e);
                         error!("Relay: {}. Retrying in 10s. (Note: Relay is optional for LAN discovery)", e);
                         let _ = tx.send(IpcMessage::RelayStatus {

@@ -164,6 +164,12 @@ pub enum IpcMessage {
     RevokeDevice {
         uuid: String,
     },
+    DeviceRevoked {
+        uuid: String,
+    },
+    LocalDeviceRevoked {
+        revoked_by: String,
+    },
     RelayMessage {
         source_uuid: String,
         payload: Vec<u8>,
@@ -431,12 +437,26 @@ pub struct PeerExchangeRecord {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum SyncMessage {
-    ClipboardUpdate { content: String, timestamp: u64 },
-    PeerExchange { peers: Vec<PeerExchangeRecord> },
+    ClipboardUpdate {
+        content: String,
+        timestamp: u64,
+    },
+    PeerExchange {
+        peers: Vec<PeerExchangeRecord>,
+    },
     Disconnect,
     NotificationMirror(NotificationPayload),
-    NotificationDismiss { key: String },
-    SettingsUpdate { settings: Vec<SettingRecord> },
+    NotificationDismiss {
+        key: String,
+    },
+    SettingsUpdate {
+        settings: Vec<SettingRecord>,
+    },
+    DeviceRevocation {
+        device_id: String,
+        revoked_by: String,
+        timestamp: u64,
+    },
 }
 
 impl SyncMessage {

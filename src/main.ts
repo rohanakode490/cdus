@@ -1886,6 +1886,19 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  listen("device-revoked", (event: any) => {
+    console.log("UI: Received device-revoked", event.payload);
+    const uuid = event.payload;
+    addAuditLog("system", `Device ${uuid} was revoked`);
+    renderPairedDevices();
+  });
+
+  listen("local-device-revoked", (event: any) => {
+    console.warn("UI: Local device revoked and locked out!", event.payload);
+    alert("REMOTE LOCKOUT: This device has been remotely revoked by an authorized peer. All session keys and paired devices have been wiped.");
+    renderPairedDevices();
+  });
+
   // Initial load
   renderPairedDevices();
 

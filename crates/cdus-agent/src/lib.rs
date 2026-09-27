@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::libp2p_manager::Libp2pManager;
 use crate::pairing::{ActivePairingState, PairingManager, SyncManager};
@@ -119,6 +119,10 @@ pub fn daemon_loop(
                     }
                 }
                 IpcMessage::ClipboardChanged { content, timestamp } => {
+                    if store.is_device_revoked(pm.node_id()).unwrap_or(false) {
+                        debug!("Local device is locked out. Ignoring clipboard change.");
+                        continue;
+                    }
                     if content.trim().is_empty() {
                         continue;
                     }
@@ -158,6 +162,10 @@ pub fn daemon_loop(
                     timestamp,
                     source,
                 } => {
+                    if store.is_device_revoked(pm.node_id()).unwrap_or(false) {
+                        debug!("Local device is locked out. Ignoring remote clipboard update.");
+                        continue;
+                    }
                     if content.trim().is_empty() {
                         continue;
                     }
@@ -430,6 +438,15 @@ pub fn daemon_loop(
                     });
                 }
                 IpcMessage::SendFile { node_id, path } => {
+                    if store.is_device_revoked(pm.node_id()).unwrap_or(false) {
+                        error!("Cannot send file: Local device is locked out");
+                        let tm = libp2p_manager.get_transfer_manager();
+                        let _ = tm.progress_tx.send(cdus_common::ProgressEvent::Failed {
+                            transfer_id: "".to_string(),
+                            reason: "Local device is locked out".to_string(),
+                        });
+                        continue;
+                    }
                     if !sync_manager.is_connected(&node_id) {
                         error!("Cannot send file: Peer {} is disconnected", node_id);
                         let tm = libp2p_manager.get_transfer_manager();
@@ -757,6 +774,10 @@ pub fn daemon_loop(
                     broadcast_event(IpcMessage::NotificationDismissed { key });
                 }
                 IpcMessage::UpdateSetting { key, value } => {
+                    if store.is_device_revoked(pm.node_id()).unwrap_or(false) {
+                        warn!("Local device is locked out. Rejecting setting update.");
+                        continue;
+                    }
                     let timestamp = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
@@ -794,29 +815,35 @@ pub fn daemon_loop(
                     key,
                     value,
                     timestamp,
-                } => match store.set_setting(&key, &value, timestamp) {
-                    Ok(true) => {
-                        info!("Applied remote setting update via LWW: {} = {}", key, value);
-                        let _ = store.append_audit_log(
-                            "settings",
-                            &format!("Updated setting '{}' = '{}' (LWW)", key, value),
-                        );
-                        broadcast_event(IpcMessage::SettingChanged {
-                            key,
-                            value,
-                            timestamp,
-                        });
+                } => {
+                    if store.is_device_revoked(pm.node_id()).unwrap_or(false) {
+                        debug!("Local device is locked out. Ignoring remote setting update.");
+                        continue;
                     }
-                    Ok(false) => {
-                        debug!(
-                            "Ignored outdated setting update for {}: ts {}",
-                            key, timestamp
-                        );
+                    match store.set_setting(&key, &value, timestamp) {
+                        Ok(true) => {
+                            info!("Applied remote setting update via LWW: {} = {}", key, value);
+                            let _ = store.append_audit_log(
+                                "settings",
+                                &format!("Updated setting '{}' = '{}' (LWW)", key, value),
+                            );
+                            broadcast_event(IpcMessage::SettingChanged {
+                                key,
+                                value,
+                                timestamp,
+                            });
+                        }
+                        Ok(false) => {
+                            debug!(
+                                "Ignored outdated setting update for {}: ts {}",
+                                key, timestamp
+                            );
+                        }
+                        Err(e) => {
+                            error!("Failed to apply remote setting {}: {}", key, e);
+                        }
                     }
-                    Err(e) => {
-                        error!("Failed to apply remote setting {}: {}", key, e);
-                    }
-                },
+                }
                 IpcMessage::GetSetting { key } => match store.get_setting(&key) {
                     Ok(Some(s)) => {
                         let _ = tx.send(IpcMessage::SettingResponse {
@@ -839,6 +866,80 @@ pub fn daemon_loop(
                 IpcMessage::GetAllSettings => {
                     let settings = store.get_all_settings().unwrap_or_default();
                     let _ = tx.send(IpcMessage::AllSettingsResponse(settings));
+                }
+                IpcMessage::RevokeDevice { uuid } => {
+                    let local_id = pm.node_id().to_string();
+                    let now_ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+
+                    if uuid == local_id {
+                        warn!("LOCAL DEVICE REVOKED! Executing lockout protocol...");
+                        let _ = store.record_revoked_device(&uuid, now_ts);
+                        let _ = store.clear_paired_devices();
+                        let _ = store
+                            .append_audit_log("security", "Local device revoked and locked out");
+
+                        // Broadcast disconnect to all mesh peers
+                        sync_manager.broadcast(SyncMessage::Disconnect);
+
+                        // Disconnect all libp2p peers and cancel transfers
+                        if let Ok(peers) = store.get_paired_devices() {
+                            for p in peers {
+                                sync_manager.remove_peer(&p.node_id);
+                                libp2p_manager
+                                    .get_transfer_manager()
+                                    .cancel_all_transfers_for_peer(&p.node_id);
+                                if let Ok(pid) = p.node_id.parse::<libp2p::PeerId>() {
+                                    libp2p_manager.disconnect_peer(pid);
+                                }
+                            }
+                        }
+
+                        // Broadcast local lockout event and device revoked event
+                        broadcast_event(IpcMessage::LocalDeviceRevoked {
+                            revoked_by: "Remote Peer / Relay".to_string(),
+                        });
+                        broadcast_event(IpcMessage::DeviceRevoked { uuid: uuid.clone() });
+                    } else {
+                        info!("Revoking remote device: {}", uuid);
+                        // Notify relay
+                        let _ = pm.relay_manager().revoke_device(uuid.clone());
+
+                        // Record in store and remove paired device
+                        let _ = store.record_revoked_device(&uuid, now_ts);
+                        let _ = store.remove_paired_device(&uuid);
+                        let _ = store.append_audit_log(
+                            "security",
+                            &format!("Device {} revoked and unpaired", uuid),
+                        );
+
+                        // Broadcast revocation to other peers
+                        sync_manager.broadcast(SyncMessage::DeviceRevocation {
+                            device_id: uuid.clone(),
+                            revoked_by: local_id,
+                            timestamp: now_ts,
+                        });
+
+                        // Cancel transfers and disconnect peer
+                        sync_manager.remove_peer(&uuid);
+                        libp2p_manager
+                            .get_transfer_manager()
+                            .cancel_all_transfers_for_peer(&uuid);
+                        if let Ok(pid) = uuid.parse::<libp2p::PeerId>() {
+                            libp2p_manager.disconnect_peer(pid);
+                        }
+
+                        // Remove from discovered devices
+                        {
+                            let mut list = discovered_devices.lock();
+                            list.retain(|(id, _, _, _, _)| id != &uuid);
+                        }
+
+                        // Broadcast to local clients
+                        broadcast_event(IpcMessage::DeviceRevoked { uuid: uuid.clone() });
+                    }
                 }
                 _ => {
                     info!("Daemon: Unhandled message: {:?}", msg);

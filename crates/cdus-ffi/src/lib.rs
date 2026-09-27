@@ -994,11 +994,25 @@ pub fn unpair_device(node_id: String) {
 
 #[uniffi::export]
 pub fn revoke_device(node_id: String) {
+    let now_ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
     if let Some(rm) = RELAY_MANAGER.lock().unwrap().as_ref() {
         let _ = rm.revoke_device(node_id.clone());
     }
     if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let _ = store.record_revoked_device(&node_id, now_ts);
         let _ = store.remove_paired_device(&node_id);
+    }
+    if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+        pm.sync_manager.broadcast(SyncMessage::DeviceRevocation {
+            device_id: node_id.clone(),
+            revoked_by: pm.node_id().to_string(),
+            timestamp: now_ts,
+        });
+        pm.sync_manager.remove_peer(&node_id);
     }
     if let Some(tm) = TRANSFER_MANAGER.lock().unwrap().as_ref() {
         tm.cancel_all_transfers_for_peer(&node_id);
@@ -1009,7 +1023,17 @@ pub fn revoke_device(node_id: String) {
         }
     }
     if let Some(listener) = FILE_TRANSFER_LISTENER.lock().unwrap().as_ref() {
-        listener.on_peer_disconnected(node_id);
+        listener.on_peer_disconnected(node_id.clone());
+    }
+    cdus_agent::broadcast_event(IpcMessage::DeviceRevoked { uuid: node_id });
+}
+
+#[uniffi::export]
+pub fn is_device_revoked(node_id: String) -> bool {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        store.is_device_revoked(&node_id).unwrap_or(false)
+    } else {
+        false
     }
 }
 

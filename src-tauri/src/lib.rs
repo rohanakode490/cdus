@@ -859,6 +859,14 @@ pub fn run() {
                                                     (key, value, timestamp),
                                                 );
                                             }
+                                            IpcMessage::DeviceRevoked { uuid } => {
+                                                let _ =
+                                                    app_handle_events.emit("device-revoked", uuid);
+                                            }
+                                            IpcMessage::LocalDeviceRevoked { revoked_by } => {
+                                                let _ = app_handle_events
+                                                    .emit("local-device-revoked", revoked_by);
+                                            }
                                             _ => {}
                                         }
                                     }

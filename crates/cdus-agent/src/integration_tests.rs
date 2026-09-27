@@ -1668,4 +1668,207 @@ mod tests {
         let s3 = store.get_setting("clipboard_sync").unwrap().unwrap();
         assert_eq!(s3.value, "false"); // Overwritten by LWW!
     }
+
+    #[test]
+    fn test_remote_device_revocation_daemon() {
+        let (tx, _rx) = flume::unbounded();
+        let (tx_in, rx_in) = flume::unbounded();
+        let store = Arc::new(Store::init(tempfile::tempdir().unwrap().path()).unwrap());
+        let lw = Arc::new(parking_lot::Mutex::new(None));
+        let dd = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let ap = Arc::new(parking_lot::Mutex::new(None));
+        let sm = Arc::new(SyncManager::new());
+        let lpt = Arc::new(AtomicU64::new(0));
+        let peer_map = Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new()));
+        let id = "local-node-1".to_string();
+
+        let (relay, _) = RelayManager::new(id.clone(), "http://localhost".to_string(), tx.clone());
+        let tm = Arc::new(TurnManager::new().unwrap());
+        let (p_tx, _p_rx) = flume::unbounded();
+        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
+        let lm = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap(),
+        );
+
+        let pm = Arc::new(PairingManager::new(
+            Arc::clone(&store),
+            tx.clone(),
+            id.clone(),
+            vec![0u8; 32],
+            0,
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::new(relay),
+            tm,
+            lm.clone(),
+        ));
+
+        // 1. Add remote peer
+        let remote_peer = "remote-peer-1".to_string();
+        store
+            .add_paired_device(&remote_peer, "Peer One", None)
+            .unwrap();
+        assert!(store.is_device_paired(&remote_peer).unwrap());
+
+        let (peer_tx, peer_rx) = flume::unbounded();
+        sm.add_peer(remote_peer.clone(), peer_tx, TransportType::Lan);
+        assert!(sm.is_connected(&remote_peer));
+
+        // 2. Trigger remote device revocation
+        tx_in
+            .send(IpcMessage::RevokeDevice {
+                uuid: remote_peer.clone(),
+            })
+            .unwrap();
+
+        daemon_loop(
+            tx.clone(),
+            rx_in,
+            Some(1),
+            Arc::clone(&store),
+            Arc::clone(&lw),
+            Arc::clone(&dd),
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::clone(&pm),
+            Arc::clone(&lpt),
+            peer_map.clone(),
+            None,
+            lm.clone(),
+        );
+
+        // 3. Verify peer is revoked and removed from store
+        assert!(store.is_device_revoked(&remote_peer).unwrap());
+        assert!(!store.is_device_paired(&remote_peer).unwrap());
+        assert!(!sm.is_connected(&remote_peer));
+
+        // 4. Verify broadcasted SyncMessage::DeviceRevocation
+        let received = peer_rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        match received {
+            SyncMessage::DeviceRevocation {
+                device_id,
+                revoked_by,
+                ..
+            } => {
+                assert_eq!(device_id, remote_peer);
+                assert_eq!(revoked_by, id);
+            }
+            _ => panic!("Expected DeviceRevocation message"),
+        }
+
+        // 5. Attempting to re-pair revoked peer fails
+        let re_add = store.add_paired_device(&remote_peer, "Peer One", None);
+        assert!(re_add.is_err());
+    }
+
+    #[test]
+    fn test_local_device_lockout_daemon() {
+        let (tx, _rx) = flume::unbounded();
+        let (tx_in, rx_in) = flume::unbounded();
+        let store = Arc::new(Store::init(tempfile::tempdir().unwrap().path()).unwrap());
+        let lw = Arc::new(parking_lot::Mutex::new(None));
+        let dd = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let ap = Arc::new(parking_lot::Mutex::new(None));
+        let sm = Arc::new(SyncManager::new());
+        let lpt = Arc::new(AtomicU64::new(0));
+        let peer_map = Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new()));
+        let local_id = "local-lockout-node".to_string();
+
+        let (relay, _) =
+            RelayManager::new(local_id.clone(), "http://localhost".to_string(), tx.clone());
+        let tm = Arc::new(TurnManager::new().unwrap());
+        let (p_tx, _p_rx) = flume::unbounded();
+        let ftm = Arc::new(FileTransferManager::new(Arc::clone(&store), p_tx));
+        let lm = Arc::new(
+            Libp2pManager::new(vec![0u8; 32], tx.clone(), Arc::clone(&store), ftm).unwrap(),
+        );
+
+        let pm = Arc::new(PairingManager::new(
+            Arc::clone(&store),
+            tx.clone(),
+            local_id.clone(),
+            vec![0u8; 32],
+            0,
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::new(relay),
+            tm,
+            lm.clone(),
+        ));
+
+        // 1. Add paired devices
+        store.add_paired_device("peer-a", "Device A", None).unwrap();
+        store.add_paired_device("peer-b", "Device B", None).unwrap();
+        assert_eq!(store.get_paired_devices().unwrap().len(), 2);
+
+        let (peer_a_tx, peer_a_rx) = flume::unbounded();
+        sm.add_peer("peer-a".to_string(), peer_a_tx, TransportType::Lan);
+
+        // 2. Trigger local device revocation (self lockout)
+        tx_in
+            .send(IpcMessage::RevokeDevice {
+                uuid: local_id.clone(),
+            })
+            .unwrap();
+
+        daemon_loop(
+            tx.clone(),
+            rx_in,
+            Some(1),
+            Arc::clone(&store),
+            Arc::clone(&lw),
+            Arc::clone(&dd),
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::clone(&pm),
+            Arc::clone(&lpt),
+            peer_map.clone(),
+            None,
+            lm.clone(),
+        );
+
+        // 3. Verify local device is recorded as revoked
+        assert!(store.is_device_revoked(&local_id).unwrap());
+
+        // 4. Verify all paired devices were wiped
+        assert_eq!(store.get_paired_devices().unwrap().len(), 0);
+
+        // 5. Verify Disconnect was broadcasted to mesh
+        let received = peer_a_rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        assert_eq!(received, SyncMessage::Disconnect);
+
+        // 6. Verify subsequent clipboard sync is blocked by lockout guard
+        let (tx_in2, rx_in2) = flume::unbounded();
+        tx_in2
+            .send(IpcMessage::ClipboardChanged {
+                content: "Secret text after lockout".to_string(),
+                timestamp: 99999,
+            })
+            .unwrap();
+
+        daemon_loop(
+            tx.clone(),
+            rx_in2,
+            Some(1),
+            Arc::clone(&store),
+            Arc::clone(&lw),
+            Arc::clone(&dd),
+            Arc::clone(&ap),
+            Arc::clone(&sm),
+            Arc::clone(&pm),
+            Arc::clone(&lpt),
+            peer_map.clone(),
+            None,
+            lm.clone(),
+        );
+
+        // Store should not contain the secret text in events
+        let events = store.get_recent_events(10).unwrap();
+        assert!(
+            events.is_empty()
+                || !events
+                    .iter()
+                    .any(|e| e.content == "Secret text after lockout")
+        );
+    }
 }

@@ -170,11 +170,31 @@ impl PairingManager {
         }
     }
 
+    pub fn node_id(&self) -> &str {
+        &self.node_id
+    }
+
+    pub fn relay_manager(&self) -> Arc<RelayManager> {
+        Arc::clone(&self.relay_manager)
+    }
+
     pub fn is_device_paired(&self, node_id: &str) -> bool {
         self.store.is_device_paired(node_id).unwrap_or(false)
     }
 
     pub fn handle_relay_message(&self, source_uuid: String, payload: Vec<u8>) {
+        if self.store.is_device_revoked(&self.node_id).unwrap_or(false) {
+            warn!("Local device is revoked/locked out. Ignoring relay message.");
+            return;
+        }
+        if self.store.is_device_revoked(&source_uuid).unwrap_or(false) {
+            warn!(
+                "Rejecting relay message from revoked device {}",
+                source_uuid
+            );
+            return;
+        }
+
         info!(
             "Processing relay signaling message from {} ({} bytes)",
             source_uuid,
@@ -809,6 +829,18 @@ impl PairingManager {
     }
 
     pub fn initiate_remote_pairing(&self, target_uuid: String) {
+        if self.store.is_device_revoked(&self.node_id).unwrap_or(false) {
+            warn!("Local device is revoked/locked out. Cannot initiate remote pairing.");
+            return;
+        }
+        if self.store.is_device_revoked(&target_uuid).unwrap_or(false) {
+            warn!(
+                "Target device {} is revoked. Cannot initiate remote pairing.",
+                target_uuid
+            );
+            return;
+        }
+
         if self.store.is_device_paired(&target_uuid).unwrap_or(false) {
             info!(
                 "Device {} is already paired. Skipping new remote pairing initiation.",
@@ -920,6 +952,16 @@ impl PairingManager {
     }
 
     pub fn reconnect_known_device(&self, target_uuid: String) {
+        if self.store.is_device_revoked(&self.node_id).unwrap_or(false)
+            || self.store.is_device_revoked(&target_uuid).unwrap_or(false)
+        {
+            warn!(
+                "Cannot reconnect: device is revoked (local or target: {})",
+                target_uuid
+            );
+            return;
+        }
+
         if !self.store.is_device_paired(&target_uuid).unwrap_or(false) {
             warn!(
                 "reconnect_known_device called for unpaired device {}",
@@ -1248,6 +1290,13 @@ impl PairingManager {
         info!("Processing scanned QR payload");
         let (node_id, secret, label, _port, _ips) = self.parse_qr_payload(&payload)?;
 
+        if self.store.is_device_revoked(&self.node_id).unwrap_or(false) {
+            return Err(anyhow::anyhow!("Local device is revoked/locked out"));
+        }
+        if self.store.is_device_revoked(&node_id).unwrap_or(false) {
+            return Err(anyhow::anyhow!("Scanned device {} is revoked", node_id));
+        }
+
         if self.store.is_device_paired(&node_id).unwrap_or(false) {
             info!(
                 "QR scan for {} ({}) — already paired, nothing to do.",
@@ -1273,6 +1322,17 @@ impl PairingManager {
         target_addr: SocketAddr,
         target_node_id: Option<String>,
     ) -> bool {
+        if self.store.is_device_revoked(&self.node_id).unwrap_or(false) {
+            warn!("Cannot initiate pairing: local device is revoked/locked out");
+            return false;
+        }
+        if let Some(ref tid) = target_node_id {
+            if self.store.is_device_revoked(tid).unwrap_or(false) {
+                warn!("Cannot initiate pairing: target device {} is revoked", tid);
+                return false;
+            }
+        }
+
         let stream = match TcpStream::connect_timeout(&target_addr, Duration::from_secs(5)) {
             Ok(s) => s,
             Err(e) => {
@@ -1462,6 +1522,22 @@ fn run_turn_sync_session(
                                         value: setting.value,
                                         timestamp: setting.timestamp,
                                     });
+                                }
+                            }
+                            SyncMessage::DeviceRevocation {
+                                device_id,
+                                revoked_by,
+                                timestamp: _,
+                            } => {
+                                info!(
+                                    "Received device revocation for {} (by {}) via TURN",
+                                    device_id, revoked_by
+                                );
+                                let _ = ipc_tx.send(IpcMessage::RevokeDevice {
+                                    uuid: device_id.clone(),
+                                });
+                                if device_id == node_id {
+                                    break;
                                 }
                             }
                         }
@@ -2201,6 +2277,19 @@ fn handle_outgoing_connection_inner(
             return Err(anyhow::anyhow!("Self-pairing not allowed"));
         }
 
+        if store.is_device_revoked(&self_node_id).unwrap_or(false) {
+            error!("Incoming connection aborted: Local device is revoked/locked out.");
+            return Err(anyhow::anyhow!("Local device is locked out"));
+        }
+
+        if store.is_device_revoked(&remote_node_id).unwrap_or(false) {
+            warn!(
+                "Incoming connection rejected: Remote device {} is revoked.",
+                remote_node_id
+            );
+            return Err(anyhow::anyhow!("Remote device is revoked"));
+        }
+
         let mut transport = noise
             .into_transport_mode()
             .map_err(|e| anyhow::anyhow!(e))?;
@@ -2530,6 +2619,22 @@ fn run_sync_session(
                                         value: setting.value,
                                         timestamp: setting.timestamp,
                                     });
+                                }
+                            }
+                            SyncMessage::DeviceRevocation {
+                                device_id,
+                                revoked_by,
+                                timestamp: _,
+                            } => {
+                                info!(
+                                    "Received device revocation for {} (by {}) via LAN",
+                                    device_id, revoked_by
+                                );
+                                let _ = ipc_tx.send(IpcMessage::RevokeDevice {
+                                    uuid: device_id.clone(),
+                                });
+                                if device_id == node_id {
+                                    break;
                                 }
                             }
                         }

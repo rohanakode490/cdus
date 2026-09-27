@@ -1172,29 +1172,14 @@ fn main() {
                                             let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::RevokeDevice { uuid } => {
-                                            let _ = relay_ipc.revoke_device(uuid.clone());
-                                            match store_clone.remove_paired_device(&uuid) {
-                                                Ok(_) => {
-                                                    sync_manager_ipc.remove_peer(&uuid);
-                                                    let resp_bytes =
-                                                        serde_json::to_vec(&IpcMessage::Log(
-                                                            "Device revoked and unpaired"
-                                                                .to_string(),
-                                                        ))
-                                                        .unwrap();
-                                                    let _ = stream.write_all(&resp_bytes);
-                                                }
-                                                Err(e) => {
-                                                    let resp_bytes = serde_json::to_vec(
-                                                        &IpcMessage::Log(format!(
-                                                            "Error removing revoked device: {}",
-                                                            e
-                                                        )),
-                                                    )
-                                                    .unwrap();
-                                                    let _ = stream.write_all(&resp_bytes);
-                                                }
-                                            }
+                                            let _ = tx_clone.send(IpcMessage::RevokeDevice {
+                                                uuid: uuid.clone(),
+                                            });
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
+                                                "Device revocation initiated".to_string(),
+                                            ))
+                                            .unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
                                         }
                                         IpcMessage::GetHistory { limit } => {
                                             match store_clone.get_recent_events(limit) {

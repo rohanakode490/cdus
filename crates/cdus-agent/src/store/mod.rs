@@ -146,6 +146,15 @@ impl Store {
             [],
         )?;
 
+        // Revoked devices table for remote lockout and rejection
+        state_conn.execute(
+            "CREATE TABLE IF NOT EXISTS revoked_devices (
+                node_id TEXT PRIMARY KEY,
+                revoked_at INTEGER NOT NULL
+            )",
+            [],
+        )?;
+
         // Migration: Add network info to paired_devices if it doesn't exist
         let has_network_info: bool = state_conn
             .query_row(
@@ -1463,6 +1472,14 @@ impl Store {
         label: &str,
         static_key: Option<&[u8]>,
     ) -> Result<()> {
+        if self.is_device_revoked(node_id)? {
+            return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("Device {} is revoked and cannot be paired", node_id),
+                ),
+            )));
+        }
         let conn = self.state_conn.lock();
         conn.execute(
             "INSERT INTO paired_devices (node_id, label, static_key) VALUES (?1, ?2, ?3)
@@ -1479,6 +1496,51 @@ impl Store {
         let search_conn = self.search_conn.lock();
         let _ = search_conn.execute("DELETE FROM search_index WHERE id = ?", [node_id]);
         Ok(())
+    }
+
+    pub fn clear_paired_devices(&self) -> Result<()> {
+        let conn = self.state_conn.lock();
+        conn.execute("DELETE FROM paired_devices", [])?;
+        let search_conn = self.search_conn.lock();
+        let _ = search_conn.execute("DELETE FROM search_index WHERE item_type = 'device'", []);
+        Ok(())
+    }
+
+    pub fn record_revoked_device(&self, node_id: &str, timestamp: u64) -> Result<()> {
+        let conn = self.state_conn.lock();
+        conn.execute(
+            "INSERT INTO revoked_devices (node_id, revoked_at) VALUES (?1, ?2)
+             ON CONFLICT(node_id) DO UPDATE SET revoked_at = excluded.revoked_at",
+            rusqlite::params![node_id, timestamp as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn is_device_revoked(&self, node_id: &str) -> Result<bool> {
+        let conn = self.state_conn.lock();
+        let exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM revoked_devices WHERE node_id = ?",
+                [node_id],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        Ok(exists)
+    }
+
+    pub fn get_revoked_devices(&self) -> Result<Vec<(String, u64)>> {
+        let conn = self.state_conn.lock();
+        let mut stmt = conn.prepare("SELECT node_id, revoked_at FROM revoked_devices")?;
+        let rows = stmt.query_map([], |row| {
+            let node_id: String = row.get(0)?;
+            let revoked_at: i64 = row.get(1)?;
+            Ok((node_id, revoked_at as u64))
+        })?;
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
     }
 
     pub fn get_paired_devices(&self) -> Result<Vec<PairedDeviceRecord>> {
@@ -2195,7 +2257,6 @@ mod tests {
         assert_eq!(s.value, "false");
         assert_eq!(s.timestamp, 200);
 
-        // 5. Test another setting and get_all_settings
         store.set_setting("clipboard_limit", "50", 150).unwrap();
         let all = store.get_all_settings().unwrap();
         assert_eq!(all.len(), 2);
@@ -2203,5 +2264,35 @@ mod tests {
         assert_eq!(all[0].value, "50");
         assert_eq!(all[1].key, "sync_enabled");
         assert_eq!(all[1].value, "false");
+    }
+
+    #[test]
+    fn test_device_revocation_store() {
+        let dir = tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+
+        // 1. Initially not revoked
+        assert!(!store.is_device_revoked("node-123").unwrap());
+
+        // 2. Add paired device succeeds
+        store.add_paired_device("node-123", "Laptop", None).unwrap();
+        assert_eq!(store.get_paired_devices().unwrap().len(), 1);
+
+        // 3. Record revocation
+        store.record_revoked_device("node-123", 500).unwrap();
+        assert!(store.is_device_revoked("node-123").unwrap());
+
+        // 4. Attempting to add paired device after revocation fails
+        let add_res = store.add_paired_device("node-123", "Laptop", None);
+        assert!(add_res.is_err());
+
+        // 5. Remove paired device and clear
+        store.remove_paired_device("node-123").unwrap();
+        assert_eq!(store.get_paired_devices().unwrap().len(), 0);
+
+        store.add_paired_device("node-456", "Phone", None).unwrap();
+        assert_eq!(store.get_paired_devices().unwrap().len(), 1);
+        store.clear_paired_devices().unwrap();
+        assert_eq!(store.get_paired_devices().unwrap().len(), 0);
     }
 }
