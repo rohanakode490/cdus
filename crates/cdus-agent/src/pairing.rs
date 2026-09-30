@@ -1540,6 +1540,22 @@ fn run_turn_sync_session(
                                     break;
                                 }
                             }
+                            SyncMessage::NoteSync {
+                                doc_id,
+                                sync_message,
+                            } => {
+                                let _ = ipc_tx.send(IpcMessage::ApplyNoteSync {
+                                    doc_id,
+                                    sync_message,
+                                    source: node_id.clone(),
+                                });
+                            }
+                            SyncMessage::NoteDelete { doc_id } => {
+                                let _ = ipc_tx.send(IpcMessage::ApplyNoteDelete {
+                                    doc_id,
+                                    source: node_id.clone(),
+                                });
+                            }
                         }
                     }
                 }
@@ -2636,6 +2652,22 @@ fn run_sync_session(
                                 if device_id == node_id {
                                     break;
                                 }
+                            }
+                            SyncMessage::NoteSync {
+                                doc_id,
+                                sync_message,
+                            } => {
+                                let _ = ipc_tx.send(IpcMessage::ApplyNoteSync {
+                                    doc_id,
+                                    sync_message,
+                                    source: node_id.clone(),
+                                });
+                            }
+                            SyncMessage::NoteDelete { doc_id } => {
+                                let _ = ipc_tx.send(IpcMessage::ApplyNoteDelete {
+                                    doc_id,
+                                    source: node_id.clone(),
+                                });
                             }
                         }
                     }

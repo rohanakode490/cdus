@@ -476,6 +476,19 @@ impl Libp2pManager {
                                                             info!("Received DeviceRevocation for {} (by {}) via Gossipsub", device_id, revoked_by);
                                                             let _ = tx.send(IpcMessage::RevokeDevice { uuid: device_id });
                                                         }
+                                                        SyncMessage::NoteSync { doc_id, sync_message } => {
+                                                            let _ = tx.send(IpcMessage::ApplyNoteSync {
+                                                                doc_id,
+                                                                sync_message,
+                                                                source: propagation_source.to_string(),
+                                                            });
+                                                        }
+                                                        SyncMessage::NoteDelete { doc_id } => {
+                                                            let _ = tx.send(IpcMessage::ApplyNoteDelete {
+                                                                doc_id,
+                                                                source: propagation_source.to_string(),
+                                                            });
+                                                        }
                                                     }
                                                 }
                                             }

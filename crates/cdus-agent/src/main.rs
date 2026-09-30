@@ -1541,7 +1541,51 @@ fn main() {
                                                 }
                                             }
                                         }
-
+                                        IpcMessage::GetNotes => {
+                                            let notes =
+                                                store_clone.get_all_notes().unwrap_or_default();
+                                            let resp_bytes = serde_json::to_vec(
+                                                &IpcMessage::NotesResponse(notes),
+                                            )
+                                            .unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        IpcMessage::GetNote { doc_id } => {
+                                            let note = store_clone
+                                                .get_note(&doc_id)
+                                                .ok()
+                                                .flatten()
+                                                .map(|(r, _)| r);
+                                            let resp_bytes =
+                                                serde_json::to_vec(&IpcMessage::NoteResponse(note))
+                                                    .unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        IpcMessage::SaveNote {
+                                            doc_id,
+                                            title,
+                                            content,
+                                        } => {
+                                            let _ = tx_clone.send(IpcMessage::SaveNote {
+                                                doc_id,
+                                                title,
+                                                content,
+                                            });
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
+                                                "Note saved successfully".to_string(),
+                                            ))
+                                            .unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
+                                        IpcMessage::DeleteNote { doc_id } => {
+                                            let _ =
+                                                tx_clone.send(IpcMessage::DeleteNote { doc_id });
+                                            let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
+                                                "Note deleted successfully".to_string(),
+                                            ))
+                                            .unwrap();
+                                            let _ = stream.write_all(&resp_bytes);
+                                        }
                                         _ => {
                                             let resp_bytes = serde_json::to_vec(&IpcMessage::Log(
                                                 "Message received".to_string(),

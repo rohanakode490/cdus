@@ -23,6 +23,7 @@
           <button class="nav-item active" data-view="devices">Devices</button>
           <button class="nav-item" data-view="clipboard">Clipboard</button>
           <button class="nav-item" data-view="files">Files</button>
+          <button class="nav-item" data-view="notes">Notes</button>
           <button class="nav-item" data-view="notifications">Notifications</button>
           <button class="nav-item" data-view="audit">Audit Log</button>
           <button class="nav-item" data-view="settings">Settings</button>
@@ -247,6 +248,52 @@
           </div>
         </div>
       </div>
+
+      <!-- Notes View -->
+      <div id="view-notes" class="view">
+        <div class="header-with-action">
+          <div class="header-main">
+            <h2>Notes</h2>
+            <p class="setting-hint">Conflict-free documents synchronized across all paired devices via Automerge CRDT.</p>
+          </div>
+          <div class="header-actions">
+            <button id="new-note-btn" class="primary-btn">+ New Note</button>
+          </div>
+        </div>
+
+        <div class="notes-layout">
+          <!-- Sidebar Note List -->
+          <div class="notes-sidebar">
+            <div class="notes-search-box">
+              <input type="text" id="notes-filter-input" placeholder="Search notes..." />
+            </div>
+            <div id="notes-loading" class="loading-state-container hidden">
+              <div class="spinner"></div>
+              <p>Loading notes...</p>
+            </div>
+            <div id="notes-list" class="notes-list"></div>
+            <p id="notes-empty" class="empty-state hidden">No notes yet. Create your first note above.</p>
+          </div>
+
+          <!-- Note Editor Container -->
+          <div class="notes-editor-container">
+            <div id="notes-no-selection" class="empty-state-container">
+              <p class="empty-state">Select a note or create a new one to start writing.</p>
+            </div>
+            <div id="notes-active-editor" class="notes-editor hidden">
+              <div class="notes-editor-header">
+                <input type="text" id="note-title-input" class="note-title-input" placeholder="Note Title" />
+                <div class="note-editor-meta">
+                  <span id="note-sync-status" class="note-status-badge">Synced</span>
+                  <button id="delete-note-btn" class="danger-btn">Delete Note</button>
+                </div>
+              </div>
+              <textarea id="note-content-input" class="note-content-input" placeholder="Start typing... Changes converge across all devices instantly."></textarea>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div id="view-settings" class="view">
         <h2>Settings</h2>
         <div id="settings-loading" class="loading-state-container hidden">

@@ -701,6 +701,12 @@ internal interface UniffiCallbackInterfaceFileTransferListenerMethod13 : com.sun
 internal interface UniffiCallbackInterfaceFileTransferListenerMethod14 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`connected`: Byte,`error`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
+internal interface UniffiCallbackInterfaceNoteListenerMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`note`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceNoteListenerMethod1 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`docId`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
 internal interface UniffiCallbackInterfaceNotificationListenerMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`key`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
@@ -774,6 +780,25 @@ internal open class UniffiVTableCallbackInterfaceFileTransferListener(
         `onStalePairing` = other.`onStalePairing`
         `onTransferStateChanged` = other.`onTransferStateChanged`
         `onRelayStatusChanged` = other.`onRelayStatusChanged`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
+}
+@Structure.FieldOrder("onNoteUpdated", "onNoteDeleted", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceNoteListener(
+    @JvmField internal var `onNoteUpdated`: UniffiCallbackInterfaceNoteListenerMethod0? = null,
+    @JvmField internal var `onNoteDeleted`: UniffiCallbackInterfaceNoteListenerMethod1? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `onNoteUpdated`: UniffiCallbackInterfaceNoteListenerMethod0? = null,
+        `onNoteDeleted`: UniffiCallbackInterfaceNoteListenerMethod1? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceNoteListener(`onNoteUpdated`,`onNoteDeleted`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceNoteListener) {
+        `onNoteUpdated` = other.`onNoteUpdated`
+        `onNoteDeleted` = other.`onNoteDeleted`
         `uniffiFree` = other.`uniffiFree`
     }
 
@@ -974,6 +999,19 @@ internal open class UniffiVTableCallbackInterfaceNotificationListener(
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -986,6 +1024,7 @@ internal interface UniffiLib : Library {
                 uniffiCheckApiChecksums(lib)
                 uniffiCallbackInterfaceClipboardListener.register(lib)
                 uniffiCallbackInterfaceFileTransferListener.register(lib)
+                uniffiCallbackInterfaceNoteListener.register(lib)
                 uniffiCallbackInterfaceNotificationListener.register(lib)
                 }
         }
@@ -995,6 +1034,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_init_callback_vtable_clipboardlistener(`vtable`: UniffiVTableCallbackInterfaceClipboardListener,
     ): Unit
     fun uniffi_cdus_ffi_fn_init_callback_vtable_filetransferlistener(`vtable`: UniffiVTableCallbackInterfaceFileTransferListener,
+    ): Unit
+    fun uniffi_cdus_ffi_fn_init_callback_vtable_notelistener(`vtable`: UniffiVTableCallbackInterfaceNoteListener,
     ): Unit
     fun uniffi_cdus_ffi_fn_init_callback_vtable_notificationlistener(`vtable`: UniffiVTableCallbackInterfaceNotificationListener,
     ): Unit
@@ -1024,6 +1065,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_delete_file_transfer(`transferId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_fn_func_delete_note(`docId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_cdus_ffi_fn_func_disconnect_device(`nodeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_get_all_settings(uniffi_out_err: UniffiRustCallStatus, 
@@ -1035,6 +1078,10 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_get_discovered_devices(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_file_transfer_history(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_cdus_ffi_fn_func_get_note(`docId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_cdus_ffi_fn_func_get_notes(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_get_paired_devices(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1068,6 +1115,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_cdus_ffi_fn_func_save_clipboard_local(`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_cdus_ffi_fn_func_save_note(`docId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_search(`query`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_cdus_ffi_fn_func_send_file(`nodeId`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1081,6 +1130,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_fn_func_set_clipboard_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_set_file_transfer_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_cdus_ffi_fn_func_set_note_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_cdus_ffi_fn_func_set_notification_listener(`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1238,6 +1289,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_delete_file_transfer(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_delete_note(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_disconnect_device(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_all_settings(
@@ -1249,6 +1302,10 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_func_get_discovered_devices(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_file_transfer_history(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_get_note(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_get_notes(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_get_paired_devices(
     ): Short
@@ -1282,6 +1339,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_cdus_ffi_checksum_func_save_clipboard_local(
     ): Short
+    fun uniffi_cdus_ffi_checksum_func_save_note(
+    ): Short
     fun uniffi_cdus_ffi_checksum_func_search(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_send_file(
@@ -1295,6 +1354,8 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_func_set_clipboard_listener(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_set_file_transfer_listener(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_func_set_note_listener(
     ): Short
     fun uniffi_cdus_ffi_checksum_func_set_notification_listener(
     ): Short
@@ -1345,6 +1406,10 @@ internal interface UniffiLib : Library {
     fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_transfer_state_changed(
     ): Short
     fun uniffi_cdus_ffi_checksum_method_filetransferlistener_on_relay_status_changed(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_method_notelistener_on_note_updated(
+    ): Short
+    fun uniffi_cdus_ffi_checksum_method_notelistener_on_note_deleted(
     ): Short
     fun uniffi_cdus_ffi_checksum_method_notificationlistener_on_remote_dismiss_request(
     ): Short
@@ -1404,6 +1469,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_delete_file_transfer() != 11099.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_delete_note() != 7948.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_disconnect_device() != 4323.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1420,6 +1488,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_get_file_transfer_history() != 13032.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_get_note() != 59788.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_get_notes() != 43664.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_get_paired_devices() != 8212.toShort()) {
@@ -1470,6 +1544,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_cdus_ffi_checksum_func_save_clipboard_local() != 13978.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cdus_ffi_checksum_func_save_note() != 47725.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cdus_ffi_checksum_func_search() != 35355.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1489,6 +1566,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_set_file_transfer_listener() != 44860.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_func_set_note_listener() != 18877.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_func_set_notification_listener() != 35194.toShort()) {
@@ -1564,6 +1644,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_method_filetransferlistener_on_relay_status_changed() != 14396.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_method_notelistener_on_note_updated() != 49983.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cdus_ffi_checksum_method_notelistener_on_note_deleted() != 65446.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cdus_ffi_checksum_method_notificationlistener_on_remote_dismiss_request() != 25989.toShort()) {
@@ -1940,6 +2026,50 @@ public object FfiConverterTypeDiscoveredDevice: FfiConverterRustBuffer<Discovere
             FfiConverterString.write(value.`os`, buf)
             FfiConverterSequenceString.write(value.`ips`, buf)
             FfiConverterUShort.write(value.`port`, buf)
+    }
+}
+
+
+
+data class FfiNote (
+    var `docId`: kotlin.String, 
+    var `title`: kotlin.String, 
+    var `content`: kotlin.String, 
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiNote: FfiConverterRustBuffer<FfiNote> {
+    override fun read(buf: ByteBuffer): FfiNote {
+        return FfiNote(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiNote) = (
+            FfiConverterString.allocationSize(value.`docId`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterString.allocationSize(value.`content`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: FfiNote, buf: ByteBuffer) {
+            FfiConverterString.write(value.`docId`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterString.write(value.`content`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
     }
 }
 
@@ -2591,6 +2721,74 @@ public object FfiConverterTypeFileTransferListener: FfiConverterCallbackInterfac
 
 
 
+public interface NoteListener {
+    
+    fun `onNoteUpdated`(`note`: FfiNote)
+    
+    fun `onNoteDeleted`(`docId`: kotlin.String)
+    
+    companion object
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceNoteListener {
+    internal object `onNoteUpdated`: UniffiCallbackInterfaceNoteListenerMethod0 {
+        override fun callback(`uniffiHandle`: Long,`note`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeNoteListener.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onNoteUpdated`(
+                    FfiConverterTypeFfiNote.lift(`note`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+    internal object `onNoteDeleted`: UniffiCallbackInterfaceNoteListenerMethod1 {
+        override fun callback(`uniffiHandle`: Long,`docId`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeNoteListener.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onNoteDeleted`(
+                    FfiConverterString.lift(`docId`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeNoteListener.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceNoteListener.UniffiByValue(
+        `onNoteUpdated`,
+        `onNoteDeleted`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_cdus_ffi_fn_init_callback_vtable_notelistener(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypeNoteListener: FfiConverterCallbackInterface<NoteListener>()
+
+
+
+
+
 public interface NotificationListener {
     
     fun `onRemoteDismissRequest`(`key`: kotlin.String)
@@ -2668,6 +2866,38 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         } else {
             buf.put(1)
             FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeFfiNote: FfiConverterRustBuffer<FfiNote?> {
+    override fun read(buf: ByteBuffer): FfiNote? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeFfiNote.read(buf)
+    }
+
+    override fun allocationSize(value: FfiNote?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeFfiNote.allocationSize(value)
+        }
+    }
+
+    override fun write(value: FfiNote?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeFfiNote.write(value, buf)
         }
     }
 }
@@ -2812,6 +3042,34 @@ public object FfiConverterSequenceTypeDiscoveredDevice: FfiConverterRustBuffer<L
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeDiscoveredDevice.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiNote: FfiConverterRustBuffer<List<FfiNote>> {
+    override fun read(buf: ByteBuffer): List<FfiNote> {
+        val len = buf.getInt()
+        return List<FfiNote>(len) {
+            FfiConverterTypeFfiNote.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiNote>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiNote.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiNote>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiNote.write(it, buf)
         }
     }
 }
@@ -3030,6 +3288,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
 }
     
     
+ fun `deleteNote`(`docId`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_delete_note(
+        FfiConverterString.lower(`docId`),_status)
+}
+    
+    
  fun `disconnectDevice`(`nodeId`: kotlin.String)
         = 
     uniffiRustCall() { _status ->
@@ -3079,6 +3345,24 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_file_transfer_history(
         FfiConverterUInt.lower(`limit`),_status)
+}
+    )
+    }
+    
+ fun `getNote`(`docId`: kotlin.String): FfiNote? {
+            return FfiConverterOptionalTypeFfiNote.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_note(
+        FfiConverterString.lower(`docId`),_status)
+}
+    )
+    }
+    
+ fun `getNotes`(): List<FfiNote> {
+            return FfiConverterSequenceTypeFfiNote.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_get_notes(
+        _status)
 }
     )
     }
@@ -3219,6 +3503,15 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
 }
     
     
+ fun `saveNote`(`docId`: kotlin.String, `title`: kotlin.String, `content`: kotlin.String): FfiNote {
+            return FfiConverterTypeFfiNote.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_save_note(
+        FfiConverterString.lower(`docId`),FfiConverterString.lower(`title`),FfiConverterString.lower(`content`),_status)
+}
+    )
+    }
+    
  fun `search`(`query`: kotlin.String): List<FfiSearchResult> {
             return FfiConverterSequenceTypeFfiSearchResult.lift(
     uniffiRustCall() { _status ->
@@ -3273,6 +3566,14 @@ public object FfiConverterSequenceTypePairedDevice: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_set_file_transfer_listener(
         FfiConverterTypeFileTransferListener.lower(`listener`),_status)
+}
+    
+    
+ fun `setNoteListener`(`listener`: NoteListener)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cdus_ffi_fn_func_set_note_listener(
+        FfiConverterTypeNoteListener.lower(`listener`),_status)
 }
     
     

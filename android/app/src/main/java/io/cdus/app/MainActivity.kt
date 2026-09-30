@@ -48,6 +48,7 @@ import io.cdus.app.ui.screens.DevicesScreen
 import io.cdus.app.ui.screens.FilesScreen
 import io.cdus.app.ui.screens.OnboardingOverlay
 import io.cdus.app.ui.screens.SettingsScreen
+import io.cdus.app.ui.screens.NotesScreen
 import io.cdus.app.ui.theme.CdusandroidTheme
 import io.cdus.app.utils.FileUtils
 import io.cdus.app.utils.Logger
@@ -291,6 +292,7 @@ fun MainScreen(sharedFilePath: String?, onFileSent: () -> Unit) {
             composable(Screen.Devices.route) { DevicesScreen() }
             composable(Screen.Clipboard.route) { ClipboardScreen() }
             composable(Screen.Files.route) { FilesScreen() }
+            composable(Screen.Notes.route) { NotesScreen() }
             composable(Screen.Audit.route) { AuditScreen() }
             composable(Screen.Settings.route) { SettingsScreen() }
         }

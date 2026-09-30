@@ -63,6 +63,21 @@ pub struct FfiSettingRecord {
     pub timestamp: u64,
 }
 
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiNote {
+    pub doc_id: String,
+    pub title: String,
+    pub content: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[uniffi::export(callback_interface)]
+pub trait NoteListener: Send + Sync {
+    fn on_note_updated(&self, note: FfiNote);
+    fn on_note_deleted(&self, doc_id: String);
+}
+
 #[uniffi::export(callback_interface)]
 pub trait ClipboardListener: Send + Sync {
     fn on_clipboard_update(&self, content: String, source: String);
@@ -122,6 +137,13 @@ pub trait NotificationListener: Send + Sync {
 
 static NOTIFICATION_LISTENER: Lazy<Mutex<Option<Box<dyn NotificationListener>>>> =
     Lazy::new(|| Mutex::new(None));
+
+static NOTE_LISTENER: Lazy<Mutex<Option<Box<dyn NoteListener>>>> = Lazy::new(|| Mutex::new(None));
+
+#[uniffi::export]
+pub fn set_note_listener(listener: Box<dyn NoteListener>) {
+    *NOTE_LISTENER.lock().unwrap() = Some(listener);
+}
 
 #[uniffi::export]
 pub fn set_notification_listener(listener: Box<dyn NotificationListener>) {
@@ -518,7 +540,40 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                     if let Some(listener) =
                                         FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
                                     {
-                                        listener.on_peer_connected(node_id);
+                                        listener.on_peer_connected(node_id.clone());
+                                    }
+                                    if let Some(store) = STORE.lock().unwrap().as_ref() {
+                                        if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+                                            if let Ok(notes) = store.get_all_notes() {
+                                                for note_rec in notes {
+                                                    if let Ok(Some((_, data))) =
+                                                        store.get_note(&note_rec.doc_id)
+                                                    {
+                                                        if let Ok(mut note_doc) =
+                                                            cdus_agent::notes::AutomergeNote::load(
+                                                                &data,
+                                                            )
+                                                        {
+                                                            let mut sync_state =
+                                                                automerge::sync::State::new();
+                                                            if let Some(sync_message) = note_doc
+                                                                .generate_sync_message(
+                                                                    &mut sync_state,
+                                                                )
+                                                            {
+                                                                pm.sync_manager.send_to_peer(
+                                                                    &node_id,
+                                                                    SyncMessage::NoteSync {
+                                                                        doc_id: note_rec.doc_id,
+                                                                        sync_message,
+                                                                    },
+                                                                );
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                                 IpcMessage::PeerDisconnected { node_id } => {
@@ -601,6 +656,106 @@ pub fn init_core(data_dir: String, device_name: String) -> String {
                                         FILE_TRANSFER_LISTENER.lock().unwrap().as_ref()
                                     {
                                         listener.on_peer_disconnected(uuid);
+                                    }
+                                }
+                                IpcMessage::ApplyNoteSync {
+                                    doc_id,
+                                    sync_message,
+                                    source,
+                                } => {
+                                    if let Some(store) = STORE.lock().unwrap().as_ref() {
+                                        let now = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis()
+                                            as u64;
+
+                                        let mut note_doc = match store.get_note(&doc_id) {
+                                            Ok(Some((_, data))) => {
+                                                cdus_agent::notes::AutomergeNote::load(&data)
+                                                    .unwrap_or_else(|_| {
+                                                        cdus_agent::notes::AutomergeNote::new(
+                                                            &doc_id, "", "", now, now,
+                                                        )
+                                                        .unwrap()
+                                                    })
+                                            }
+                                            _ => cdus_agent::notes::AutomergeNote::new(
+                                                &doc_id, "", "", now, now,
+                                            )
+                                            .unwrap(),
+                                        };
+
+                                        let mut sync_state = automerge::sync::State::new();
+                                        if let Ok(()) = note_doc
+                                            .receive_sync_message(&mut sync_state, &sync_message)
+                                        {
+                                            let data = note_doc.save();
+                                            if let Ok(record) = note_doc.to_record() {
+                                                let _ = store.save_note(
+                                                    &record.doc_id,
+                                                    &record.title,
+                                                    &record.content,
+                                                    &data,
+                                                    record.created_at,
+                                                    record.updated_at,
+                                                );
+                                                let ffi_note = FfiNote {
+                                                    doc_id: record.doc_id.clone(),
+                                                    title: record.title,
+                                                    content: record.content,
+                                                    created_at: record.created_at,
+                                                    updated_at: record.updated_at,
+                                                };
+                                                if let Some(listener) =
+                                                    NOTE_LISTENER.lock().unwrap().as_ref()
+                                                {
+                                                    listener.on_note_updated(ffi_note);
+                                                }
+
+                                                if let Some(reply_msg) =
+                                                    note_doc.generate_sync_message(&mut sync_state)
+                                                {
+                                                    if let Some(pm) =
+                                                        PAIRING_MANAGER.lock().unwrap().as_ref()
+                                                    {
+                                                        pm.sync_manager.send_to_peer(
+                                                            &source,
+                                                            SyncMessage::NoteSync {
+                                                                doc_id,
+                                                                sync_message: reply_msg,
+                                                            },
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                IpcMessage::ApplyNoteDelete { doc_id, .. } => {
+                                    if let Some(store) = STORE.lock().unwrap().as_ref() {
+                                        let _ = store.delete_note(&doc_id);
+                                        if let Some(listener) =
+                                            NOTE_LISTENER.lock().unwrap().as_ref()
+                                        {
+                                            listener.on_note_deleted(doc_id);
+                                        }
+                                    }
+                                }
+                                IpcMessage::NoteUpdated(record) => {
+                                    if let Some(listener) = NOTE_LISTENER.lock().unwrap().as_ref() {
+                                        listener.on_note_updated(FfiNote {
+                                            doc_id: record.doc_id,
+                                            title: record.title,
+                                            content: record.content,
+                                            created_at: record.created_at,
+                                            updated_at: record.updated_at,
+                                        });
+                                    }
+                                }
+                                IpcMessage::NoteDeleted { doc_id } => {
+                                    if let Some(listener) = NOTE_LISTENER.lock().unwrap().as_ref() {
+                                        listener.on_note_deleted(doc_id);
                                     }
                                 }
                                 _ => {
@@ -1531,5 +1686,134 @@ pub fn get_all_settings() -> Vec<FfiSettingRecord> {
             .collect()
     } else {
         Vec::new()
+    }
+}
+
+#[uniffi::export]
+pub fn get_notes() -> Vec<FfiNote> {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        store
+            .get_all_notes()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|n| FfiNote {
+                doc_id: n.doc_id,
+                title: n.title,
+                content: n.content,
+                created_at: n.created_at,
+                updated_at: n.updated_at,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+#[uniffi::export]
+pub fn get_note(doc_id: String) -> Option<FfiNote> {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        store
+            .get_note(&doc_id)
+            .unwrap_or(None)
+            .map(|(n, _)| FfiNote {
+                doc_id: n.doc_id,
+                title: n.title,
+                content: n.content,
+                created_at: n.created_at,
+                updated_at: n.updated_at,
+            })
+    } else {
+        None
+    }
+}
+
+#[uniffi::export]
+pub fn save_note(doc_id: String, title: String, content: String) -> FfiNote {
+    let doc_id = if doc_id.is_empty() {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        doc_id
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let mut note_doc = match store.get_note(&doc_id) {
+            Ok(Some((rec, data))) => {
+                let mut doc = cdus_agent::notes::AutomergeNote::load(&data).unwrap_or_else(|_| {
+                    cdus_agent::notes::AutomergeNote::new(
+                        &doc_id,
+                        &title,
+                        &content,
+                        rec.created_at,
+                        now,
+                    )
+                    .unwrap()
+                });
+                let _ = doc.update(&title, &content, now);
+                doc
+            }
+            _ => {
+                cdus_agent::notes::AutomergeNote::new(&doc_id, &title, &content, now, now).unwrap()
+            }
+        };
+
+        let data = note_doc.save();
+        let record = note_doc.to_record().unwrap_or(cdus_common::NoteRecord {
+            doc_id: doc_id.clone(),
+            title: title.clone(),
+            content: content.clone(),
+            created_at: now,
+            updated_at: now,
+        });
+
+        let _ = store.save_note(
+            &record.doc_id,
+            &record.title,
+            &record.content,
+            &data,
+            record.created_at,
+            record.updated_at,
+        );
+
+        if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+            let mut sync_state = automerge::sync::State::new();
+            if let Some(sync_message) = note_doc.generate_sync_message(&mut sync_state) {
+                pm.sync_manager.broadcast(SyncMessage::NoteSync {
+                    doc_id: record.doc_id.clone(),
+                    sync_message,
+                });
+            }
+        }
+
+        FfiNote {
+            doc_id: record.doc_id,
+            title: record.title,
+            content: record.content,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+        }
+    } else {
+        FfiNote {
+            doc_id,
+            title,
+            content,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
+#[uniffi::export]
+pub fn delete_note(doc_id: String) {
+    if let Some(store) = STORE.lock().unwrap().as_ref() {
+        let _ = store.delete_note(&doc_id);
+        if let Some(pm) = PAIRING_MANAGER.lock().unwrap().as_ref() {
+            pm.sync_manager.broadcast(SyncMessage::NoteDelete {
+                doc_id: doc_id.clone(),
+            });
+        }
     }
 }

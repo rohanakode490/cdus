@@ -1,6 +1,7 @@
 pub mod file_transfer;
 pub mod libp2p_manager;
 pub mod mdns;
+pub mod notes;
 pub mod pairing;
 pub mod relay;
 pub mod store;
@@ -424,6 +425,26 @@ pub fn daemon_loop(
                         if !settings.is_empty() {
                             sync_manager
                                 .send_to_peer(&node_id, SyncMessage::SettingsUpdate { settings });
+                        }
+                    }
+                    if let Ok(notes) = store.get_all_notes() {
+                        for note_rec in notes {
+                            if let Ok(Some((_, data))) = store.get_note(&note_rec.doc_id) {
+                                if let Ok(mut note_doc) = crate::notes::AutomergeNote::load(&data) {
+                                    let mut sync_state = automerge::sync::State::new();
+                                    if let Some(sync_message) =
+                                        note_doc.generate_sync_message(&mut sync_state)
+                                    {
+                                        sync_manager.send_to_peer(
+                                            &node_id,
+                                            SyncMessage::NoteSync {
+                                                doc_id: note_rec.doc_id,
+                                                sync_message,
+                                            },
+                                        );
+                                    }
+                                }
+                            }
                         }
                     }
                     broadcast_event(IpcMessage::PeerConnected { node_id });
@@ -866,6 +887,156 @@ pub fn daemon_loop(
                 IpcMessage::GetAllSettings => {
                     let settings = store.get_all_settings().unwrap_or_default();
                     let _ = tx.send(IpcMessage::AllSettingsResponse(settings));
+                }
+                IpcMessage::GetNotes => {
+                    let notes = store.get_all_notes().unwrap_or_default();
+                    let _ = tx.send(IpcMessage::NotesResponse(notes));
+                }
+                IpcMessage::GetNote { doc_id } => {
+                    let note = store.get_note(&doc_id).ok().flatten().map(|(r, _)| r);
+                    let _ = tx.send(IpcMessage::NoteResponse(note));
+                }
+                IpcMessage::SaveNote {
+                    doc_id,
+                    title,
+                    content,
+                } => {
+                    if store.is_device_revoked(pm.node_id()).unwrap_or(false) {
+                        warn!("Local device is locked out. Rejecting note save.");
+                        continue;
+                    }
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+
+                    let mut note_doc = match store.get_note(&doc_id) {
+                        Ok(Some((rec, data))) => {
+                            let mut doc =
+                                crate::notes::AutomergeNote::load(&data).unwrap_or_else(|_| {
+                                    crate::notes::AutomergeNote::new(
+                                        &doc_id,
+                                        &title,
+                                        &content,
+                                        rec.created_at,
+                                        now,
+                                    )
+                                    .unwrap()
+                                });
+                            let _ = doc.update(&title, &content, now);
+                            doc
+                        }
+                        _ => crate::notes::AutomergeNote::new(&doc_id, &title, &content, now, now)
+                            .unwrap(),
+                    };
+
+                    let data = note_doc.save();
+                    let record = note_doc.to_record().unwrap_or(cdus_common::NoteRecord {
+                        doc_id: doc_id.clone(),
+                        title: title.clone(),
+                        content: content.clone(),
+                        created_at: now,
+                        updated_at: now,
+                    });
+
+                    let _ = store.save_note(
+                        &record.doc_id,
+                        &record.title,
+                        &record.content,
+                        &data,
+                        record.created_at,
+                        record.updated_at,
+                    );
+                    let _ =
+                        store.append_audit_log("notes", &format!("Saved note '{}'", record.title));
+
+                    // Broadcast to peers via Automerge sync
+                    let mut sync_state = automerge::sync::State::new();
+                    if let Some(sync_message) = note_doc.generate_sync_message(&mut sync_state) {
+                        sync_manager.broadcast(SyncMessage::NoteSync {
+                            doc_id: record.doc_id.clone(),
+                            sync_message,
+                        });
+                    }
+
+                    broadcast_event(IpcMessage::NoteUpdated(record));
+                }
+                IpcMessage::DeleteNote { doc_id } => {
+                    if store.is_device_revoked(pm.node_id()).unwrap_or(false) {
+                        warn!("Local device is locked out. Rejecting note delete.");
+                        continue;
+                    }
+                    let _ = store.delete_note(&doc_id);
+                    let _ = store.append_audit_log("notes", &format!("Deleted note '{}'", doc_id));
+                    sync_manager.broadcast(SyncMessage::NoteDelete {
+                        doc_id: doc_id.clone(),
+                    });
+                    broadcast_event(IpcMessage::NoteDeleted { doc_id });
+                }
+                IpcMessage::ApplyNoteSync {
+                    doc_id,
+                    sync_message,
+                    source,
+                } => {
+                    if store.is_device_revoked(pm.node_id()).unwrap_or(false) {
+                        debug!("Local device is locked out. Ignoring remote note sync.");
+                        continue;
+                    }
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+
+                    let mut note_doc = match store.get_note(&doc_id) {
+                        Ok(Some((_, data))) => crate::notes::AutomergeNote::load(&data)
+                            .unwrap_or_else(|_| {
+                                crate::notes::AutomergeNote::new(&doc_id, "", "", now, now).unwrap()
+                            }),
+                        _ => crate::notes::AutomergeNote::new(&doc_id, "", "", now, now).unwrap(),
+                    };
+
+                    let mut sync_state = automerge::sync::State::new();
+                    if let Ok(()) = note_doc.receive_sync_message(&mut sync_state, &sync_message) {
+                        let data = note_doc.save();
+                        if let Ok(record) = note_doc.to_record() {
+                            let _ = store.save_note(
+                                &record.doc_id,
+                                &record.title,
+                                &record.content,
+                                &data,
+                                record.created_at,
+                                record.updated_at,
+                            );
+                            info!(
+                                "Applied Automerge note sync from {} for note '{}'",
+                                source, record.title
+                            );
+                            broadcast_event(IpcMessage::NoteUpdated(record));
+
+                            if let Some(reply_msg) = note_doc.generate_sync_message(&mut sync_state)
+                            {
+                                sync_manager.send_to_peer(
+                                    &source,
+                                    SyncMessage::NoteSync {
+                                        doc_id,
+                                        sync_message: reply_msg,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+                IpcMessage::ApplyNoteDelete { doc_id, source } => {
+                    if store.is_device_revoked(pm.node_id()).unwrap_or(false) {
+                        debug!("Local device is locked out. Ignoring remote note delete.");
+                        continue;
+                    }
+                    let _ = store.delete_note(&doc_id);
+                    info!(
+                        "Applied remote note delete from {} for note '{}'",
+                        source, doc_id
+                    );
+                    broadcast_event(IpcMessage::NoteDeleted { doc_id });
                 }
                 IpcMessage::RevokeDevice { uuid } => {
                     let local_id = pm.node_id().to_string();

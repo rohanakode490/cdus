@@ -295,6 +295,43 @@ pub enum IpcMessage {
         value: String,
         timestamp: u64,
     },
+    // Collaborative Notes IPC
+    GetNotes,
+    NotesResponse(Vec<NoteRecord>),
+    GetNote {
+        doc_id: String,
+    },
+    NoteResponse(Option<NoteRecord>),
+    SaveNote {
+        doc_id: String,
+        title: String,
+        content: String,
+    },
+    DeleteNote {
+        doc_id: String,
+    },
+    NoteUpdated(NoteRecord),
+    NoteDeleted {
+        doc_id: String,
+    },
+    ApplyNoteSync {
+        doc_id: String,
+        sync_message: Vec<u8>,
+        source: String,
+    },
+    ApplyNoteDelete {
+        doc_id: String,
+        source: String,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct NoteRecord {
+    pub doc_id: String,
+    pub title: String,
+    pub content: String,
+    pub created_at: u64,
+    pub updated_at: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -457,6 +494,13 @@ pub enum SyncMessage {
         revoked_by: String,
         timestamp: u64,
     },
+    NoteSync {
+        doc_id: String,
+        sync_message: Vec<u8>,
+    },
+    NoteDelete {
+        doc_id: String,
+    },
 }
 
 impl SyncMessage {
@@ -508,6 +552,17 @@ mod tests {
                     timestamp: 1700000001000,
                 },
             ],
+        };
+        let bytes = msg.to_vec().unwrap();
+        let decoded = SyncMessage::from_slice(&bytes).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn test_note_sync_message_roundtrip() {
+        let msg = SyncMessage::NoteSync {
+            doc_id: "doc-123".to_string(),
+            sync_message: vec![1, 2, 3, 4, 5],
         };
         let bytes = msg.to_vec().unwrap();
         let decoded = SyncMessage::from_slice(&bytes).unwrap();

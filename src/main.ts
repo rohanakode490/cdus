@@ -270,6 +270,170 @@ async function renderAuditLogs() {
   }
 }
 
+// --- Collaborative Notes & Structured Docs Sync (CRDT / Automerge) ---
+
+interface NoteRecord {
+  doc_id: string;
+  title: string;
+  content: string;
+  created_at: number;
+  updated_at: number;
+}
+
+let allNotes: NoteRecord[] = [];
+let currentSelectedNoteId: string | null = null;
+let noteSaveDebounceTimer: any = null;
+
+async function renderNotes() {
+  const loadingEl = document.querySelector("#notes-loading");
+  loadingEl?.classList.remove("hidden");
+  try {
+    const notes: NoteRecord[] = await invoke("get_notes");
+    allNotes = notes.sort((a, b) => Number(b.updated_at) - Number(a.updated_at));
+    loadingEl?.classList.add("hidden");
+    renderNotesListOnly();
+
+    if (allNotes.length > 0) {
+      if (!currentSelectedNoteId || !allNotes.some(n => n.doc_id === currentSelectedNoteId)) {
+        selectNote(allNotes[0].doc_id);
+      } else {
+        selectNote(currentSelectedNoteId);
+      }
+    } else {
+      currentSelectedNoteId = null;
+      document.querySelector("#notes-no-selection")?.classList.remove("hidden");
+      document.querySelector("#notes-active-editor")?.classList.add("hidden");
+    }
+  } catch (err) {
+    console.error("Failed to load notes:", err);
+    loadingEl?.classList.add("hidden");
+  }
+}
+
+function renderNotesListOnly() {
+  const listEl = document.querySelector("#notes-list");
+  const emptyEl = document.querySelector("#notes-empty");
+  const filterInput = document.querySelector("#notes-filter-input") as HTMLInputElement;
+  const filterQuery = (filterInput?.value || "").toLowerCase().trim();
+
+  if (!listEl) return;
+  listEl.innerHTML = "";
+
+  const filtered = allNotes.filter(n =>
+    n.title.toLowerCase().includes(filterQuery) ||
+    n.content.toLowerCase().includes(filterQuery)
+  );
+
+  if (filtered.length === 0) {
+    emptyEl?.classList.remove("hidden");
+  } else {
+    emptyEl?.classList.add("hidden");
+    filtered.forEach(note => {
+      const card = document.createElement("div");
+      card.className = `note-card-item ${note.doc_id === currentSelectedNoteId ? "active" : ""}`;
+      card.dataset.docId = note.doc_id;
+
+      const snippet = note.content.trim() ? note.content.slice(0, 100).replace(/\n/g, " ") : "No content yet";
+      const timeStr = new Date(Number(note.updated_at)).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false
+      });
+
+      card.innerHTML = `
+        <div class="note-card-title">${note.title || "Untitled Note"}</div>
+        <div class="note-card-snippet">${snippet}</div>
+        <div class="note-card-time">${timeStr}</div>
+      `;
+
+      card.addEventListener("click", () => {
+        selectNote(note.doc_id);
+      });
+
+      listEl.appendChild(card);
+    });
+  }
+}
+
+function selectNote(docId: string) {
+  currentSelectedNoteId = docId;
+  const note = allNotes.find(n => n.doc_id === docId);
+  const noSel = document.querySelector("#notes-no-selection");
+  const activeEd = document.querySelector("#notes-active-editor");
+  const titleInput = document.querySelector("#note-title-input") as HTMLInputElement;
+  const contentInput = document.querySelector("#note-content-input") as HTMLTextAreaElement;
+  const statusBadge = document.querySelector("#note-sync-status");
+
+  if (!note) {
+    noSel?.classList.remove("hidden");
+    activeEd?.classList.add("hidden");
+    return;
+  }
+
+  noSel?.classList.add("hidden");
+  activeEd?.classList.remove("hidden");
+
+  if (titleInput) titleInput.value = note.title;
+  if (contentInput) contentInput.value = note.content;
+  if (statusBadge) {
+    statusBadge.textContent = "Synced";
+    statusBadge.className = "note-status-badge";
+  }
+
+  document.querySelectorAll(".note-card-item").forEach(card => {
+    if ((card as HTMLElement).dataset.docId === docId) {
+      card.classList.add("active");
+    } else {
+      card.classList.remove("active");
+    }
+  });
+}
+
+function scheduleNoteSave() {
+  if (!currentSelectedNoteId) return;
+  const titleInput = document.querySelector("#note-title-input") as HTMLInputElement;
+  const contentInput = document.querySelector("#note-content-input") as HTMLTextAreaElement;
+  const statusBadge = document.querySelector("#note-sync-status");
+
+  const title = titleInput?.value || "Untitled Note";
+  const content = contentInput?.value || "";
+  const docId = currentSelectedNoteId;
+
+  if (statusBadge) {
+    statusBadge.textContent = "Syncing...";
+    statusBadge.className = "note-status-badge syncing";
+  }
+
+  const existing = allNotes.find(n => n.doc_id === docId);
+  if (existing) {
+    existing.title = title;
+    existing.content = content;
+    existing.updated_at = Date.now();
+  }
+
+  if (noteSaveDebounceTimer) {
+    clearTimeout(noteSaveDebounceTimer);
+  }
+
+  noteSaveDebounceTimer = setTimeout(async () => {
+    try {
+      await invoke("save_note", { docId, title, content });
+      if (statusBadge) {
+        statusBadge.textContent = "Synced";
+        statusBadge.className = "note-status-badge";
+      }
+      renderNotesListOnly();
+    } catch (err) {
+      console.error("Failed to save note:", err);
+      if (statusBadge) {
+        statusBadge.textContent = "Error saving";
+      }
+    }
+  }, 300);
+}
+
 async function initOnboarding() {
   const overlay = document.querySelector("#onboarding-overlay");
   if (!overlay) return;
@@ -1335,6 +1499,8 @@ window.addEventListener("DOMContentLoaded", () => {
         renderPairedDevices();
       } else if (targetViewId === "files") {
         renderFiles();
+      } else if (targetViewId === "notes") {
+        renderNotes();
       } else if (targetViewId === "notifications") {
         renderNotifications();
       } else if (targetViewId === "audit") {
@@ -1342,6 +1508,53 @@ window.addEventListener("DOMContentLoaded", () => {
       }
     });
   });
+
+  document.querySelector("#new-note-btn")?.addEventListener("click", async () => {
+    const docId = crypto.randomUUID();
+    const newNote: NoteRecord = {
+      doc_id: docId,
+      title: "Untitled Note",
+      content: "",
+      created_at: Date.now(),
+      updated_at: Date.now(),
+    };
+    try {
+      await invoke("save_note", { docId, title: newNote.title, content: newNote.content });
+      allNotes.unshift(newNote);
+      renderNotesListOnly();
+      selectNote(docId);
+      const titleInput = document.querySelector("#note-title-input") as HTMLInputElement;
+      titleInput?.focus();
+      titleInput?.select();
+    } catch (err) {
+      console.error("Failed to create new note:", err);
+    }
+  });
+
+  document.querySelector("#delete-note-btn")?.addEventListener("click", async () => {
+    if (!currentSelectedNoteId) return;
+    const confirmDelete = confirm("Are you sure you want to delete this note?");
+    if (!confirmDelete) return;
+    const docId = currentSelectedNoteId;
+    try {
+      await invoke("delete_note", { docId });
+      allNotes = allNotes.filter(n => n.doc_id !== docId);
+      currentSelectedNoteId = null;
+      renderNotesListOnly();
+      if (allNotes.length > 0) {
+        selectNote(allNotes[0].doc_id);
+      } else {
+        document.querySelector("#notes-no-selection")?.classList.remove("hidden");
+        document.querySelector("#notes-active-editor")?.classList.add("hidden");
+      }
+    } catch (err) {
+      console.error("Failed to delete note:", err);
+    }
+  });
+
+  document.querySelector("#note-title-input")?.addEventListener("input", scheduleNoteSave);
+  document.querySelector("#note-content-input")?.addEventListener("input", scheduleNoteSave);
+  document.querySelector("#notes-filter-input")?.addEventListener("input", renderNotesListOnly);
 
   document.querySelector("#clear-notifications-btn")?.addEventListener("click", async () => {
     const keys = activeNotifications.map(n => n.key);
@@ -1368,6 +1581,8 @@ window.addEventListener("DOMContentLoaded", () => {
     renderPairedDevices();
   } else if (activeView?.id === "view-files") {
     renderFiles();
+  } else if (activeView?.id === "view-notes") {
+    renderNotes();
   } else if (activeView?.id === "view-notifications") {
     renderNotifications();
   } else if (activeView?.id === "view-audit") {
@@ -1897,6 +2112,54 @@ window.addEventListener("DOMContentLoaded", () => {
     console.warn("UI: Local device revoked and locked out!", event.payload);
     alert("REMOTE LOCKOUT: This device has been remotely revoked by an authorized peer. All session keys and paired devices have been wiped.");
     renderPairedDevices();
+  });
+
+  listen("note-updated", (event: any) => {
+    console.log("UI: Received note-updated", event.payload);
+    const updatedNote: NoteRecord = event.payload;
+    const idx = allNotes.findIndex(n => n.doc_id === updatedNote.doc_id);
+    if (idx >= 0) {
+      allNotes[idx] = updatedNote;
+    } else {
+      allNotes.unshift(updatedNote);
+    }
+
+    if (currentSelectedNoteId === updatedNote.doc_id) {
+      const titleInput = document.querySelector("#note-title-input") as HTMLInputElement;
+      const contentInput = document.querySelector("#note-content-input") as HTMLTextAreaElement;
+      const statusBadge = document.querySelector("#note-sync-status");
+
+      if (titleInput && document.activeElement !== titleInput && titleInput.value !== updatedNote.title) {
+        titleInput.value = updatedNote.title;
+      }
+      if (contentInput && document.activeElement !== contentInput && contentInput.value !== updatedNote.content) {
+        contentInput.value = updatedNote.content;
+      }
+      if (statusBadge) {
+        statusBadge.textContent = "Synced";
+        statusBadge.className = "note-status-badge";
+      }
+    }
+
+    const notesView = document.querySelector("#view-notes");
+    if (notesView?.classList.contains("active")) {
+      renderNotesListOnly();
+    }
+  });
+
+  listen("note-deleted", (event: any) => {
+    console.log("UI: Received note-deleted", event.payload);
+    const docId = event.payload;
+    allNotes = allNotes.filter(n => n.doc_id !== docId);
+    if (currentSelectedNoteId === docId) {
+      currentSelectedNoteId = null;
+      document.querySelector("#notes-no-selection")?.classList.remove("hidden");
+      document.querySelector("#notes-active-editor")?.classList.add("hidden");
+    }
+    const notesView = document.querySelector("#view-notes");
+    if (notesView?.classList.contains("active")) {
+      renderNotesListOnly();
+    }
   });
 
   // Initial load

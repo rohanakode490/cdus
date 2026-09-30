@@ -1,4 +1,4 @@
-use cdus_common::{ClipboardEvent, SettingRecord};
+use cdus_common::{ClipboardEvent, NoteRecord, SettingRecord};
 use parking_lot::Mutex;
 use rusqlite::{Connection, OptionalExtension, Result};
 use std::path::Path;
@@ -151,6 +151,19 @@ impl Store {
             "CREATE TABLE IF NOT EXISTS revoked_devices (
                 node_id TEXT PRIMARY KEY,
                 revoked_at INTEGER NOT NULL
+            )",
+            [],
+        )?;
+
+        // Notes table for Automerge CRDT collaborative documents
+        state_conn.execute(
+            "CREATE TABLE IF NOT EXISTS notes (
+                doc_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                automerge_data BLOB NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
             )",
             [],
         )?;
@@ -1350,6 +1363,99 @@ impl Store {
         Ok(settings)
     }
 
+    /// Saves or updates a note record along with its binary Automerge state.
+    pub fn save_note(
+        &self,
+        doc_id: &str,
+        title: &str,
+        content: &str,
+        automerge_data: &[u8],
+        created_at: u64,
+        updated_at: u64,
+    ) -> Result<()> {
+        let conn = self.state_conn.lock();
+        conn.execute(
+            "INSERT INTO notes (doc_id, title, content, automerge_data, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(doc_id) DO UPDATE SET
+                 title = excluded.title,
+                 content = excluded.content,
+                 automerge_data = excluded.automerge_data,
+                 updated_at = excluded.updated_at",
+            rusqlite::params![
+                doc_id,
+                title,
+                content,
+                automerge_data,
+                created_at as i64,
+                updated_at as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieves a note record and its binary Automerge data by doc_id.
+    pub fn get_note(&self, doc_id: &str) -> Result<Option<(NoteRecord, Vec<u8>)>> {
+        let conn = self.state_conn.lock();
+        conn.query_row(
+            "SELECT doc_id, title, content, automerge_data, created_at, updated_at FROM notes WHERE doc_id = ?",
+            [doc_id],
+            |row| {
+                let doc_id: String = row.get(0)?;
+                let title: String = row.get(1)?;
+                let content: String = row.get(2)?;
+                let automerge_data: Vec<u8> = row.get(3)?;
+                let created_at: i64 = row.get(4)?;
+                let updated_at: i64 = row.get(5)?;
+                Ok((
+                    NoteRecord {
+                        doc_id,
+                        title,
+                        content,
+                        created_at: created_at as u64,
+                        updated_at: updated_at as u64,
+                    },
+                    automerge_data,
+                ))
+            },
+        )
+        .optional()
+    }
+
+    /// Retrieves all notes sorted by latest updated_at descending.
+    pub fn get_all_notes(&self) -> Result<Vec<NoteRecord>> {
+        let conn = self.state_conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT doc_id, title, content, created_at, updated_at FROM notes ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let doc_id: String = row.get(0)?;
+            let title: String = row.get(1)?;
+            let content: String = row.get(2)?;
+            let created_at: i64 = row.get(3)?;
+            let updated_at: i64 = row.get(4)?;
+            Ok(NoteRecord {
+                doc_id,
+                title,
+                content,
+                created_at: created_at as u64,
+                updated_at: updated_at as u64,
+            })
+        })?;
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
+
+    /// Deletes a note by doc_id.
+    pub fn delete_note(&self, doc_id: &str) -> Result<()> {
+        let conn = self.state_conn.lock();
+        conn.execute("DELETE FROM notes WHERE doc_id = ?", [doc_id])?;
+        Ok(())
+    }
+
     pub fn get_or_create_identity(
         &self,
         data_dir: &std::path::Path,
@@ -2294,5 +2400,58 @@ mod tests {
         assert_eq!(store.get_paired_devices().unwrap().len(), 1);
         store.clear_paired_devices().unwrap();
         assert_eq!(store.get_paired_devices().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_notes_store() {
+        let dir = tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+
+        // 1. Initially no notes
+        assert_eq!(store.get_all_notes().unwrap().len(), 0);
+
+        // 2. Save a note
+        let dummy_automerge = vec![1, 2, 3, 4, 5];
+        store
+            .save_note(
+                "note-1",
+                "Meeting Notes",
+                "Discuss CRDTs",
+                &dummy_automerge,
+                1000,
+                1000,
+            )
+            .unwrap();
+
+        // 3. Retrieve note
+        let (note, data) = store
+            .get_note("note-1")
+            .unwrap()
+            .expect("note should exist");
+        assert_eq!(note.doc_id, "note-1");
+        assert_eq!(note.title, "Meeting Notes");
+        assert_eq!(note.content, "Discuss CRDTs");
+        assert_eq!(data, dummy_automerge);
+
+        // 4. Update note
+        store
+            .save_note(
+                "note-1",
+                "Meeting Notes (Updated)",
+                "Discuss CRDTs and Automerge",
+                &[9, 9, 9],
+                1000,
+                2000,
+            )
+            .unwrap();
+        let (updated_note, updated_data) = store.get_note("note-1").unwrap().unwrap();
+        assert_eq!(updated_note.title, "Meeting Notes (Updated)");
+        assert_eq!(updated_note.content, "Discuss CRDTs and Automerge");
+        assert_eq!(updated_data, vec![9, 9, 9]);
+
+        // 5. Delete note
+        store.delete_note("note-1").unwrap();
+        assert!(store.get_note("note-1").unwrap().is_none());
+        assert_eq!(store.get_all_notes().unwrap().len(), 0);
     }
 }

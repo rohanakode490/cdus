@@ -255,6 +255,40 @@ fn get_all_settings() -> Result<Vec<cdus_common::SettingRecord>, String> {
 }
 
 #[tauri::command]
+fn get_notes() -> Result<Vec<cdus_common::NoteRecord>, String> {
+    let msg = IpcMessage::GetNotes;
+    match send_ipc_message(msg)? {
+        IpcMessage::NotesResponse(notes) => Ok(notes),
+        IpcMessage::Log(err) => Err(err),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+fn get_note(doc_id: String) -> Result<Option<cdus_common::NoteRecord>, String> {
+    let msg = IpcMessage::GetNote { doc_id };
+    match send_ipc_message(msg)? {
+        IpcMessage::NoteResponse(note) => Ok(note),
+        IpcMessage::Log(err) => Err(err),
+        _ => Err("Unexpected response from agent".to_string()),
+    }
+}
+
+#[tauri::command]
+fn save_note(doc_id: String, title: String, content: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::SaveNote {
+        doc_id,
+        title,
+        content,
+    })
+}
+
+#[tauri::command]
+fn delete_note(doc_id: String) -> Result<String, String> {
+    send_ipc_log_response(IpcMessage::DeleteNote { doc_id })
+}
+
+#[tauri::command]
 fn start_scan() -> Result<String, String> {
     send_ipc_log_response(IpcMessage::StartScan)
 }
@@ -867,6 +901,14 @@ pub fn run() {
                                                 let _ = app_handle_events
                                                     .emit("local-device-revoked", revoked_by);
                                             }
+                                            IpcMessage::NoteUpdated(note) => {
+                                                let _ =
+                                                    app_handle_events.emit("note-updated", note);
+                                            }
+                                            IpcMessage::NoteDeleted { doc_id } => {
+                                                let _ =
+                                                    app_handle_events.emit("note-deleted", doc_id);
+                                            }
                                             _ => {}
                                         }
                                     }
@@ -901,6 +943,10 @@ pub fn run() {
             update_setting,
             get_setting,
             get_all_settings,
+            get_notes,
+            get_note,
+            save_note,
+            delete_note,
             start_scan,
             stop_scan,
             get_discovered_devices,
