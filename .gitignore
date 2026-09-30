@@ -49,3 +49,7 @@ dummy.bin
 test_data.bin
 test_print
 relay/coverage.out
+
+# Tauri sidecar binaries
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep

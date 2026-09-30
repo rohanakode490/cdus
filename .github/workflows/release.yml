@@ -93,6 +93,9 @@ jobs:
       - name: Verify TypeScript & Build Frontend
         run: bun run build
 
+      - name: Build cdus-agent Sidecar
+        run: bun run build:sidecar
+
       - name: Build Tauri Desktop Bundle
         env:
           CI: "true"

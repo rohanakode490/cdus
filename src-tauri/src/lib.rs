@@ -7,7 +7,9 @@ use tauri::{
 use cdus_common::{ClipboardEvent, IpcMessage, TransportType};
 use interprocess::local_socket::LocalSocketStream;
 use std::io::{Read, Write};
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::process::Child;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -15,6 +17,8 @@ struct AppState {
     last_synced: Mutex<Option<SystemTime>>,
     history_items: Mutex<Vec<String>>,
 }
+
+struct DaemonChild(Arc<Mutex<Option<Child>>>);
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -86,9 +90,151 @@ fn check_agent_online() -> bool {
     }
 }
 
-#[tauri::command]
-fn ping_agent() -> Result<String, String> {
+fn current_target_triple() -> &'static str {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    return "x86_64-unknown-linux-gnu";
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    return "aarch64-unknown-linux-gnu";
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    return "x86_64-pc-windows-msvc";
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    return "x86_64-apple-darwin";
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    return "aarch64-apple-darwin";
+    #[cfg(not(any(
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
+    return "unknown";
+}
+
+fn find_cdus_agent_binary() -> Option<PathBuf> {
+    if let Ok(env_path) = std::env::var("CDUS_AGENT_BIN") {
+        let p = PathBuf::from(env_path);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    let binary_name = if cfg!(windows) {
+        "cdus-agent.exe"
+    } else {
+        "cdus-agent"
+    };
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            let candidate = parent.join(binary_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+
+            let candidate_binaries = parent.join("binaries").join(binary_name);
+            if candidate_binaries.is_file() {
+                return Some(candidate_binaries);
+            }
+        }
+    }
+
+    let triple = current_target_triple();
+    let sidecar_name = if cfg!(windows) {
+        format!("cdus-agent-{}.exe", triple)
+    } else {
+        format!("cdus-agent-{}", triple)
+    };
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            let sidecar_candidate = parent.join(&sidecar_name);
+            if sidecar_candidate.is_file() {
+                return Some(sidecar_candidate);
+            }
+            let sidecar_binaries = parent.join("binaries").join(&sidecar_name);
+            if sidecar_binaries.is_file() {
+                return Some(sidecar_binaries);
+            }
+        }
+    }
+
+    let dev_candidates = [
+        format!("src-tauri/binaries/{}", sidecar_name),
+        format!("binaries/{}", sidecar_name),
+        format!("target/release/{}", binary_name),
+        format!("target/debug/{}", binary_name),
+        format!("../target/release/{}", binary_name),
+        format!("../target/debug/{}", binary_name),
+    ];
+    for rel in &dev_candidates {
+        let p = PathBuf::from(rel);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    if let Ok(path_var) = std::env::var("PATH") {
+        let separator = if cfg!(windows) { ';' } else { ':' };
+        for dir in path_var.split(separator) {
+            let p = PathBuf::from(dir).join(binary_name);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+
+    None
+}
+
+fn spawn_cdus_agent(app: &tauri::AppHandle) -> bool {
     if check_agent_online() {
+        return true;
+    }
+
+    let agent_bin = match find_cdus_agent_binary() {
+        Some(bin) => bin,
+        None => {
+            eprintln!("[Tauri] cdus-agent binary not found");
+            return false;
+        }
+    };
+
+    let socket_path = get_socket_path();
+    let mut cmd = std::process::Command::new(&agent_bin);
+    cmd.arg("--socket").arg(&socket_path);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    match cmd.spawn() {
+        Ok(child) => {
+            if let Some(child_holder) = app.try_state::<DaemonChild>() {
+                let mut lock = child_holder.0.lock().unwrap();
+                *lock = Some(child);
+            }
+            for _ in 0..30 {
+                thread::sleep(Duration::from_millis(100));
+                if check_agent_online() {
+                    return true;
+                }
+            }
+            check_agent_online()
+        }
+        Err(e) => {
+            eprintln!("[Tauri] Failed to spawn cdus-agent: {}", e);
+            false
+        }
+    }
+}
+
+#[tauri::command]
+fn ping_agent(app: tauri::AppHandle) -> Result<String, String> {
+    if check_agent_online() || spawn_cdus_agent(&app) {
         Ok("Pong".to_string())
     } else {
         Err("Failed to connect to agent".to_string())
@@ -513,7 +659,7 @@ fn open_file_location(app: tauri::AppHandle, transfer_id: String) -> Result<(), 
 fn update_tray_menu(app: &tauri::AppHandle) -> Result<(), String> {
     let history = match send_ipc_message(IpcMessage::GetHistory { limit: 5 }) {
         Ok(IpcMessage::HistoryResponse(h)) => h,
-        _ => return Err("Failed to get clipboard history from agent".to_string()),
+        _ => Vec::new(),
     };
 
     let state = app.state::<AppState>();
@@ -616,6 +762,7 @@ pub fn run() {
             last_synced: Mutex::new(None),
             history_items: Mutex::new(Vec::new()),
         })
+        .manage(DaemonChild(Arc::new(Mutex::new(None))))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -632,6 +779,9 @@ pub fn run() {
             _ => {}
         })
         .setup(|app| {
+            let app_handle_spawn = app.handle().clone();
+            let _ = spawn_cdus_agent(&app_handle_spawn);
+
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let status_i =
                 MenuItem::with_id(app, "status", "Status: Checking...", false, None::<&str>)?;
@@ -661,6 +811,13 @@ pub fn run() {
                 .on_menu_event(|app, event| {
                     let id = event.id.as_ref();
                     if id == "quit" {
+                        if let Some(daemon_child) = app.try_state::<DaemonChild>() {
+                            let mut lock = daemon_child.0.lock().unwrap();
+                            if let Some(mut child) = lock.take() {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                            }
+                        }
                         app.exit(0);
                     } else if id == "show_main" {
                         if let Some(window) = app.get_webview_window("main") {
@@ -974,6 +1131,17 @@ pub fn run() {
             open_file_location,
             read_text_preview
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(daemon_child) = app_handle.try_state::<DaemonChild>() {
+                    let mut lock = daemon_child.0.lock().unwrap();
+                    if let Some(mut child) = lock.take() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                }
+            }
+        });
 }
