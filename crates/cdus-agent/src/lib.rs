@@ -54,6 +54,7 @@ pub fn claim_newer_timestamp(atomic_ts: &AtomicU64, new_ts: u64) -> bool {
         .is_ok()
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn daemon_loop(
     tx: Sender<IpcMessage>,
     rx: Receiver<IpcMessage>,
@@ -231,7 +232,6 @@ pub fn daemon_loop(
                                                                 "CDUS_IMAGE_HASH:{}",
                                                                 blake3::hash(&img_data.bytes)
                                                                     .to_hex()
-                                                                    .to_string()
                                                             );
                                                             image_to_set = Some(img_data);
                                                         }
@@ -725,10 +725,9 @@ pub fn daemon_loop(
                 }
                 IpcMessage::NotificationMirrored(payload) => {
                     let should_alert = {
-                        if payload.is_ongoing {
-                            false
-                        } else if payload.only_alert_once
-                            && ACTIVE_NOTIFICATIONS.lock().contains_key(&payload.key)
+                        if payload.is_ongoing
+                            || (payload.only_alert_once
+                                && ACTIVE_NOTIFICATIONS.lock().contains_key(&payload.key))
                         {
                             false
                         } else {

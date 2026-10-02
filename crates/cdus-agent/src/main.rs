@@ -1723,12 +1723,9 @@ fn clipboard_watcher(
                 }
             } else {
                 // Retry initializing clipboard
-                match Clipboard::new() {
-                    Ok(c) => {
-                        info!("Clipboard watcher successfully initialized on retry");
-                        clipboard_opt = Some(c);
-                    }
-                    Err(_) => {}
+                if let Ok(c) = Clipboard::new() {
+                    info!("Clipboard watcher successfully initialized on retry");
+                    clipboard_opt = Some(c);
                 }
             }
             thread::sleep(Duration::from_secs(2));

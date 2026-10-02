@@ -176,6 +176,7 @@ static MDNS: Lazy<Arc<cdus_agent::mdns::MdnsManager>> =
 static DISCOVERED: Lazy<Arc<Mutex<Vec<DiscoveredDevice>>>> =
     Lazy::new(|| Arc::new(Mutex::new(Vec::new())));
 
+#[allow(clippy::type_complexity)]
 static PEER_MAP: Lazy<
     Arc<Mutex<std::collections::HashMap<String, (DiscoveredDevice, std::time::Instant)>>>,
 > = Lazy::new(|| Arc::new(Mutex::new(std::collections::HashMap::new())));
@@ -1442,6 +1443,7 @@ pub fn clear_discovered_devices() {
 }
 
 #[uniffi::export]
+#[allow(clippy::too_many_arguments)]
 pub fn send_notification_mirror(
     key: String,
     package_name: String,
@@ -1567,13 +1569,7 @@ pub fn submit_feedback(text: String, attach_logs: bool) {
         "".to_string()
     };
 
-    let store_cb = {
-        if let Some(_) = STORE.lock().unwrap().as_ref() {
-            true
-        } else {
-            false
-        }
-    };
+    let store_cb = STORE.lock().unwrap().is_some();
 
     if !store_cb {
         return;

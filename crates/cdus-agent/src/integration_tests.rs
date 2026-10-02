@@ -965,7 +965,7 @@ mod tests {
 
         // 3. Test Clipboard while transfer is running in background
         // Drain any previous handshake/discovery messages from rx2
-        while let Ok(_) = rx2.try_recv() {}
+        while rx2.try_recv().is_ok() {}
 
         let start = std::time::Instant::now();
         sm1.broadcast(SyncMessage::ClipboardUpdate {
@@ -976,12 +976,12 @@ mod tests {
         let mut received = false;
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
-            if let Ok(msg) = rx2.recv_timeout(Duration::from_millis(200)) {
-                if let IpcMessage::SetClipboard { content, .. } = msg {
-                    assert_eq!(content, "test");
-                    received = true;
-                    break;
-                }
+            if let Ok(IpcMessage::SetClipboard { content, .. }) =
+                rx2.recv_timeout(Duration::from_millis(200))
+            {
+                assert_eq!(content, "test");
+                received = true;
+                break;
             }
         }
         assert!(

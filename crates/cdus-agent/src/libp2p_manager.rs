@@ -110,7 +110,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_message_pack_codec_roundtrip() {
-        let mut codec = MessagePackCodec::default();
+        let mut codec = MessagePackCodec;
         let protocol = libp2p::StreamProtocol::new("/test");
         let msg = SyncMessage::ClipboardUpdate {
             content: "hello manual test".to_string(),
@@ -317,7 +317,7 @@ impl Libp2pManager {
                         );
 
                         let request_response = request_response::Behaviour::with_codec(
-                            MessagePackCodec::default(),
+                            MessagePackCodec,
                             [(
                                 libp2p::StreamProtocol::new("/cdus/sync/1.0.0"),
                                 request_response::ProtocolSupport::Full,

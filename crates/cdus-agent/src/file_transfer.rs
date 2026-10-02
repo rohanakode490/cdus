@@ -368,7 +368,7 @@ impl Libp2pFileStream {
 
                     match FileMessage::from_slice(&data) {
                         Ok(msg) => {
-                            if let Err(_) = out_tx.send_async(msg).await {
+                            if out_tx.send_async(msg).await.is_err() {
                                 info!(
                                     "Libp2pWorker: output channel closed, shutting down read task"
                                 );
@@ -1641,10 +1641,8 @@ mod tests {
         fn write_message(&mut self, msg: &FileMessage) -> Result<()> {
             let mut final_msg = msg.clone();
             if let FileMessage::Chunk(ref mut chunk) = final_msg {
-                if chunk.chunk_index == self.corrupt_index {
-                    if !chunk.chunk_hash.is_empty() {
-                        chunk.chunk_hash = "corrupted-hash".to_string();
-                    }
+                if chunk.chunk_index == self.corrupt_index && !chunk.chunk_hash.is_empty() {
+                    chunk.chunk_hash = "corrupted-hash".to_string();
                 }
             }
             self.tx

@@ -308,20 +308,18 @@ impl Store {
             let dev_rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?;
-            for dev in dev_rows {
-                if let Ok((node_id, label)) = dev {
-                    let title = label.to_string();
-                    let subtitle = format!("Device ID: {} • Paired", node_id);
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as i64;
-                    let content = format!("{} {} device", label, node_id);
-                    let _ = search_conn.execute(
-                        "INSERT OR REPLACE INTO search_index (id, item_type, title, subtitle, content, timestamp) VALUES (?1, 'device', ?2, ?3, ?4, ?5)",
-                        (node_id, &title, &subtitle, &content, now),
-                    );
-                }
+            for (node_id, label) in dev_rows.flatten() {
+                let title = label.to_string();
+                let subtitle = format!("Device ID: {} • Paired", node_id);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as i64;
+                let content = format!("{} {} device", label, node_id);
+                let _ = search_conn.execute(
+                    "INSERT OR REPLACE INTO search_index (id, item_type, title, subtitle, content, timestamp) VALUES (?1, 'device', ?2, ?3, ?4, ?5)",
+                    (node_id, &title, &subtitle, &content, now),
+                );
             }
 
             // Re-index clipboard events
@@ -333,44 +331,42 @@ impl Store {
                     row.get::<_, String>(2)?,
                 ))
             })?;
-            for ev in event_rows {
-                if let Ok((hash, payload, source)) = ev {
-                    let text = String::from_utf8_lossy(&payload).to_string();
-                    let (title, is_url, url_to_parse) = Self::parse_clipboard_payload(&text);
-                    if title.is_empty() {
-                        continue;
-                    }
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as i64;
-                    let subtitle = if let Some(ref u) = url_to_parse {
-                        let mut truncated_url = u.chars().take(60).collect::<String>();
-                        if u.chars().count() > 60 {
-                            truncated_url.push_str("...");
-                        }
-                        format!("{} • synced from {}", truncated_url, source)
-                    } else {
-                        format!("synced from {} • clipboard history", source)
-                    };
-                    let mut content = format!(
-                        "{} {} {}",
-                        title,
-                        source,
-                        if is_url { "url" } else { "text" }
-                    );
-                    if let Some(ref u) = url_to_parse {
-                        if let Ok(url) = url::Url::parse(u) {
-                            if let Some(host) = url.host_str() {
-                                content = format!("{} {} {} {} {}", title, u, host, source, "url");
-                            }
-                        }
-                    }
-                    let _ = search_conn.execute(
-                        "INSERT OR REPLACE INTO search_index (id, item_type, title, subtitle, content, timestamp) VALUES (?1, 'clipboard', ?2, ?3, ?4, ?5)",
-                        (&hash, &title, &subtitle, &content, now),
-                    );
+            for (hash, payload, source) in event_rows.flatten() {
+                let text = String::from_utf8_lossy(&payload).to_string();
+                let (title, is_url, url_to_parse) = Self::parse_clipboard_payload(&text);
+                if title.is_empty() {
+                    continue;
                 }
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as i64;
+                let subtitle = if let Some(ref u) = url_to_parse {
+                    let mut truncated_url = u.chars().take(60).collect::<String>();
+                    if u.chars().count() > 60 {
+                        truncated_url.push_str("...");
+                    }
+                    format!("{} • synced from {}", truncated_url, source)
+                } else {
+                    format!("synced from {} • clipboard history", source)
+                };
+                let mut content = format!(
+                    "{} {} {}",
+                    title,
+                    source,
+                    if is_url { "url" } else { "text" }
+                );
+                if let Some(ref u) = url_to_parse {
+                    if let Ok(url) = url::Url::parse(u) {
+                        if let Some(host) = url.host_str() {
+                            content = format!("{} {} {} {} {}", title, u, host, source, "url");
+                        }
+                    }
+                }
+                let _ = search_conn.execute(
+                    "INSERT OR REPLACE INTO search_index (id, item_type, title, subtitle, content, timestamp) VALUES (?1, 'clipboard', ?2, ?3, ?4, ?5)",
+                    (&hash, &title, &subtitle, &content, now),
+                );
             }
 
             // Re-index file transfers
@@ -385,39 +381,37 @@ impl Store {
                     row.get::<_, String>(5)?,
                 ))
             })?;
-            for trans in trans_rows {
-                if let Ok((transfer_id, direction, peer_node_id, file_name, total_bytes, status)) =
-                    trans
-                {
-                    let peer_label: String = state_conn
-                        .query_row(
-                            "SELECT label FROM paired_devices WHERE node_id = ?",
-                            [&peer_node_id],
-                            |row| row.get(0),
-                        )
-                        .unwrap_or_else(|_| {
-                            peer_node_id[..std::cmp::min(8, peer_node_id.len())].to_string()
-                        });
-                    let size_str = format_byte_size(total_bytes);
-                    let title = file_name.to_string();
-                    let subtitle = if direction == "outgoing" {
-                        format!("Size: {} • sent to {} ({})", size_str, peer_label, status)
-                    } else {
-                        format!(
-                            "Size: {} • received from {} ({})",
-                            size_str, peer_label, status
-                        )
-                    };
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as i64;
-                    let content = format!("{} {} {} file", file_name, peer_label, direction);
-                    let _ = search_conn.execute(
-                        "INSERT OR REPLACE INTO search_index (id, item_type, title, subtitle, content, timestamp) VALUES (?1, 'file', ?2, ?3, ?4, ?5)",
-                        (&transfer_id, &title, &subtitle, &content, now),
-                    );
-                }
+            for (transfer_id, direction, peer_node_id, file_name, total_bytes, status) in
+                trans_rows.flatten()
+            {
+                let peer_label: String = state_conn
+                    .query_row(
+                        "SELECT label FROM paired_devices WHERE node_id = ?",
+                        [&peer_node_id],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or_else(|_| {
+                        peer_node_id[..std::cmp::min(8, peer_node_id.len())].to_string()
+                    });
+                let size_str = format_byte_size(total_bytes);
+                let title = file_name.to_string();
+                let subtitle = if direction == "outgoing" {
+                    format!("Size: {} • sent to {} ({})", size_str, peer_label, status)
+                } else {
+                    format!(
+                        "Size: {} • received from {} ({})",
+                        size_str, peer_label, status
+                    )
+                };
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as i64;
+                let content = format!("{} {} {} file", file_name, peer_label, direction);
+                let _ = search_conn.execute(
+                    "INSERT OR REPLACE INTO search_index (id, item_type, title, subtitle, content, timestamp) VALUES (?1, 'file', ?2, ?3, ?4, ?5)",
+                    (&transfer_id, &title, &subtitle, &content, now),
+                );
             }
         }
 
@@ -430,6 +424,7 @@ impl Store {
 
     // --- File Transfer Methods ---
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_transfer(
         &self,
         transfer_id: &str,
@@ -1017,12 +1012,10 @@ impl Store {
             })?;
 
             let mut ids_to_delete = Vec::new();
-            for r in event_rows {
-                if let Ok((id, db_payload)) = r {
-                    let db_str = String::from_utf8_lossy(&db_payload);
-                    if db_str.trim() == current_trimmed {
-                        ids_to_delete.push(id);
-                    }
+            for (id, db_payload) in event_rows.flatten() {
+                let db_str = String::from_utf8_lossy(&db_payload);
+                if db_str.trim() == current_trimmed {
+                    ids_to_delete.push(id);
                 }
             }
 
@@ -1127,13 +1120,7 @@ impl Store {
         let remaining_hashes: Vec<String> = {
             let mut stmt = conn.prepare("SELECT hash FROM events")?;
             let hash_iter = stmt.query_map([], |row| row.get::<_, String>(0))?;
-            let mut hashes = Vec::new();
-            for h in hash_iter {
-                if let Ok(h_str) = h {
-                    hashes.push(h_str);
-                }
-            }
-            hashes
+            hash_iter.flatten().collect()
         };
 
         let search_conn = self.search_conn.lock();
@@ -1254,12 +1241,10 @@ impl Store {
         })?;
 
         let trimmed_target = content.trim();
-        for r in rows {
-            if let Ok((local_only, db_payload)) = r {
-                let db_str = String::from_utf8_lossy(&db_payload);
-                if db_str.trim() == trimmed_target && local_only {
-                    return Ok(true);
-                }
+        for (local_only, db_payload) in rows.flatten() {
+            let db_str = String::from_utf8_lossy(&db_payload);
+            if db_str.trim() == trimmed_target && local_only {
+                return Ok(true);
             }
         }
         Ok(false)
@@ -1962,25 +1947,23 @@ impl Store {
         let local_device_name = self
             .get_state("device_name")
             .unwrap_or(None)
-            .unwrap_or_else(|| "".to_string())
+            .unwrap_or_default()
             .to_lowercase();
 
         let mut scored_results = Vec::new();
 
         if trimmed_query.is_empty() {
-            for row in rows {
-                if let Ok((id, item_type, title, subtitle, _content, timestamp)) = row {
-                    scored_results.push((
-                        cdus_common::SearchResult {
-                            id,
-                            item_type,
-                            title,
-                            subtitle,
-                            timestamp: timestamp as u64,
-                        },
-                        timestamp as f64,
-                    ));
-                }
+            for (id, item_type, title, subtitle, _content, timestamp) in rows.flatten() {
+                scored_results.push((
+                    cdus_common::SearchResult {
+                        id,
+                        item_type,
+                        title,
+                        subtitle,
+                        timestamp: timestamp as u64,
+                    },
+                    timestamp as f64,
+                ));
             }
             scored_results
                 .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -1994,85 +1977,83 @@ impl Store {
 
         let query_terms: Vec<&str> = trimmed_query.split_whitespace().collect();
 
-        for row in rows {
-            if let Ok((id, item_type, title, subtitle, content, timestamp)) = row {
-                let content_str = content.unwrap_or_default();
+        for (id, item_type, title, subtitle, content, timestamp) in rows.flatten() {
+            let content_str = content.unwrap_or_default();
 
-                let mut relevance_score = 0.0;
-                let title_lower = title.to_lowercase();
-                let subtitle_lower = subtitle.to_lowercase();
-                let content_lower = content_str.to_lowercase();
+            let mut relevance_score = 0.0;
+            let title_lower = title.to_lowercase();
+            let subtitle_lower = subtitle.to_lowercase();
+            let content_lower = content_str.to_lowercase();
 
-                let mut matched = false;
-                for term in &query_terms {
-                    let mut term_matched = false;
-                    if title_lower.contains(term) {
-                        term_matched = true;
-                        if title_lower.starts_with(term) {
-                            relevance_score += 25.0;
-                        } else {
-                            relevance_score += 15.0;
-                        }
-                        if title_lower == *term {
-                            relevance_score += 50.0;
-                        }
+            let mut matched = false;
+            for term in &query_terms {
+                let mut term_matched = false;
+                if title_lower.contains(term) {
+                    term_matched = true;
+                    if title_lower.starts_with(term) {
+                        relevance_score += 25.0;
+                    } else {
+                        relevance_score += 15.0;
                     }
-                    if content_lower.contains(term) {
-                        term_matched = true;
-                        relevance_score += 10.0;
-                    }
-                    if subtitle_lower.contains(term) {
-                        term_matched = true;
-                        relevance_score += 5.0;
-                    }
-
-                    if term_matched {
-                        matched = true;
+                    if title_lower == *term {
+                        relevance_score += 50.0;
                     }
                 }
-
-                if !matched {
-                    continue;
+                if content_lower.contains(term) {
+                    term_matched = true;
+                    relevance_score += 10.0;
+                }
+                if subtitle_lower.contains(term) {
+                    term_matched = true;
+                    relevance_score += 5.0;
                 }
 
-                if query_terms.len() > 1 {
-                    if title_lower.contains(&trimmed_query) {
-                        relevance_score += 40.0;
-                    }
-                    if content_lower.contains(&trimmed_query) {
-                        relevance_score += 20.0;
-                    }
+                if term_matched {
+                    matched = true;
                 }
-
-                let age_seconds = ((now_ms - timestamp) as f64 / 1000.0).max(0.0);
-                let recency_score = 30.0 / (1.0 + (age_seconds / 7200.0));
-
-                let mut proximity_score = 0.0;
-                let is_local = subtitle_lower.contains("local")
-                    || content_lower.contains("local")
-                    || (!local_device_name.is_empty()
-                        && (subtitle_lower.contains(&local_device_name)
-                            || content_lower.contains(&local_device_name)));
-
-                if is_local {
-                    proximity_score += 15.0;
-                } else {
-                    proximity_score += 5.0;
-                }
-
-                let total_score = relevance_score + recency_score + proximity_score;
-
-                scored_results.push((
-                    cdus_common::SearchResult {
-                        id,
-                        item_type,
-                        title,
-                        subtitle,
-                        timestamp: timestamp as u64,
-                    },
-                    total_score,
-                ));
             }
+
+            if !matched {
+                continue;
+            }
+
+            if query_terms.len() > 1 {
+                if title_lower.contains(&trimmed_query) {
+                    relevance_score += 40.0;
+                }
+                if content_lower.contains(&trimmed_query) {
+                    relevance_score += 20.0;
+                }
+            }
+
+            let age_seconds = ((now_ms - timestamp) as f64 / 1000.0).max(0.0);
+            let recency_score = 30.0 / (1.0 + (age_seconds / 7200.0));
+
+            let mut proximity_score = 0.0;
+            let is_local = subtitle_lower.contains("local")
+                || content_lower.contains("local")
+                || (!local_device_name.is_empty()
+                    && (subtitle_lower.contains(&local_device_name)
+                        || content_lower.contains(&local_device_name)));
+
+            if is_local {
+                proximity_score += 15.0;
+            } else {
+                proximity_score += 5.0;
+            }
+
+            let total_score = relevance_score + recency_score + proximity_score;
+
+            scored_results.push((
+                cdus_common::SearchResult {
+                    id,
+                    item_type,
+                    title,
+                    subtitle,
+                    timestamp: timestamp as u64,
+                },
+                total_score,
+            ));
         }
 
         scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));

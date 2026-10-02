@@ -141,6 +141,7 @@ pub struct PairingManager {
 }
 
 impl PairingManager {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         store: Arc<Store>,
         ipc_tx: Sender<IpcMessage>,
@@ -229,7 +230,6 @@ impl PairingManager {
                 }
                 let mut ap = self.active_pairing.lock();
                 *ap = None;
-                return;
             }
             RelaySignal::TurnCandidate { relayed_addr } => {
                 self.handle_turn_candidate(source_uuid, relayed_addr)
@@ -1133,11 +1133,10 @@ impl PairingManager {
                                 }
                             }
 
-                            if !success {
-                                if pm.store.is_device_paired(&target_uuid).unwrap_or(false) {
-                                    debug!("Auto-reconnect: LAN connection failed or unavailable for {}, falling back to remote relay...", target_uuid);
-                                    pm.reconnect_known_device(target_uuid);
-                                }
+                            if !success && pm.store.is_device_paired(&target_uuid).unwrap_or(false)
+                            {
+                                debug!("Auto-reconnect: LAN connection failed or unavailable for {}, falling back to remote relay...", target_uuid);
+                                pm.reconnect_known_device(target_uuid);
                             }
                         });
                     }
@@ -1379,6 +1378,7 @@ impl PairingManager {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_turn_sync_session(
     conn: TurnConnection,
     mut transport: TransportState,
@@ -1610,6 +1610,7 @@ fn run_turn_sync_session(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_incoming_connection(
     stream: TcpStream,
     store: Arc<Store>,
@@ -1649,6 +1650,7 @@ fn handle_incoming_connection(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_incoming_connection_inner(
     stream: TcpStream,
     store: Arc<Store>,
@@ -2058,6 +2060,7 @@ fn handle_incoming_connection_inner(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_outgoing_connection(
     ws: WebSocket<TcpStream>,
     store: Arc<Store>,
@@ -2098,6 +2101,7 @@ fn handle_outgoing_connection(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_outgoing_connection_inner(
     mut ws: WebSocket<TcpStream>,
     store: Arc<Store>,
@@ -2483,6 +2487,7 @@ fn handle_outgoing_connection_inner(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_sync_session(
     mut ws: WebSocket<TcpStream>,
     mut transport: TransportState,

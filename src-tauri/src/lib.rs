@@ -84,10 +84,7 @@ fn dismiss_notification(key: String) -> Result<String, String> {
 
 fn check_agent_online() -> bool {
     let msg = IpcMessage::Ping;
-    match send_ipc_message(msg) {
-        Ok(IpcMessage::Pong) => true,
-        _ => false,
-    }
+    matches!(send_ipc_message(msg), Ok(IpcMessage::Pong))
 }
 
 fn current_target_triple() -> &'static str {
@@ -445,6 +442,7 @@ fn stop_scan() -> Result<String, String> {
 }
 
 #[tauri::command]
+#[allow(clippy::type_complexity)]
 fn get_discovered_devices() -> Result<Vec<(String, String, String, Vec<String>, u16)>, String> {
     let msg = IpcMessage::GetDiscovered;
     match send_ipc_message(msg)? {
@@ -767,8 +765,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .on_window_event(|window, event| match event {
-            tauri::WindowEvent::CloseRequested { api, .. } => {
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 window.hide().unwrap();
                 #[cfg(target_os = "macos")]
                 window
@@ -776,7 +774,6 @@ pub fn run() {
                     .set_activation_policy(tauri::ActivationPolicy::Accessory);
                 api.prevent_close();
             }
-            _ => {}
         })
         .setup(|app| {
             let app_handle_spawn = app.handle().clone();
@@ -840,19 +837,13 @@ pub fn run() {
                                         if let Ok(json_val) =
                                             serde_json::from_str::<serde_json::Value>(&content)
                                         {
-                                            if let Some(typ) =
+                                            if let Some("url") =
                                                 json_val.get("type").and_then(|v| v.as_str())
                                             {
-                                                match typ {
-                                                    "url" => {
-                                                        if let Some(url_val) = json_val
-                                                            .get("url")
-                                                            .and_then(|v| v.as_str())
-                                                        {
-                                                            text_to_copy = url_val.to_string();
-                                                        }
-                                                    }
-                                                    _ => {}
+                                                if let Some(url_val) =
+                                                    json_val.get("url").and_then(|v| v.as_str())
+                                                {
+                                                    text_to_copy = url_val.to_string();
                                                 }
                                             }
                                         }
@@ -901,173 +892,156 @@ pub fn run() {
                 if let Ok(mut stream) = LocalSocketStream::connect(get_socket_path()) {
                     let msg = IpcMessage::ListenEvents;
                     if let Ok(bytes) = serde_json::to_vec(&msg) {
-                        if let Ok(_) = stream.write_all(&bytes) {
+                        if stream.write_all(&bytes).is_ok() {
                             use std::io::BufRead;
                             use std::io::BufReader;
                             let reader = BufReader::new(stream);
-                            for line in reader.lines() {
-                                if let Ok(line) = line {
-                                    if let Ok(event) = serde_json::from_str::<IpcMessage>(&line) {
-                                        match event {
-                                            IpcMessage::FileProgress(progress_event) => {
-                                                use cdus_common::ProgressEvent;
-                                                match progress_event {
-                                                    ProgressEvent::IncomingRequest {
+                            for line in reader.lines().map_while(Result::ok) {
+                                if let Ok(event) = serde_json::from_str::<IpcMessage>(&line) {
+                                    match event {
+                                        IpcMessage::FileProgress(progress_event) => {
+                                            use cdus_common::ProgressEvent;
+                                            match progress_event {
+                                                ProgressEvent::IncomingRequest {
+                                                    transfer_id,
+                                                    node_id,
+                                                    file_name,
+                                                    total_bytes,
+                                                    sender_label: _,
+                                                } => {
+                                                    let _ = app_handle_events.emit(
+                                                        "incoming-file-request",
+                                                        (
+                                                            node_id,
+                                                            serde_json::json!({
+                                                                "file_hash": transfer_id,
+                                                                "file_name": file_name,
+                                                                "total_size": total_bytes,
+                                                            }),
+                                                        ),
+                                                    );
+                                                }
+                                                ProgressEvent::Started {
+                                                    transfer_id,
+                                                    file_name: _,
+                                                    total_bytes: _,
+                                                    is_outgoing: _,
+                                                } => {
+                                                    let _ = app_handle_events.emit(
+                                                        "file-transfer-progress",
+                                                        (transfer_id, 0.0),
+                                                    );
+                                                }
+                                                ProgressEvent::Progress {
+                                                    transfer_id,
+                                                    bytes_confirmed,
+                                                    total_bytes,
+                                                } => {
+                                                    let progress = if total_bytes > 0 {
+                                                        (bytes_confirmed as f32
+                                                            / total_bytes as f32)
+                                                            * 100.0
+                                                    } else {
+                                                        0.0
+                                                    };
+                                                    let _ = app_handle_events.emit(
+                                                        "file-transfer-progress",
+                                                        (transfer_id, progress),
+                                                    );
+                                                }
+                                                ProgressEvent::Complete { transfer_id, .. } => {
+                                                    let _ = app_handle_events.emit(
+                                                        "file-transfer-complete",
                                                         transfer_id,
-                                                        node_id,
-                                                        file_name,
-                                                        total_bytes,
-                                                        sender_label: _,
-                                                    } => {
-                                                        let _ = app_handle_events.emit(
-                                                            "incoming-file-request",
-                                                            (
-                                                                node_id,
-                                                                serde_json::json!({
-                                                                    "file_hash": transfer_id,
-                                                                    "file_name": file_name,
-                                                                    "total_size": total_bytes,
-                                                                }),
-                                                            ),
-                                                        );
-                                                    }
-                                                    ProgressEvent::Started {
-                                                        transfer_id,
-                                                        file_name: _,
-                                                        total_bytes: _,
-                                                        is_outgoing,
-                                                    } => {
-                                                        let event_name = if is_outgoing {
-                                                            "file-transfer-progress"
-                                                        } else {
-                                                            "file-transfer-progress"
-                                                        };
-                                                        let _ = app_handle_events
-                                                            .emit(event_name, (transfer_id, 0.0));
-                                                    }
-                                                    ProgressEvent::Progress {
-                                                        transfer_id,
-                                                        bytes_confirmed,
-                                                        total_bytes,
-                                                    } => {
-                                                        let progress = if total_bytes > 0 {
-                                                            (bytes_confirmed as f32
-                                                                / total_bytes as f32)
-                                                                * 100.0
-                                                        } else {
-                                                            0.0
-                                                        };
-                                                        let _ = app_handle_events.emit(
-                                                            "file-transfer-progress",
-                                                            (transfer_id, progress),
-                                                        );
-                                                    }
-                                                    ProgressEvent::Complete {
-                                                        transfer_id, ..
-                                                    } => {
-                                                        let _ = app_handle_events.emit(
-                                                            "file-transfer-complete",
-                                                            transfer_id,
-                                                        );
-                                                    }
-                                                    ProgressEvent::Failed {
-                                                        transfer_id,
-                                                        reason,
-                                                    } => {
-                                                        let _ = app_handle_events.emit(
-                                                            "file-transfer-error",
-                                                            (transfer_id, reason),
-                                                        );
-                                                    }
+                                                    );
+                                                }
+                                                ProgressEvent::Failed {
+                                                    transfer_id,
+                                                    reason,
+                                                } => {
+                                                    let _ = app_handle_events.emit(
+                                                        "file-transfer-error",
+                                                        (transfer_id, reason),
+                                                    );
                                                 }
                                             }
-                                            IpcMessage::FileTransferProgress {
-                                                transfer_id,
-                                                progress,
-                                            } => {
-                                                let _ = app_handle_events.emit(
-                                                    "file-transfer-progress",
-                                                    (transfer_id, progress),
-                                                );
-                                            }
-                                            IpcMessage::FileTransferComplete { transfer_id } => {
-                                                let _ = app_handle_events
-                                                    .emit("file-transfer-complete", transfer_id);
-                                            }
-                                            IpcMessage::FileTransferError {
-                                                transfer_id,
-                                                error,
-                                            } => {
-                                                let _ = app_handle_events.emit(
-                                                    "file-transfer-error",
-                                                    (transfer_id, error),
-                                                );
-                                            }
-                                            IpcMessage::ClipboardChanged { content, .. }
-                                            | IpcMessage::SetClipboard { content, .. } => {
-                                                let _ = app_handle_events
-                                                    .emit("clipboard-updated", content);
-                                                let _ = update_tray_menu(&app_handle_events);
-                                            }
-                                            IpcMessage::PeerDisconnected { node_id } => {
-                                                let _ = app_handle_events
-                                                    .emit("peer-disconnected", node_id);
-                                            }
-                                            IpcMessage::PeerConnected { node_id } => {
-                                                let _ = app_handle_events
-                                                    .emit("peer-connected", node_id);
-                                            }
-                                            IpcMessage::PairingResult {
-                                                success,
-                                                node_id,
-                                                label,
-                                                error,
-                                            } => {
-                                                let _ = app_handle_events.emit(
-                                                    "pairing-result",
-                                                    (success, node_id, label, error),
-                                                );
-                                            }
-                                            IpcMessage::RelayStatus { connected, error } => {
-                                                let _ = app_handle_events
-                                                    .emit("relay-status", (connected, error));
-                                            }
-                                            IpcMessage::NotificationMirrored(payload) => {
-                                                let _ = app_handle_events
-                                                    .emit("notification-mirrored", payload);
-                                            }
-                                            IpcMessage::NotificationDismissed { key } => {
-                                                let _ = app_handle_events
-                                                    .emit("notification-dismissed", key);
-                                            }
-                                            IpcMessage::SettingChanged {
-                                                key,
-                                                value,
-                                                timestamp,
-                                            } => {
-                                                let _ = app_handle_events.emit(
-                                                    "setting-changed",
-                                                    (key, value, timestamp),
-                                                );
-                                            }
-                                            IpcMessage::DeviceRevoked { uuid } => {
-                                                let _ =
-                                                    app_handle_events.emit("device-revoked", uuid);
-                                            }
-                                            IpcMessage::LocalDeviceRevoked { revoked_by } => {
-                                                let _ = app_handle_events
-                                                    .emit("local-device-revoked", revoked_by);
-                                            }
-                                            IpcMessage::NoteUpdated(note) => {
-                                                let _ =
-                                                    app_handle_events.emit("note-updated", note);
-                                            }
-                                            IpcMessage::NoteDeleted { doc_id } => {
-                                                let _ =
-                                                    app_handle_events.emit("note-deleted", doc_id);
-                                            }
-                                            _ => {}
                                         }
+                                        IpcMessage::FileTransferProgress {
+                                            transfer_id,
+                                            progress,
+                                        } => {
+                                            let _ = app_handle_events.emit(
+                                                "file-transfer-progress",
+                                                (transfer_id, progress),
+                                            );
+                                        }
+                                        IpcMessage::FileTransferComplete { transfer_id } => {
+                                            let _ = app_handle_events
+                                                .emit("file-transfer-complete", transfer_id);
+                                        }
+                                        IpcMessage::FileTransferError { transfer_id, error } => {
+                                            let _ = app_handle_events
+                                                .emit("file-transfer-error", (transfer_id, error));
+                                        }
+                                        IpcMessage::ClipboardChanged { content, .. }
+                                        | IpcMessage::SetClipboard { content, .. } => {
+                                            let _ = app_handle_events
+                                                .emit("clipboard-updated", content);
+                                            let _ = update_tray_menu(&app_handle_events);
+                                        }
+                                        IpcMessage::PeerDisconnected { node_id } => {
+                                            let _ = app_handle_events
+                                                .emit("peer-disconnected", node_id);
+                                        }
+                                        IpcMessage::PeerConnected { node_id } => {
+                                            let _ =
+                                                app_handle_events.emit("peer-connected", node_id);
+                                        }
+                                        IpcMessage::PairingResult {
+                                            success,
+                                            node_id,
+                                            label,
+                                            error,
+                                        } => {
+                                            let _ = app_handle_events.emit(
+                                                "pairing-result",
+                                                (success, node_id, label, error),
+                                            );
+                                        }
+                                        IpcMessage::RelayStatus { connected, error } => {
+                                            let _ = app_handle_events
+                                                .emit("relay-status", (connected, error));
+                                        }
+                                        IpcMessage::NotificationMirrored(payload) => {
+                                            let _ = app_handle_events
+                                                .emit("notification-mirrored", payload);
+                                        }
+                                        IpcMessage::NotificationDismissed { key } => {
+                                            let _ = app_handle_events
+                                                .emit("notification-dismissed", key);
+                                        }
+                                        IpcMessage::SettingChanged {
+                                            key,
+                                            value,
+                                            timestamp,
+                                        } => {
+                                            let _ = app_handle_events
+                                                .emit("setting-changed", (key, value, timestamp));
+                                        }
+                                        IpcMessage::DeviceRevoked { uuid } => {
+                                            let _ = app_handle_events.emit("device-revoked", uuid);
+                                        }
+                                        IpcMessage::LocalDeviceRevoked { revoked_by } => {
+                                            let _ = app_handle_events
+                                                .emit("local-device-revoked", revoked_by);
+                                        }
+                                        IpcMessage::NoteUpdated(note) => {
+                                            let _ = app_handle_events.emit("note-updated", note);
+                                        }
+                                        IpcMessage::NoteDeleted { doc_id } => {
+                                            let _ = app_handle_events.emit("note-deleted", doc_id);
+                                        }
+                                        _ => {}
                                     }
                                 }
                             }
