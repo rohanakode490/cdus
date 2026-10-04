@@ -1,0 +1,236 @@
+name: CDUS Cross-Device Automated E2E Pipeline
+
+on:
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'android/**'
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'relay/**'
+      - 'tests/**'
+      - '.github/workflows/e2e-cross-device.yml'
+  workflow_dispatch:
+    inputs:
+      file_size_mb:
+        description: 'Synthetic file size in MB for transfer tests'
+        required: false
+        default: '10'
+      simulate_drop:
+        description: 'Simulate connection severing and chunk offset resume'
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # =========================================================================
+  # 1. CROSS-PLATFORM HEADLESS MULTI-NODE HARNESS (LINUX, WINDOWS, MACOS)
+  # =========================================================================
+  headless-multi-node:
+    name: Headless Multi-Node (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-latest
+          - platform: windows
+            os: windows-latest
+          - platform: macos
+            os: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux Build Dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: "harness-${{ matrix.platform }}"
+
+      - name: Run Multi-Node Integration Tests
+        run: cargo test -p cdus-agent --test e2e_multi_node -- --nocapture
+
+      - name: Execute E2E CLI Harness (10MB + Simulated Drop & Resume)
+        shell: bash
+        run: |
+          DROP_FLAG=""
+          if [ "${{ github.event.inputs.simulate_drop }}" != "false" ]; then
+            DROP_FLAG="--simulate-drop"
+          fi
+          SIZE="${{ github.event.inputs.file_size_mb || '10' }}"
+          cargo run -p cdus-agent --bin cdus-e2e-harness -- --size-mb "$SIZE" $DROP_FLAG --json
+
+  # =========================================================================
+  # 2. ANDROID EMULATOR ↔ DESKTOP DUAL-SESSION E2E (KVM ACCELERATED)
+  # =========================================================================
+  android-desktop-e2e:
+    name: Android Emulator ↔ Desktop E2E (Ubuntu KVM)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enable KVM Hardware Virtualization
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm-rules.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger
+          ls -la /dev/kvm || true
+
+      - name: Install Linux & WebKitGTK Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            webkit2gtk-driver \
+            xvfb \
+            build-essential \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Set up Go 1.23 (Fallback Relay)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+          cache-dependency-path: relay/go.sum
+
+      - name: Build & Launch Local CDUS Relay
+        run: |
+          cd relay
+          go build -o cdus-relay ./cmd/cdus-relay
+          ./cdus-relay --port 8080 &
+          sleep 2
+          curl -I http://localhost:8080 || true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Set up Android NDK & SDK Environment
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          NDK_PATH=$(ls -d $ANDROID_HOME/ndk/* 2>/dev/null | sort -V | tail -n 1)
+          if [ -n "$NDK_PATH" ]; then
+            echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+          else
+            yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;26.3.11579264"
+            echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> $GITHUB_ENV
+          fi
+
+      - name: Generate Kotlin UniFFI Bindings & Native Libraries
+        run: |
+          chmod +x sync-ffi.sh
+          ./sync-ffi.sh
+
+      - name: Set up Gradle Cache
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build Android Debug APK
+        run: |
+          cd android
+          ./gradlew assembleDebug
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Frontend Dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Desktop Application
+        run: |
+          bun run build
+          bun run build:sidecar
+          bun run tauri build --no-bundle --no-sign
+
+      # P2 Fix: Cache tauri-driver binary — cargo install takes ~5 min on every run.
+      # Key on the runner OS so Linux/macOS/Windows each get their own cache.
+      - name: Cache tauri-driver binary
+        id: cache-tauri-driver
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/tauri-driver
+          key: ${{ runner.os }}-tauri-driver-v0.5
+
+      - name: Install tauri-driver (if not cached)
+        if: steps.cache-tauri-driver.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver
+
+      - name: Run Android Emulator & Dual-Session E2E Suite
+        id: e2e-run
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            echo "Waiting for Android system to boot..."
+            adb wait-for-device shell 'while [ -z "$(getprop sys.boot_completed)" ]; do sleep 1; done;'
+            echo "Android emulator booted successfully."
+
+            # Bridge relay network port into Android emulator
+            adb reverse tcp:8080 tcp:8080
+
+            # Install Android debug APK
+            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+
+            # Capture tauri-driver output to a log file for artifact upload on failure
+            mkdir -p /tmp/e2e-logs
+            tauri-driver --port 4444 > /tmp/e2e-logs/tauri-driver.log 2>&1 &
+            sleep 2
+
+            # Run cross-device dual-session test suite under virtual display
+            TAURI_BIN_PATH="src-tauri/target/release/tauri-app" \
+              xvfb-run --auto-servernum \
+              bun run test:e2e:cross-device 2>&1 | tee /tmp/e2e-logs/suite-output.log
+
+      # P2 Fix: Upload diagnostic logs on failure so engineers can post-mortem
+      # the emulator run without re-triggering a full KVM job.
+      - name: Upload E2E failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-logs-${{ github.run_id }}
+          path: |
+            /tmp/e2e-logs/tauri-driver.log
+            /tmp/e2e-logs/suite-output.log
+          if-no-files-found: ignore
+          retention-days: 7
+
