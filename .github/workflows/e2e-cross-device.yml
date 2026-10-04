@@ -108,10 +108,10 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - name: Set up Go 1.23 (Fallback Relay)
+      - name: Set up Go (Fallback Relay)
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version-file: relay/go.mod
           cache: true
           cache-dependency-path: relay/go.sum
 
