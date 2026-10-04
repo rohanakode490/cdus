@@ -31,6 +31,7 @@ pub struct ChunkMeta {
     pub length: u32,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct SessionKey(pub [u8; 32]);
 
 /// Derives a deterministic 32-byte symmetric session key for a peer pair.
