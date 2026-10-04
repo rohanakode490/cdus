@@ -196,14 +196,14 @@ fn run_single_e2e_transfer(size_mb: u64, simulate_drop: bool) -> Result<(Duratio
         let t_id_1 = transfer_id.clone();
         let s1_clone = Arc::clone(&store1);
         let m1_clone = Arc::clone(&manager1);
-        let sk1 = session_key.clone();
+        let sk1 = session_key;
         let sender_phase1 = thread::spawn(move || {
             handle_outgoing_transfer(Box::new(stream1), s1_clone, t_id_1, sk1, m1_clone)
         });
 
         let s2_clone = Arc::clone(&store2);
         let m2_clone = Arc::clone(&manager2);
-        let sk2 = session_key.clone();
+        let sk2 = session_key;
         let dl2 = dir2.path().to_path_buf();
         let peer1_id = id1.clone();
         let receiver_phase1 = thread::spawn(move || {
@@ -245,14 +245,14 @@ fn run_single_e2e_transfer(size_mb: u64, simulate_drop: bool) -> Result<(Duratio
         let t_id_2 = transfer_id.clone();
         let s1_res = Arc::clone(&store1);
         let m1_res = Arc::clone(&manager1);
-        let sk1_res = session_key.clone();
+        let sk1_res = session_key;
         let sender_phase2 = thread::spawn(move || {
             handle_outgoing_transfer(Box::new(stream1_res), s1_res, t_id_2, sk1_res, m1_res)
         });
 
         let s2_res = Arc::clone(&store2);
         let m2_res = Arc::clone(&manager2);
-        let sk2_res = session_key.clone();
+        let sk2_res = session_key;
         let dl2_res = dir2.path().to_path_buf();
         let peer1_id_res = id1.clone();
         let receiver_phase2 = thread::spawn(move || {
@@ -293,14 +293,14 @@ fn run_single_e2e_transfer(size_mb: u64, simulate_drop: bool) -> Result<(Duratio
         let t_id_1 = transfer_id.clone();
         let s1_clone = Arc::clone(&store1);
         let m1_clone = Arc::clone(&manager1);
-        let sk1 = session_key.clone();
+        let sk1 = session_key;
         let sender = thread::spawn(move || {
             handle_outgoing_transfer(Box::new(stream1), s1_clone, t_id_1, sk1, m1_clone)
         });
 
         let s2_clone = Arc::clone(&store2);
         let m2_clone = Arc::clone(&manager2);
-        let sk2 = session_key.clone();
+        let sk2 = session_key;
         let dl2 = dir2.path().to_path_buf();
         let peer1_id = id1.clone();
         let receiver = thread::spawn(move || {

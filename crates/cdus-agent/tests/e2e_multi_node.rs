@@ -106,15 +106,14 @@ fn random_bytes(len: usize) -> Vec<u8> {
     buf
 }
 
+type PairedTestNodes = (Arc<Store>, Arc<Store>, String, String, SessionKey);
+
 /// Builds two paired stores and returns both stores plus their derived session key.
 ///
 /// Both stores add each other as a paired device with a known static key fixture.
 /// The `derive_peer_session_key` function is exercised here, testing the actual
 /// BLAKE3-based key derivation path used in production pairing.
-fn make_paired_stores(
-    dir1: &std::path::Path,
-    dir2: &std::path::Path,
-) -> Result<(Arc<Store>, Arc<Store>, String, String, SessionKey)> {
+fn make_paired_stores(dir1: &std::path::Path, dir2: &std::path::Path) -> Result<PairedTestNodes> {
     // P1 Fix: use deterministic but distinct static key fixtures that match what
     // the real Noise XX handshake would produce, so derive_peer_session_key()
     // produces a matching key on both sides.

@@ -39,19 +39,17 @@ pub fn broadcast_event(msg: IpcMessage) {
     bus.retain(|tx| tx.send(msg.clone()).is_ok());
 }
 
-/// Atomically claims a newer timestamp using compare-and-swap (fetch_update).
-/// Returns true if the incoming timestamp is strictly greater than the current timestamp and updates it.
-/// Returns false if the incoming timestamp is older or equal.
 pub fn claim_newer_timestamp(atomic_ts: &AtomicU64, new_ts: u64) -> bool {
-    atomic_ts
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |curr| {
-            if new_ts > curr {
-                Some(new_ts)
-            } else {
-                None
-            }
-        })
-        .is_ok()
+    let mut current = atomic_ts.load(Ordering::SeqCst);
+    loop {
+        if new_ts <= current {
+            return false;
+        }
+        match atomic_ts.compare_exchange_weak(current, new_ts, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
