@@ -140,4 +140,180 @@ describe("Frontend UI Contracts & Template Integrity", () => {
       expect(stylesContent).toContain("cursor: pointer;");
     });
   });
+
+  // ==========================================================================
+  // Mission 15: Notification Mirroring & Dismiss Sync
+  // ==========================================================================
+  describe("Notification Mirroring UI Contracts (Mission 15)", () => {
+    it("renders the notifications view container and list root", () => {
+      expect(indexContent).toContain('id="view-notifications"');
+      expect(indexContent).toContain('id="notifications-list"');
+      expect(indexContent).toContain('id="notifications-list-container"');
+    });
+
+    it("includes a clear-all button for bulk dismissal", () => {
+      expect(indexContent).toContain('id="clear-notifications-btn"');
+    });
+
+    it("includes a retry button for error recovery", () => {
+      expect(indexContent).toContain('id="retry-notifications-btn"');
+    });
+
+    it("renders loading and error state containers", () => {
+      expect(indexContent).toContain('id="notifications-loading"');
+      expect(indexContent).toContain('id="notifications-error"');
+    });
+
+    it("renders an empty-state placeholder mentioning mirrored notifications", () => {
+      expect(indexContent).toContain("No active mirrored notifications from your phone.");
+    });
+
+    it("invokes get_active_notifications to populate the list", () => {
+      expect(mainTsContent).toContain('invoke("get_active_notifications")');
+    });
+
+    it("wires dismiss_notification IPC on individual card dismiss buttons", () => {
+      expect(mainTsContent).toContain('invoke("dismiss_notification"');
+      expect(mainTsContent).toContain("key: notif.key");
+    });
+
+    it("listens to the 'notification-mirrored' backend event", () => {
+      expect(mainTsContent).toContain('listen("notification-mirrored"');
+    });
+
+    it("listens to the 'notification-dismissed' backend event for cross-device sync", () => {
+      expect(mainTsContent).toContain('listen("notification-dismissed"');
+    });
+
+    it("wires clear-notifications-btn click to bulk dismiss_notification calls", () => {
+      expect(mainTsContent).toContain(
+        'document.querySelector("#clear-notifications-btn")?.addEventListener("click"'
+      );
+      expect(mainTsContent).toContain('invoke("dismiss_notification"');
+    });
+  });
+
+  // ==========================================================================
+  // Mission 20: Cross-Device Settings Sync (LWW)
+  // ==========================================================================
+  describe("Settings LWW Sync UI Contracts (Mission 20)", () => {
+    it("renders the settings view container", () => {
+      expect(indexContent).toContain('id="view-settings"');
+      expect(indexContent).toContain('class="settings-container"');
+    });
+
+    it("includes loading and error state containers", () => {
+      expect(indexContent).toContain('id="settings-loading"');
+      expect(indexContent).toContain('id="settings-error"');
+      expect(indexContent).toContain('id="retry-settings-btn"');
+    });
+
+    it("renders the save-settings button", () => {
+      expect(indexContent).toContain('id="save-settings-btn"');
+    });
+
+    it("save-settings-btn handler calls update_setting for sync_enabled key", () => {
+      expect(mainTsContent).toContain('invoke("update_setting"');
+      expect(mainTsContent).toContain('"sync_enabled"');
+    });
+
+    it("save-settings-btn handler calls update_setting for clipboard_limit key", () => {
+      expect(mainTsContent).toContain('"clipboard_limit"');
+    });
+
+    it("save-settings-btn handler calls set_state for device_name key", () => {
+      expect(mainTsContent).toContain('invoke("set_state"');
+      expect(mainTsContent).toContain('"device_name"');
+    });
+
+    it("wires save-settings-btn to the click listener in main.ts", () => {
+      expect(mainTsContent).toContain(
+        'document.querySelector("#save-settings-btn")?.addEventListener("click"'
+      );
+    });
+
+    it("wires retry-settings-btn to reload the settings view", () => {
+      expect(mainTsContent).toContain(
+        'document.querySelector("#retry-settings-btn")?.addEventListener("click"'
+      );
+    });
+  });
+
+  // ==========================================================================
+  // Mission 23: Collaborative Notes & CRDT Sync
+  // ==========================================================================
+  describe("CRDT Notes Sync UI Contracts (Mission 23)", () => {
+    it("renders the notes view container and layout shell", () => {
+      expect(indexContent).toContain('id="view-notes"');
+      expect(indexContent).toContain('class="notes-layout"');
+    });
+
+    it("renders the notes sidebar with list, filter input, and empty state", () => {
+      expect(indexContent).toContain('id="notes-list"');
+      expect(indexContent).toContain('id="notes-filter-input"');
+      expect(indexContent).toContain('id="notes-empty"');
+    });
+
+    it("renders the active editor container and no-selection placeholder", () => {
+      expect(indexContent).toContain('id="notes-active-editor"');
+      expect(indexContent).toContain('id="notes-no-selection"');
+    });
+
+    it("renders the title input and content textarea for the active note editor", () => {
+      expect(indexContent).toContain('id="note-title-input"');
+      expect(indexContent).toContain('id="note-content-input"');
+    });
+
+    it("renders the note-sync-status badge that shows live CRDT convergence state", () => {
+      expect(indexContent).toContain('id="note-sync-status"');
+      // Verify default copy reflects a 'Synced' baseline state
+      expect(indexContent).toContain(">Synced<");
+    });
+
+    it("renders new-note and delete-note action buttons", () => {
+      expect(indexContent).toContain('id="new-note-btn"');
+      expect(indexContent).toContain('id="delete-note-btn"');
+    });
+
+    it("includes a loading state container for the notes panel", () => {
+      expect(indexContent).toContain('id="notes-loading"');
+    });
+
+    it("invokes get_notes to load the note list from the Rust core", () => {
+      expect(mainTsContent).toContain('invoke("get_notes")');
+    });
+
+    it("invokes save_note with docId, title, and content to persist CRDT patches", () => {
+      expect(mainTsContent).toContain('invoke("save_note"');
+      expect(mainTsContent).toContain("docId");
+      expect(mainTsContent).toContain("title");
+      expect(mainTsContent).toContain("content");
+    });
+
+    it("invokes delete_note to remove a document from the CRDT store", () => {
+      expect(mainTsContent).toContain('invoke("delete_note"');
+      expect(mainTsContent).toContain("docId");
+    });
+
+    it("wires note-title-input and note-content-input to the debounced save scheduler", () => {
+      expect(mainTsContent).toContain(
+        'document.querySelector("#note-title-input")?.addEventListener("input"'
+      );
+      expect(mainTsContent).toContain(
+        'document.querySelector("#note-content-input")?.addEventListener("input"'
+      );
+      // Both should point to the same debounce function
+      expect(mainTsContent).toContain("scheduleNoteSave");
+    });
+
+    it("sets note-sync-status class to 'note-status-badge syncing' while a save is in-flight", () => {
+      expect(mainTsContent).toContain('note-status-badge syncing');
+    });
+
+    it("resets note-sync-status class to 'note-status-badge' on successful save", () => {
+      // The class is reset (without 'syncing' suffix) after the invoke resolves
+      expect(mainTsContent).toContain('statusBadge.className = "note-status-badge"');
+    });
+  });
 });
+
