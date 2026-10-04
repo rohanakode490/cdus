@@ -16,6 +16,8 @@
     "check:all-targets": "cargo check --workspace --exclude tauri-app && bun run check:protocols",
     "test:frontend": "bun test tests/frontend",
     "test:e2e": "bun run tests/e2e/desktop.spec.ts",
+    "test:e2e:cross-device": "bun run tests/e2e/cross_device.spec.ts",
+    "test:e2e:harness": "cargo run -p cdus-agent --bin cdus-e2e-harness --",
     "web:dev": "cd web && bun run dev",
     "web:build": "cd web && bun run build",
     "web:check": "cd web && bun run check",
@@ -31,6 +33,7 @@
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
+    "@noble/hashes": "^2.4.0",
     "@tauri-apps/cli": "^2",
     "@types/bun": "^1.4.2",
     "@types/qrcode": "^1.5.6",
